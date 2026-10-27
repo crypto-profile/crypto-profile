@@ -16,6 +16,9 @@ Each file was fetched from `https://raw.githubusercontent.com/C2SP/wycheproof/d1
 | `ed25519_test.json` | `ea80ffebac085e21cb9d3e903e7fa2b448d96702da5b31f061d0b83b430b74b3` |
 | `rsa_signature_2048_sha384_test.json` | `c571c105d261c0ff588a2888a529f152563fb3b77894b7620d4e4f8f934f2c1d` |
 | `aes_gcm_test.json` | `985e5ecc172e181eaf49e89508b9470dcf478002eb7e8559c707eb42dc97dfe7` |
+| `rsa_signature_3072_sha384_test.json` | `73499ee649d8fb703b3f0f455fa36f7682fde677c590a736958ebce05ab27dae` |
+| `rsa_signature_4096_sha384_test.json` | `bc26f16b9fc9a90628864d3d1111ef48a4bd00b9d4870bfab88ff326e309e073` |
+| `mldsa_87_verify_test.json` | `54adffe10f6dad7941ffd97f77ad4e5c85cb3a54d44cf5ce1c95cb1757b9ba14` |
 
 ## RFC 8032
 

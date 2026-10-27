@@ -10,7 +10,8 @@ pub use serde_json as __serde_json;
 pub type SigCase = (Vec<u8>, Vec<u8>, Vec<u8>, String, u64);
 
 /// The signature-verification cases of a Wycheproof file; `pk_field` and `pk_sub` name where
-/// each test group carries its raw public key.
+/// each test group carries its raw public key. A case with a non-empty ML-DSA `ctx` is skipped,
+/// because the backends verify under the empty context only.
 #[doc(hidden)]
 pub fn __wycheproof_sig_cases(file: &str, pk_field: &str, pk_sub: &str) -> Vec<SigCase> {
     let v: serde_json::Value = serde_json::from_str(file).unwrap_or_default();
@@ -23,6 +24,9 @@ pub fn __wycheproof_sig_cases(file: &str, pk_field: &str, pk_sub: &str) -> Vec<S
         };
         let pk = hex::decode(pk_hex.unwrap_or_default()).unwrap_or_default();
         for t in g["tests"].as_array().into_iter().flatten() {
+            if !t["ctx"].as_str().unwrap_or_default().is_empty() {
+                continue;
+            }
             out.push((
                 pk.clone(),
                 hex::decode(t["msg"].as_str().unwrap_or_default()).unwrap_or_default(),
@@ -117,10 +121,14 @@ mod tests {
 
     #[test]
     fn cavp_short_honours_len() {
-        let file = "[L = 32]\r\n\r\nLen = 0\r\nMsg = 00\r\nMD = aa\r\n\r\nLen = 16\r\nMsg = 0102\r\nMD = bbcc\r\n";
+        let file = "[L = 32]\r\n\r\nLen = 0\r\nMsg = 00\r\nMD = aa\r\n\r\nLen = 16\r\nMsg = 0102\r\nMD = bbcc\r\n\r\nLen = 8\r\nMsg = 0102\r\nMD = dd\r\n";
         assert_eq!(
             __cavp_short(file),
-            vec![(vec![], vec![0xaa]), (vec![1, 2], vec![0xbb, 0xcc])]
+            vec![
+                (vec![], vec![0xaa]),
+                (vec![1, 2], vec![0xbb, 0xcc]),
+                (vec![1], vec![0xdd]),
+            ]
         );
     }
 
@@ -128,7 +136,7 @@ mod tests {
     fn signature_cases_read_the_named_key_field() {
         let file = r#"{"testGroups":[
             {"publicKey":{"pk":"01"},"flat":"02","tests":[{"tcId":7,"msg":"03","sig":"04","result":"valid"}]},
-            {"publicKey":{"pk":"05"},"flat":"06","tests":[{"tcId":8,"msg":"","sig":"07","result":"invalid"}]}
+            {"publicKey":{"pk":"05"},"flat":"06","tests":[{"tcId":8,"msg":"","sig":"07","result":"invalid"},{"tcId":9,"msg":"","sig":"07","ctx":"08","result":"valid"}]}
         ]}"#;
         assert_eq!(
             __wycheproof_sig_cases(file, "publicKey", "pk"),
@@ -182,6 +190,14 @@ pub mod vectors {
     pub const ED25519_RFC8032: &str = include_str!("vectors/ed25519_rfc8032.json");
     /// Wycheproof RSA PKCS#1 v1.5, 2048-bit, SHA-384.
     pub const RSA_PKCS1_SHA384: &str = include_str!("vectors/rsa_signature_2048_sha384_test.json");
+    /// Wycheproof RSA PKCS#1 v1.5, 3072-bit, SHA-384.
+    pub const RSA3072_PKCS1_SHA384: &str =
+        include_str!("vectors/rsa_signature_3072_sha384_test.json");
+    /// Wycheproof RSA PKCS#1 v1.5, 4096-bit, SHA-384.
+    pub const RSA4096_PKCS1_SHA384: &str =
+        include_str!("vectors/rsa_signature_4096_sha384_test.json");
+    /// Wycheproof ML-DSA-87 verification.
+    pub const ML_DSA_87: &str = include_str!("vectors/mldsa_87_verify_test.json");
     /// Wycheproof AES-GCM.
     pub const AES_GCM: &str = include_str!("vectors/aes_gcm_test.json");
     /// NIST CAVP SHA-256 short messages.
@@ -375,7 +391,11 @@ macro_rules! conformance_tests {
                 (HashAlgorithm::Sha512, vectors::SHA512_SHORT),
             ] {
                 let cases = __cavp_short(file);
-                assert!(cases.len() > 60, "{h:?}: {} cases", cases.len());
+                let want = match h {
+                    HashAlgorithm::Sha256 => 65,
+                    HashAlgorithm::Sha384 | HashAlgorithm::Sha512 => 129,
+                };
+                assert_eq!(cases.len(), want, "{h:?}");
                 for (m, d) in cases {
                     assert_eq!(digest::digest(h, &m), d, "{h:?}");
                 }
@@ -384,54 +404,89 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_wycheproof_signatures() {
-            for (a, file, field, sub) in [
+            let p = "publicKey";
+            for (a, file, field, sub, want) in [
                 (
                     SignatureAlgorithm::EcdsaP256Sha256,
                     vectors::ECDSA_P256,
-                    "publicKey",
+                    p,
                     "uncompressed",
+                    (174, 310),
                 ),
                 (
                     SignatureAlgorithm::EcdsaP384Sha384,
                     vectors::ECDSA_P384,
-                    "publicKey",
+                    p,
                     "uncompressed",
+                    (194, 310),
                 ),
                 (
                     SignatureAlgorithm::EcdsaP521Sha512,
                     vectors::ECDSA_P521,
-                    "publicKey",
+                    p,
                     "uncompressed",
+                    (232, 310),
                 ),
                 (
                     SignatureAlgorithm::Ed25519,
                     vectors::ED25519,
-                    "publicKey",
+                    p,
                     "pk",
+                    (117, 64),
                 ),
                 (
                     SignatureAlgorithm::Rsa2048Sha384,
                     vectors::RSA_PKCS1_SHA384,
                     "publicKeyAsn",
                     "",
+                    (7, 250),
+                ),
+                (
+                    SignatureAlgorithm::Rsa3072Sha384,
+                    vectors::RSA3072_PKCS1_SHA384,
+                    "publicKeyAsn",
+                    "",
+                    (7, 251),
+                ),
+                (
+                    SignatureAlgorithm::Rsa4096Sha384,
+                    vectors::RSA4096_PKCS1_SHA384,
+                    "publicKeyAsn",
+                    "",
+                    (7, 251),
+                ),
+                (
+                    SignatureAlgorithm::MlDsa87,
+                    vectors::ML_DSA_87,
+                    p,
+                    "",
+                    (69, 165),
                 ),
             ] {
-                let cases = __wycheproof_sig_cases(file, field, sub);
+                let available = capability(MODULE, Algorithm::Signature(a)).available;
                 let (mut valid, mut invalid) = (0, 0);
-                for (pk, msg, sig, result, id) in cases {
-                    let ok = signature::verify(a, &pk, &msg, &sig).is_ok();
+                for (pk, msg, sig, result, id) in __wycheproof_sig_cases(file, field, sub) {
+                    let verdict = signature::verify(a, &pk, &msg, &sig);
+                    if !available {
+                        assert_eq!(
+                            verdict,
+                            Err(CryptoError::Unavailable(Algorithm::Signature(a))),
+                            "{a} tcId {id}"
+                        );
+                    }
+                    let ok = verdict.is_ok();
                     match result.as_str() {
                         "valid" => {
                             valid += 1;
-                            if a == SignatureAlgorithm::Rsa2048Sha384 {
-                                // A 2048-bit RSAPublicKey with e = 65537 is 270 DER bytes ending INTEGER 0x010001.
+                            if let Some(len) = rsa_public_len(a) {
+                                // An RSAPublicKey DER with e = 65537 ends with INTEGER 0x010001.
                                 assert!(
-                                    pk.len() == 270
+                                    pk.len() == len
                                         && pk.ends_with(&[0x02, 0x03, 0x01, 0x00, 0x01]),
-                                    "{a} tcId {id}: not a 2048-bit e=65537 key"
+                                    "{a} tcId {id}: not an e=65537 key of the algorithm's size"
                                 );
                             }
-                            assert!(ok, "{a} tcId {id}: valid but refused");
+                            assert!(ok || !available, "{a} tcId {id}: valid but refused");
                         }
                         "invalid" => {
                             invalid += 1;
@@ -441,10 +496,21 @@ macro_rules! conformance_tests {
                         other => panic!("{a} tcId {id}: unknown result {other:?}"),
                     }
                 }
-                assert!(
-                    valid >= 5 && invalid >= 10,
-                    "{a}: {valid} valid, {invalid} invalid"
-                );
+                assert_eq!((valid, invalid), want, "{a}");
+            }
+        }
+
+        fn rsa_public_len(a: SignatureAlgorithm) -> Option<usize> {
+            match a {
+                SignatureAlgorithm::Rsa2048Sha384 => Some(270),
+                SignatureAlgorithm::Rsa3072Sha384 => Some(398),
+                SignatureAlgorithm::Rsa4096Sha384 => Some(526),
+                SignatureAlgorithm::MlDsa87
+                | SignatureAlgorithm::EcdsaP256Sha256
+                | SignatureAlgorithm::EcdsaP384Sha384
+                | SignatureAlgorithm::EcdsaP521Sha384
+                | SignatureAlgorithm::EcdsaP521Sha512
+                | SignatureAlgorithm::Ed25519 => None,
             }
         }
 
@@ -472,10 +538,7 @@ macro_rules! conformance_tests {
                     other => panic!("tcId {}: unknown result {other:?}", c.tc_id),
                 }
             }
-            assert!(
-                valid >= 10 && invalid >= 10,
-                "{valid} valid, {invalid} invalid"
-            );
+            assert_eq!((valid, invalid), (39, 27));
         }
 
         #[test]
@@ -633,8 +696,12 @@ macro_rules! conformance_tests {
             )
             .unwrap();
             assert_eq!(
-                (n.version, n.suite),
-                (TlsVersion::Tls13, CipherSuite::Tls13Aes256GcmSha384)
+                (n.version, n.suite, n.kx),
+                (
+                    TlsVersion::Tls13,
+                    CipherSuite::Tls13Aes256GcmSha384,
+                    KxGroup::Secp384r1
+                )
             );
             let legacy = policy(
                 &[TlsVersion::Tls12],
@@ -649,8 +716,12 @@ macro_rules! conformance_tests {
             )
             .unwrap();
             assert_eq!(
-                (n.version, n.suite),
-                (TlsVersion::Tls12, CipherSuite::Tls12EcdheRsaAes256GcmSha384)
+                (n.version, n.suite, n.kx),
+                (
+                    TlsVersion::Tls12,
+                    CipherSuite::Tls12EcdheRsaAes256GcmSha384,
+                    KxGroup::Secp384r1
+                )
             );
         }
 
@@ -672,6 +743,8 @@ macro_rules! conformance_tests {
                 let shared = String::from_utf8_lossy(&out.stdout)
                     .contains("libaws_lc_fips_0_14_2_crypto.dylib");
                 assert_eq!(shared, MODULE.linkage == Linkage::Dynamic, "{MODULE:?}");
+            } else {
+                panic!("no linkage check for this target");
             }
         }
     };
