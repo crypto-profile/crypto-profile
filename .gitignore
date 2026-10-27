@@ -9,6 +9,12 @@
 .continue/
 docs/superpowers/
 docs/plans/
+.agents/
+.windsurf/
+AGENTS.md
+CLAUDE.md
+GEMINI.md
+.github/copilot-instructions.md
 
 # Rust
 target/
@@ -40,8 +46,8 @@ mutants.out.old/
 credentials.json
 .cargo/credentials
 .cargo/credentials.toml
-!/tests/vectors/
-!/tests/vectors/**
+!**/tests/vectors/**
+!crypto-profile/src/conformance/vectors/**
 
 # IDE
 .vscode/
@@ -60,3 +66,4 @@ credentials.json
 .TemporaryItems
 .Trashes
 .VolumeIcon.icns
+Icon?
