@@ -94,10 +94,8 @@ The suite checks the backend against the known answers, walks every capability c
 
 [`docs/usage.md`](docs/usage.md) section 11 lists them:
 
-- key generation holds the new key inside rcgen's key pair, outside a zeroizing buffer, until `KeyPair::generate` returns;
 - a `PrivateKeyDer` handed to rustls is rustls's to hold;
-- each distinct ordered `signature_schemes` list leaks one static verifier table;
-- RSA verification assumes the public exponent 65537.
+- each distinct ordered `signature_schemes` list leaks one static verifier table.
 
 Section 9 lists what a `Policy` does not restrict in round 1. A change that widens any of these needs its own decision record.
 

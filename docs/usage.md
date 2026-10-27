@@ -139,15 +139,15 @@ The same caution applies to round 3: aws-lc-fips-sys 0.13.17 bundles AWS-LC 3.6.
 
 ## 11. Secret-handling residuals
 
-The crate holds secret material in zeroizing buffers that are sized at allocation and never grow. Two places fall outside that, and a contributor must not widen them:
+The crate holds secret material in zeroizing buffers that are sized at allocation and never grow. `signature::KeyPair::generate` generates through aws-lc-rs, which returns the new key's PKCS#8 encoding in a container that zeroizes on drop (`aws-lc-rs-1.18.2/src/pkcs8.rs:30-34`, `src/buffer.rs:22-28`); `generate` copies the encoding into the crate's zeroizing buffer before that container drops. aws-lc wipes its own allocations, the key structure among them, when it frees them, unless an application has installed its own allocator (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/mem.c:224-248`). One place falls outside that, and a contributor must not widen it:
 
-- **Key generation.** `signature::KeyPair::generate` generates through rcgen, so the new key sits inside rcgen's key pair, outside a zeroizing buffer, until that key pair drops at the end of `generate`. Its PKCS#8 encoding is copied into a zeroizing buffer first (`crypto-profile-awslc4/src/signature.rs`, `KeyPair::generate`).
 - **Keys handed to rustls.** A `PrivateKeyDer` passed to `tls::load_private_key`, or to a rustls configuration, is rustls's to hold and drop.
 
-Two further residuals hold no secret material:
+A further residual holds no secret material:
 
 - **Per-policy verifier tables.** Each distinct ordered `signature_schemes` list leaks one static verification-algorithm table, cached for the life of the process (`crypto-profile-awslc4/src/tls.rs`, `verification_algorithms`). This is bounded by the number of distinct lists an application builds.
-- **RSA public exponents.** `signature::verify` checks an RSA public key's length against the size its algorithm names, and those lengths assume the exponent 65537, which is what `KeyPair::generate` produces. A key whose exponent encodes to a different length is refused with `CryptoError::Verify`, so that case fails closed. An exponent with the same encoded length, such as 65539, passes the length check and is left to aws-lc. Exponents other than 65537 are unsupported, and no test exercises one (`crypto-profile-awslc4/src/signature.rs`, `verify` and `matches_spki`).
+
+RSA keys must have the public exponent 65537. `signature::KeyPair::from_pkcs8` refuses any other with `CryptoError::PrivateKey`, and `signature::verify` refuses a public key with any other with `CryptoError::Verify` (`crypto-profile-awslc4/src/signature.rs`, tests `an_rsa_key_whose_exponent_is_not_65537_is_refused` and `verify_refuses_an_rsa_key_whose_exponent_is_not_65537`).
 
 ## 12. Known-answer coverage
 

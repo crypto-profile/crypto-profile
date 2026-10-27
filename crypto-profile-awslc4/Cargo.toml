@@ -20,13 +20,14 @@ crypto-profile = { path = "../crypto-profile" }
 # FIPS POSTURE: aws-lc-rs 1.18 with `fips` builds aws-lc-fips-sys 0.14.2, which bundles AWS-LC 4.2.0
 # source. The module in CMVP review is AWS-LC-FIPS v4.0; whether this build is that module is
 # unverified, and this crate claims neither that nor any validation of its own.
-aws-lc-rs = { version = "=1.18.2", features = ["fips"] }
+aws-lc-rs = { version = "=1.18.2", features = ["fips", "ring-io"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["fips", "std", "tls12"] }
 rcgen = { version = "=0.14.10", default-features = false, features = ["aws_lc_rs", "fips", "pem"] }
 pem = "4"
 zeroize = "1"
 
 [dev-dependencies]
+hex = "0.4"
 crypto-profile = { path = "../crypto-profile", features = ["conformance"] }
 x509-parser = { version = "0.18", default-features = false }
 rustls-webpki = { version = "=0.103.16", default-features = false, features = ["aws-lc-rs-fips", "std"] }
