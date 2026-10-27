@@ -7,9 +7,11 @@ pub use crypto_profile::*;
 pub use rcgen;
 pub use rustls;
 
+pub mod aead;
 pub mod digest;
 pub mod fips;
 pub mod random;
+pub mod sealbox;
 
 /// The certified module this build links.
 pub const MODULE: Module = Module {
