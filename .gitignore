@@ -1,0 +1,62 @@
+# Agent and tool local state; specs and plans live outside the repository
+.claude/
+.codex
+.codex/
+.gemini/
+.opencode/
+.aider*
+.cursor/
+.continue/
+docs/superpowers/
+docs/plans/
+
+# Rust
+target/
+**/*.rs.bk
+*.pdb
+
+# SBOM / CBOM output
+*.cdx.json
+*.cdx.xml
+
+# Coverage and mutation testing
+coverage*.json
+coverage-html/
+*.profraw
+*.profdata
+mutants.out/
+mutants.out.old/
+
+# Keys, certificates and credentials; test fixtures are re-allowed below
+*.key
+*.pem
+*.crt
+*.csr
+*.der
+*.p12
+*.pfx
+.env
+.env.*
+credentials.json
+.cargo/credentials
+.cargo/credentials.toml
+!/tests/vectors/
+!/tests/vectors/**
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
