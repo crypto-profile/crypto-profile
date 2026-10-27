@@ -46,7 +46,7 @@ On Linux, a dynamic build loads `libaws_lc_fips_0_14_2_crypto.so`. The conforman
 - `crypto_profile_awslc4::MODULE` is the `Module { line, linkage }` this build links (`crypto-profile-awslc4/src/lib.rs`).
 - `crypto_profile_awslc4::fips::certificate()` returns that module's `Certificate`: its name, its number (absent while in review), its status as recorded when this crate version was released, and its security-policy URL (absent while none is published) (`crypto-profile/src/capability.rs`, `certificate`).
 
-**The non-FIPS `aws-lc-sys`.** rustls's `fips` feature enables its `aws_lc_rs` feature, which turns on `aws-lc-rs/aws-lc-sys` (`rustls-0.23.46/Cargo.toml`, `[features]`). rcgen's `aws_lc_rs` feature does the same. So `aws-lc-sys` 0.46.0 is in the lockfile and is compiled. With `fips` on, aws-lc-rs binds the FIPS library instead (`extern crate aws_lc_fips_sys as aws_lc`, `aws-lc-rs-1.18.2/src/lib.rs:245-248`), None of the round 1 test binaries, static or dynamic, contains a symbol from the non-FIPS library. Each library's symbols carry a version prefix, so the check is repeatable: `nm <test binary> | grep -c aws_lc_0_46_0_` gives 0, and `grep -c aws_lc_fips_0_14_2_` gives about 2,280.
+**The non-FIPS `aws-lc-sys`.** rustls's `fips` feature enables its `aws_lc_rs` feature, which turns on `aws-lc-rs/aws-lc-sys` (`rustls-0.23.46/Cargo.toml`, `[features]`). rcgen's `aws_lc_rs` feature does the same. So `aws-lc-sys` 0.46.0 is in the lockfile and is compiled. With `fips` on, aws-lc-rs binds the FIPS library instead (`extern crate aws_lc_fips_sys as aws_lc`, `aws-lc-rs-1.18.2/src/lib.rs:245-248`). None of the round 1 test binaries, static or dynamic, contains a symbol from the non-FIPS library. Each library's symbols carry a version prefix, so the check is repeatable: `nm <test binary> | grep -c aws_lc_0_46_0_` gives 0, and `grep -c aws_lc_fips_0_14_2_` gives about 2,280.
 
 ## 3. What the crate claims, and what it doesn't
 
@@ -117,7 +117,7 @@ The backend answers two questions that are easy to confuse.
 - A policy with X25519 or ChaCha20-Poly1305 fails it: rustls marks both as not FIPS (`rustls-0.23.46/src/crypto/ring/kx.rs:81-93`; `src/crypto/aws_lc_rs/tls13.rs:116-118`, `tls12.rs:240-242`).
 - A policy with the hybrid groups X25519MLKEM768 or SECP256R1MLKEM768 passes it. rustls classifies a hybrid by whichever component comes first, following SP 800-56C Rev. 2 (`rustls-0.23.46/src/crypto/aws_lc_rs/pq/hybrid.rs:71-90`).
 
-**The crate's validation claim.** `fips::approval(alg)` returns the capability cell's `Approval` for this build's module, as the module's security policy states it. It is void (`Unverified`) unless the module reports FIPS mode at the time of the call (`crypto-profile-awslc4/src/fips.rs`, `approval` and `approval_given`).
+**The crate's approval report.** `fips::approval(alg)` returns the capability cell's `Approval` for this build's module, as the module's security policy states it. It is void (`Unverified`) unless the module reports FIPS mode at the time of the call (`crypto-profile-awslc4/src/fips.rs`, `approval` and `approval_given`).
 - On 3.x, the hybrid groups are `Unverified`, because neither 3.x security policy mentions hybrid key establishment, and so is TLS 1.3, because the policies' TLS KDF row lists v1.0/1.1 and v1.2 only (`crypto-profile/src/capability.rs`, `three_x`).
 - On 4.x, everything is `Unverified`, because no 4.x security policy is published.
 
