@@ -8,6 +8,7 @@ pub use rcgen;
 pub use rustls;
 
 pub mod aead;
+pub mod csr;
 pub mod digest;
 pub mod fips;
 pub mod random;

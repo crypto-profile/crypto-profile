@@ -201,6 +201,8 @@ dependencies = [
  "pem",
  "rcgen",
  "rustls",
+ "rustls-webpki",
+ "x509-parser",
  "zeroize",
 ]
 
