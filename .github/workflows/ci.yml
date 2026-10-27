@@ -25,7 +25,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: sudo apt-get install -y cmake golang clang
+      - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
   deny:
@@ -50,7 +50,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y cmake golang clang
+        run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - name: Install build tools (macOS)
         if: runner.os == 'macOS'
         run: brew install cmake go
@@ -67,7 +67,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install 1.99.1 --profile minimal
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: sudo apt-get install -y cmake golang clang
+      - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - run: cargo +1.99.1 check --workspace --all-features --locked
 
   coverage:
@@ -77,7 +77,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: sudo apt-get install -y cmake golang clang
+      - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-llvm-cov
@@ -95,7 +95,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
-      - run: sudo apt-get install -y cmake golang clang
+      - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-mutants
