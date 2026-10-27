@@ -12,6 +12,7 @@ pub mod digest;
 pub mod fips;
 pub mod random;
 pub mod sealbox;
+pub mod signature;
 
 /// The certified module this build links.
 pub const MODULE: Module = Module {
@@ -22,3 +23,7 @@ pub const MODULE: Module = Module {
         Linkage::Dynamic
     },
 };
+
+pub(crate) fn ensure(alg: Algorithm) -> Result<(), CryptoError> {
+    ensure_available(MODULE, alg)
+}
