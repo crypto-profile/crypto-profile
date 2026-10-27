@@ -1,8 +1,12 @@
 //! Test infrastructure: in-memory certificates and an in-process handshake. Not shipped behaviour.
 use crate::signature::KeyPair;
-use crate::tls::{Policy, client_builder, server_builder};
-use crate::{CipherSuite, KxGroup, SignatureAlgorithm, TlsVersion};
-use std::sync::Arc;
+use crate::tls::{Policy, client_builder, server_builder, server_cert_verifier_builder};
+use crate::{CipherSuite, KxGroup, SignatureAlgorithm, TlsSignatureScheme, TlsVersion};
+use rustls::client::WebPkiServerVerifier;
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
+use std::sync::{Arc, Mutex};
 
 /// What a completed handshake negotiated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,6 +17,67 @@ pub struct Negotiated {
     pub suite: CipherSuite,
     /// The key-exchange group.
     pub kx: KxGroup,
+    /// The scheme the server signed the handshake with.
+    pub scheme: TlsSignatureScheme,
+}
+
+/// A WebPKI server verifier that records the scheme of the handshake signature it checks.
+#[derive(Debug)]
+struct SchemeRecorder {
+    inner: Arc<WebPkiServerVerifier>,
+    seen: Arc<Mutex<Option<SignatureScheme>>>,
+}
+
+impl SchemeRecorder {
+    fn record(&self, scheme: SignatureScheme) {
+        *self.seen.lock().unwrap_or_else(|e| e.into_inner()) = Some(scheme);
+    }
+}
+
+impl ServerCertVerifier for SchemeRecorder {
+    fn verify_server_cert(
+        &self,
+        end_entity: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        server_name: &ServerName<'_>,
+        ocsp_response: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        self.inner
+            .verify_server_cert(end_entity, intermediates, server_name, ocsp_response, now)
+    }
+
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.record(dss.scheme);
+        self.inner.verify_tls12_signature(message, cert, dss)
+    }
+
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.record(dss.scheme);
+        self.inner.verify_tls13_signature(message, cert, dss)
+    }
+
+    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
+        self.inner.supported_verify_schemes()
+    }
+
+    fn requires_raw_public_keys(&self) -> bool {
+        self.inner.requires_raw_public_keys()
+    }
+
+    fn root_hint_subjects(&self) -> Option<&[DistinguishedName]> {
+        self.inner.root_hint_subjects()
+    }
 }
 
 fn deliver<D: std::ops::DerefMut<Target = rustls::ConnectionCommon<S>>, S: rustls::SideData>(
@@ -78,9 +143,18 @@ pub fn handshake(
         .map_err(|x| e(&x))?;
     let mut roots = rustls::RootCertStore::empty();
     roots.add(ca_cert.der().clone()).map_err(|x| e(&x))?;
+    let seen = Arc::new(Mutex::new(None));
+    let recorder = SchemeRecorder {
+        inner: server_cert_verifier_builder(Arc::new(roots), client)
+            .map_err(|x| e(&x))?
+            .build()
+            .map_err(|x| e(&x))?,
+        seen: Arc::clone(&seen),
+    };
     let client_cfg = client_builder(client)
         .map_err(|x| e(&x))?
-        .with_root_certificates(roots)
+        .dangerous()
+        .with_custom_certificate_verifier(Arc::new(recorder))
         .with_no_client_auth();
     let name = rustls::pki_types::ServerName::try_from("localhost").map_err(|x| e(&x))?;
     let mut c = rustls::ClientConnection::new(Arc::new(client_cfg), name).map_err(|x| e(&x))?;
@@ -111,5 +185,19 @@ pub fn handshake(
         .into_iter()
         .find(|x| x.iana() == group_cp)
         .ok_or(format!("unknown group {group_cp:#06x}"))?;
-    Ok(Negotiated { version, suite, kx })
+    let scheme_cp = seen
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .map(|s| u16::from_be_bytes(s.to_array()))
+        .ok_or("no handshake signature")?;
+    let scheme = TlsSignatureScheme::ALL
+        .into_iter()
+        .find(|x| x.iana() == scheme_cp)
+        .ok_or(format!("unknown scheme {scheme_cp:#06x}"))?;
+    Ok(Negotiated {
+        version,
+        suite,
+        kx,
+        scheme,
+    })
 }

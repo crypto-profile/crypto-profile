@@ -525,7 +525,8 @@ mod tests {
                 Negotiated {
                     version: V::Tls13,
                     suite: C::Tls13Aes256GcmSha384,
-                    kx: k
+                    kx: k,
+                    scheme: T::EcdsaNistp384Sha384,
                 }
             );
         }
@@ -548,14 +549,32 @@ mod tests {
             let p = policy(&[s.version()], &[s], &[K::Secp384r1], &T::ALL);
             let n = handshake(&p, &p, key).unwrap_or_else(|e| panic!("{s:?}: {e}"));
             assert_eq!((n.version, n.suite), (s.version(), s), "{s:?}");
+            if key == S::EcdsaP384Sha384 {
+                assert_eq!(n.scheme, T::EcdsaNistp384Sha384, "{s:?}");
+            }
         }
     }
 
     #[test]
     fn every_key_algorithm_authenticates_a_tls13_server() {
         for a in S::ALL {
-            handshake(&one13(K::Secp384r1), &one13(K::Secp384r1), a)
+            let n = handshake(&one13(K::Secp384r1), &one13(K::Secp384r1), a)
                 .unwrap_or_else(|e| panic!("{a}: {e}"));
+            let rsa = matches!(
+                n.scheme,
+                T::RsaPssSha256 | T::RsaPssSha384 | T::RsaPssSha512
+            );
+            match a {
+                S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => {
+                    assert!(rsa, "{a}: {n:?}")
+                }
+                S::MlDsa87
+                | S::EcdsaP256Sha256
+                | S::EcdsaP384Sha384
+                | S::EcdsaP521Sha384
+                | S::EcdsaP521Sha512
+                | S::Ed25519 => assert_eq!(n.scheme, a.tls_scheme(), "{a}"),
+            }
         }
     }
 

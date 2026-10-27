@@ -590,8 +590,9 @@ macro_rules! conformance_tests {
                             policy(&[v], &[c], &[KxGroup::Secp384r1], &TlsSignatureScheme::ALL);
                         let client = policy(&[v], &[c], &[KxGroup::Secp384r1], &[t]);
                         if cap.available {
-                            handshake(&client, &server, key)
+                            let n = handshake(&client, &server, key)
                                 .unwrap_or_else(|e| panic!("{a:?}: {e}"));
+                            assert_eq!(n.scheme, t, "{a:?}");
                         } else {
                             assert_eq!(
                                 tls::crypto_provider(&client).err(),
