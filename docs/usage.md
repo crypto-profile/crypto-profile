@@ -137,6 +137,8 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 
 The 4.x backend compiles aws-lc-fips-sys 0.14.2, which bundles AWS-LC 4.2.0 source (`AWSLC_VERSION_NUMBER_STRING "4.2.0"`, `aws-lc-fips-sys-0.14.2/aws-lc/include/openssl/base.h:125`). The module in CMVP review is AWS-LC-FIPS v4.0 (AWS-LC `FIPS.md:56-60`). Whether this build is the submitted module is unverified, and the crate does not claim it.
 
+`MODULE` and these statements assume the bundled source. aws-lc-fips-sys can instead link a system-installed AWS-LC FIPS module, one named by `AWS_LC_FIPS_SYS_SYSTEM_DIR` or one it detects through `OPENSSL_DIR`, `OPENSSL_INCLUDE_DIR`/`OPENSSL_LIB_DIR` or pkg-config unless `AWS_LC_FIPS_SYS_USE_SYSTEM=0` is set (`aws-lc-fips-sys-0.14.2/README.md`, "Using a system-installed AWS-LC FIPS module"); a build that links one is not described by them, and detecting it is a follow-up.
+
 The same caution applies to round 3: aws-lc-fips-sys 0.13.17 bundles AWS-LC 3.6.0 source (`aws-lc-fips-sys-0.13.17/aws-lc/include/openssl/base.h:125`), while the 3.x certificates validate the source tag AWS-LC-FIPS-3.1.0 (#5314 security policy, §11.1, p. 72). Whether a 0.13.17 build is the certified 3.1.0 module is unverified, and the 3.x backend will not claim it.
 
 ## 11. Secret-handling residuals
@@ -150,6 +152,8 @@ A further residual holds no secret material:
 - **Per-policy verifier tables.** Each distinct ordered `signature_schemes` list leaks one static verification-algorithm table, cached for the life of the process (`crypto-profile-awslc4/src/tls.rs`, `verification_algorithms`). This is bounded by the number of distinct lists an application builds.
 
 RSA keys must have the public exponent 65537. `signature::KeyPair::from_pkcs8` refuses any other with `CryptoError::PrivateKey`, and `signature::verify` refuses a public key with any other with `CryptoError::Verify` (`crypto-profile-awslc4/src/signature.rs`, tests `an_rsa_key_whose_exponent_is_not_65537_is_refused` and `verify_refuses_an_rsa_key_whose_exponent_is_not_65537`).
+
+An RSA key's modulus must be exactly the algorithm's bit length: 2048, 3072 or 4096. `signature::KeyPair::from_pkcs8` refuses any other length with `CryptoError::PrivateKey`, and `signature::verify` with `CryptoError::Verify`, even one bit off (tests `from_pkcs8_refuses_an_rsa_key_one_bit_off_its_size` and `verify_refuses_an_rsa_key_one_bit_off_its_size`). `signature::matches_spki` checks only the encoded length of the public key, so it does not tell a 3,072-bit modulus from a 3,073-bit one.
 
 ## 12. Known-answer coverage
 
