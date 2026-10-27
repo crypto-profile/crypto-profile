@@ -14,6 +14,9 @@ pub mod fips;
 pub mod random;
 pub mod sealbox;
 pub mod signature;
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_support;
+pub mod tls;
 
 /// The certified module this build links.
 pub const MODULE: Module = Module {
