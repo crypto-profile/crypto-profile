@@ -36,8 +36,6 @@ pub enum TlsError {
     ProtocolVersions,
     /// The private key was refused.
     PrivateKey,
-    /// The certificate verifier could not be built.
-    Verifier,
     /// A process-default provider is already installed.
     DefaultProviderInstalled,
 }

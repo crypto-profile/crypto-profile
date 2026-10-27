@@ -142,7 +142,7 @@ mod tests {
     const DOMAIN: &[u8] = kat::DOMAIN;
     const KAT_PLAINTEXT: &[u8] = kat::PLAINTEXT;
     const KAT_NONCE: [u8; NONCE_LEN] = kat::NONCE;
-    const TOKEN: &[u8] = b"hvs.CAESIJ-wrapping-token-sentinel-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWX";
+    const TOKEN: &[u8] = b"sealbox-plaintext-sentinel-0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ-01234";
 
     fn kat_aad() -> Vec<u8> {
         kat::aad()

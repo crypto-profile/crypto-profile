@@ -8,7 +8,7 @@ exclude_globs = [
 ]
 exclude_re = [
   # The decision is fips_result, tested both ways; the wrapper's only input is the loaded module's FIPS_mode(), which a FIPS build cannot make false (spec §9, decision 0003).
-  "crypto-profile-awslc4/src/fips\\.rs:[0-9]+:[0-9]+: replace assert_fips_module -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
+  "^crypto-profile-awslc4/src/fips\\.rs:[0-9]+:[0-9]+: replace assert_fips_module -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
   # Every 4.x cell is available, so ensure's Ok(()) mutant is equivalent on this backend. The refusal branch is ensure_available, tested in core (ensure_available_refuses_ml_dsa_on_3x), and round 3's -awslc3 conformance run exercises it for real.
-  "crypto-profile-awslc4/src/lib\\.rs:[0-9]+:[0-9]+: replace ensure -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
+  "^crypto-profile-awslc4/src/lib\\.rs:[0-9]+:[0-9]+: replace ensure -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
 ]

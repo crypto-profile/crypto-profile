@@ -16,14 +16,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup show
+      - run: rustup toolchain install
       - run: cargo fmt --all --check
 
   clippy:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup show
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get install -y cmake golang clang
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
@@ -46,7 +46,7 @@ jobs:
         include: ${{ fromJSON(github.event.repository.private && '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"}]' || '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"},{"name":"linux-arm64-static","os":"ubuntu-24.04-arm","dynamic":"0"},{"name":"macos-arm64","os":"macos-15","dynamic":"0"}]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup show
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install build tools (Linux)
         if: runner.os == 'Linux'
@@ -75,7 +75,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup show
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get install -y cmake golang clang
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
@@ -93,7 +93,7 @@ jobs:
         shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - run: rustup show
+      - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get install -y cmake golang clang
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32

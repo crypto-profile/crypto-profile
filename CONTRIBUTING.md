@@ -47,7 +47,7 @@ The test infrastructure (`crypto-profile-awslc4/src/test_support.rs` and the con
 
 ```toml
 # The decision is fips_result, tested both ways; the wrapper's only input is the loaded module's FIPS_mode(), which a FIPS build cannot make false.
-"crypto-profile-awslc4/src/fips\\.rs:[0-9]+:[0-9]+: replace assert_fips_module -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
+"^crypto-profile-awslc4/src/fips\\.rs:[0-9]+:[0-9]+: replace assert_fips_module -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
 ```
 
 A file-level exclusion, or a pattern that matches more than one mutant, is refused in review.
@@ -89,6 +89,18 @@ A backend is a crate named for its module line. It must:
   ```
 
 The suite checks the backend against the known answers, walks every capability cell for its `MODULE`, and checks that the test binary's linkage matches `MODULE`.
+
+`conformance_tests!` expands to `use your_crate::*;` and names these paths in your crate, so it compiles only if each exists with the shape `crypto-profile-awslc4` gives it (`crypto-profile/src/conformance/mod.rs`, `conformance_tests`):
+
+- the core crate's types re-exported at the crate root (`SignatureAlgorithm`, `TlsVersion`, `CipherSuite`, `KxGroup`, `TlsSignatureScheme`, `Algorithm`, `CryptoError` and the rest), and `MODULE`;
+- `test_support::handshake(client: &Policy, server: &Policy, key: SignatureAlgorithm) -> Result<Negotiated, String>`, behind a `test-support` feature that the test target requires (`required-features = ["test-support"]`). It runs a real in-process handshake and reports the version, suite, group and scheme from their wire codepoints, mapped back through the core crate's `iana()`;
+- `tls::Policy`, with the four public list fields, and `tls::crypto_provider`;
+- `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`;
+- `digest::digest`;
+- `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
+- `sealbox::PrivateKey::from_pkcs8_der` and `sealbox::open`.
+
+The linkage test looks for the 4.x shared library by name, `libaws_lc_fips_0_14_2_crypto`; a backend on another aws-lc-fips-sys version needs that name changed in the macro.
 
 ## 7. Residuals you must not make worse
 
