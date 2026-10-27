@@ -30,3 +30,7 @@ zeroize = "1"
 crypto-profile = { path = "../crypto-profile", features = ["conformance"] }
 x509-parser = { version = "0.18", default-features = false }
 rustls-webpki = { version = "=0.103.16", default-features = false, features = ["aws-lc-rs-fips", "std"] }
+
+[[test]]
+name = "conformance"
+required-features = ["test-support"]
