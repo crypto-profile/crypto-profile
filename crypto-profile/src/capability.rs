@@ -1,5 +1,5 @@
-//! What each certified AWS-LC FIPS module can do and has validated, per algorithm, with the
-//! security-policy citation for every validated fact.
+//! What each AWS-LC FIPS module can do and what its security policy says about each algorithm,
+//! with the policy citation for every sourced cell.
 use crate::algorithm::*;
 use crate::error::CryptoError;
 
@@ -13,7 +13,8 @@ pub enum ModuleLine {
     AwsLcFips4,
 }
 
-/// How the FIPS module is linked; each linkage is a separately certified module.
+/// How the FIPS module is linked; each linkage is a separate module, with its own certificate or
+/// submission.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum Linkage {
@@ -23,7 +24,7 @@ pub enum Linkage {
     Dynamic,
 }
 
-/// A certified (or submitted) module: a line and a linkage.
+/// An AWS-LC FIPS module: a line and a linkage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Module {
     /// The module line.
@@ -262,7 +263,7 @@ const fn four_x(a: Algorithm) -> Capability {
     }
 }
 
-/// What the module for `m` can do for `a`, and whether that module has validated it.
+/// What the backend for `m` can do for `a`, and what that module's security policy says about it.
 pub const fn capability(m: Module, a: Algorithm) -> Capability {
     match m.line {
         ModuleLine::AwsLcFips3 => three_x(m.linkage, a),

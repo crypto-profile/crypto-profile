@@ -40,6 +40,22 @@ impl SignatureAlgorithm {
         SignatureAlgorithm::Rsa4096Sha384,
     ];
 
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            SignatureAlgorithm::MlDsa87 => 0,
+            SignatureAlgorithm::EcdsaP256Sha256 => 1,
+            SignatureAlgorithm::EcdsaP384Sha384 => 2,
+            SignatureAlgorithm::EcdsaP521Sha384 => 3,
+            SignatureAlgorithm::EcdsaP521Sha512 => 4,
+            SignatureAlgorithm::Ed25519 => 5,
+            SignatureAlgorithm::Rsa2048Sha384 => 6,
+            SignatureAlgorithm::Rsa3072Sha384 => 7,
+            SignatureAlgorithm::Rsa4096Sha384 => 8,
+        }
+    }
+
     /// The algorithm's stable configuration name.
     pub const fn as_str(self) -> &'static str {
         match self {
@@ -177,6 +193,24 @@ impl TlsSignatureScheme {
         TlsSignatureScheme::RsaPkcs1Sha512,
         TlsSignatureScheme::MlDsa87,
     ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            TlsSignatureScheme::EcdsaNistp256Sha256 => 0,
+            TlsSignatureScheme::EcdsaNistp384Sha384 => 1,
+            TlsSignatureScheme::EcdsaNistp521Sha512 => 2,
+            TlsSignatureScheme::Ed25519 => 3,
+            TlsSignatureScheme::RsaPssSha256 => 4,
+            TlsSignatureScheme::RsaPssSha384 => 5,
+            TlsSignatureScheme::RsaPssSha512 => 6,
+            TlsSignatureScheme::RsaPkcs1Sha256 => 7,
+            TlsSignatureScheme::RsaPkcs1Sha384 => 8,
+            TlsSignatureScheme::RsaPkcs1Sha512 => 9,
+            TlsSignatureScheme::MlDsa87 => 10,
+        }
+    }
 }
 
 /// A TLS cipher suite.
@@ -215,6 +249,22 @@ impl CipherSuite {
         CipherSuite::Tls12EcdheRsaAes128GcmSha256,
         CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256,
     ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            CipherSuite::Tls13Aes256GcmSha384 => 0,
+            CipherSuite::Tls13Aes128GcmSha256 => 1,
+            CipherSuite::Tls13Chacha20Poly1305Sha256 => 2,
+            CipherSuite::Tls12EcdheEcdsaAes256GcmSha384 => 3,
+            CipherSuite::Tls12EcdheEcdsaAes128GcmSha256 => 4,
+            CipherSuite::Tls12EcdheEcdsaChacha20Poly1305Sha256 => 5,
+            CipherSuite::Tls12EcdheRsaAes256GcmSha384 => 6,
+            CipherSuite::Tls12EcdheRsaAes128GcmSha256 => 7,
+            CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256 => 8,
+        }
+    }
 
     /// The IANA TLS Cipher Suite codepoint.
     pub const fn iana(self) -> u16 {
@@ -286,6 +336,19 @@ impl KxGroup {
         KxGroup::Secp256r1,
         KxGroup::X25519,
     ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            KxGroup::MlKem1024 => 0,
+            KxGroup::X25519MlKem768 => 1,
+            KxGroup::Secp256r1MlKem768 => 2,
+            KxGroup::Secp384r1 => 3,
+            KxGroup::Secp256r1 => 4,
+            KxGroup::X25519 => 5,
+        }
+    }
 }
 
 /// A hash function.
@@ -306,6 +369,16 @@ impl HashAlgorithm {
         HashAlgorithm::Sha384,
         HashAlgorithm::Sha512,
     ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            HashAlgorithm::Sha256 => 0,
+            HashAlgorithm::Sha384 => 1,
+            HashAlgorithm::Sha512 => 2,
+        }
+    }
 
     /// The digest length in bytes.
     pub const fn output_len(self) -> usize {
@@ -337,6 +410,15 @@ impl TlsVersion {
 
     /// Every TLS version.
     pub const ALL: [TlsVersion; 2] = [TlsVersion::Tls12, TlsVersion::Tls13];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            TlsVersion::Tls12 => 0,
+            TlsVersion::Tls13 => 1,
+        }
+    }
 }
 
 /// Any algorithm the capability table has a cell for.
@@ -512,5 +594,53 @@ mod tests {
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
+    }
+
+    #[test]
+    fn signature_algorithm_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            SignatureAlgorithm::ALL.map(SignatureAlgorithm::ordinal),
+            std::array::from_fn::<usize, 9, _>(|i| i)
+        );
+    }
+
+    #[test]
+    fn tls_signature_scheme_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            TlsSignatureScheme::ALL.map(TlsSignatureScheme::ordinal),
+            std::array::from_fn::<usize, 11, _>(|i| i)
+        );
+    }
+
+    #[test]
+    fn cipher_suite_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            CipherSuite::ALL.map(CipherSuite::ordinal),
+            std::array::from_fn::<usize, 9, _>(|i| i)
+        );
+    }
+
+    #[test]
+    fn kx_group_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            KxGroup::ALL.map(KxGroup::ordinal),
+            std::array::from_fn::<usize, 6, _>(|i| i)
+        );
+    }
+
+    #[test]
+    fn hash_algorithm_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            HashAlgorithm::ALL.map(HashAlgorithm::ordinal),
+            std::array::from_fn::<usize, 3, _>(|i| i)
+        );
+    }
+
+    #[test]
+    fn tls_version_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            TlsVersion::ALL.map(TlsVersion::ordinal),
+            std::array::from_fn::<usize, 2, _>(|i| i)
+        );
     }
 }
