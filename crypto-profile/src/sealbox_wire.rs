@@ -16,6 +16,7 @@ pub const MIN_BLOB_LEN: usize = HEADER_LEN + 1 + TAG_LEN;
 const UNCOMPRESSED_POINT: u8 = 0x04;
 
 /// The fields of a parsed sealed blob.
+#[derive(Debug)]
 pub struct BlobParts<'a> {
     /// The uncompressed ephemeral P-384 point.
     pub ephemeral: &'a [u8],

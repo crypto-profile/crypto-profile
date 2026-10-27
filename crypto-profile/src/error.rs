@@ -169,4 +169,53 @@ mod tests {
             "the TLS configuration was refused: PrivateKey"
         );
     }
+
+    #[test]
+    fn every_other_display_text_is_pinned() {
+        let table: [(CryptoError, &str); 16] = [
+            (
+                CryptoError::PolicyDrift,
+                "the provider does not carry exactly the policy's algorithms",
+            ),
+            (
+                CryptoError::KeyGeneration(Algorithm::Signature(SignatureAlgorithm::Ed25519)),
+                "key generation for Signature(Ed25519) failed",
+            ),
+            (CryptoError::PrivateKey, "the private key was refused"),
+            (CryptoError::Verify, "the signature does not verify"),
+            (CryptoError::Sign, "signing failed"),
+            (CryptoError::AeadKey, "the AEAD key was refused"),
+            (CryptoError::AeadSeal, "AEAD sealing failed"),
+            (
+                CryptoError::AeadOpen,
+                "the AEAD ciphertext does not authenticate",
+            ),
+            (CryptoError::SealPlaintext, "the sealed plaintext is empty"),
+            (CryptoError::SealBlob, "the sealed blob is too short"),
+            (
+                CryptoError::SealVersion,
+                "the sealed blob has an unknown version",
+            ),
+            (
+                CryptoError::SealEphemeralKey,
+                "the sealed blob's ephemeral key is not an uncompressed P-384 point",
+            ),
+            (
+                CryptoError::SealPublicKey,
+                "the sealing public key is not a canonical P-384 SubjectPublicKeyInfo",
+            ),
+            (
+                CryptoError::SealPrivateKey,
+                "the sealing private key is not a P-384 PKCS#8 key",
+            ),
+            (
+                CryptoError::SealOpen,
+                "the sealed blob does not open under this key, domain and AAD",
+            ),
+            (CryptoError::Primitive, "a cryptographic primitive failed"),
+        ];
+        for (e, text) in table {
+            assert_eq!(e.to_string(), text);
+        }
+    }
 }

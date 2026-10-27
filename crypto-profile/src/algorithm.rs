@@ -394,6 +394,10 @@ mod tests {
             assert_eq!(a.as_str().parse::<SignatureAlgorithm>().unwrap(), a);
             assert_eq!(a.to_string(), a.as_str());
         }
+        assert_eq!(
+            ParseAlgorithmError("p384".to_string()).to_string(),
+            "unknown signature algorithm \"p384\""
+        );
         for bad in [
             "",
             "p384",
@@ -433,22 +437,12 @@ mod tests {
 
     #[test]
     fn cipher_suites_know_their_version() {
-        let tls13 = CipherSuite::ALL
-            .iter()
-            .filter(|c| c.version() == TlsVersion::Tls13)
-            .count();
-        let tls12 = CipherSuite::ALL
-            .iter()
-            .filter(|c| c.version() == TlsVersion::Tls12)
-            .count();
-        assert_eq!((tls13, tls12), (3, 6));
+        use TlsVersion::{Tls12, Tls13};
         assert_eq!(
-            CipherSuite::Tls13Chacha20Poly1305Sha256.version(),
-            TlsVersion::Tls13
-        );
-        assert_eq!(
-            CipherSuite::Tls12EcdheRsaAes256GcmSha384.version(),
-            TlsVersion::Tls12
+            CipherSuite::ALL.map(CipherSuite::version),
+            [
+                Tls13, Tls13, Tls13, Tls12, Tls12, Tls12, Tls12, Tls12, Tls12
+            ]
         );
     }
 

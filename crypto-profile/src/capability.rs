@@ -47,7 +47,7 @@ pub enum CertStatus {
 /// The certificate a module carries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Certificate {
-    /// The module's name as the CMVP lists it.
+    /// The module's name, with the release for a 3.x line.
     pub module_name: &'static str,
     /// The certificate number, absent while in review.
     pub number: Option<u32>,
@@ -81,7 +81,8 @@ impl Approval {
     }
 }
 
-/// One cell of the capability table.
+/// One cell of the capability table. A cipher suite cell speaks only to the suite's algorithms;
+/// whether its protocol version is approved is the `Protocol` cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Capability {
     /// The backend for this module implements the algorithm.
@@ -414,5 +415,97 @@ mod tests {
         let a = Algorithm::Signature(SignatureAlgorithm::MlDsa87);
         assert_eq!(ensure_available(M3S, a), Err(CryptoError::Unavailable(a)));
         assert_eq!(ensure_available(M4S, a), Ok(()));
+    }
+
+    #[test]
+    fn three_x_table_is_pinned_cell_by_cell() {
+        use Algorithm as A;
+        use SignatureAlgorithm as S;
+        use TlsSignatureScheme as T;
+        #[derive(Debug, Clone, Copy, PartialEq)]
+        enum K {
+            Approved,
+            NotApproved,
+            Unverified,
+        }
+        use K::{Approved as Y, NotApproved as N, Unverified as U};
+        let expected: [(Algorithm, bool, K); 40] = [
+            (A::Signature(S::MlDsa87), false, N),
+            (A::Signature(S::EcdsaP256Sha256), true, Y),
+            (A::Signature(S::EcdsaP384Sha384), true, Y),
+            (A::Signature(S::EcdsaP521Sha384), true, Y),
+            (A::Signature(S::EcdsaP521Sha512), true, Y),
+            (A::Signature(S::Ed25519), true, Y),
+            (A::Signature(S::Rsa2048Sha384), true, Y),
+            (A::Signature(S::Rsa3072Sha384), true, Y),
+            (A::Signature(S::Rsa4096Sha384), true, Y),
+            (A::Scheme(T::EcdsaNistp256Sha256), true, Y),
+            (A::Scheme(T::EcdsaNistp384Sha384), true, Y),
+            (A::Scheme(T::EcdsaNistp521Sha512), true, Y),
+            (A::Scheme(T::Ed25519), true, Y),
+            (A::Scheme(T::RsaPssSha256), true, Y),
+            (A::Scheme(T::RsaPssSha384), true, Y),
+            (A::Scheme(T::RsaPssSha512), true, Y),
+            (A::Scheme(T::RsaPkcs1Sha256), true, Y),
+            (A::Scheme(T::RsaPkcs1Sha384), true, Y),
+            (A::Scheme(T::RsaPkcs1Sha512), true, Y),
+            (A::Scheme(T::MlDsa87), false, N),
+            (A::Kx(KxGroup::MlKem1024), true, Y),
+            (A::Kx(KxGroup::X25519MlKem768), true, U),
+            (A::Kx(KxGroup::Secp256r1MlKem768), true, U),
+            (A::Kx(KxGroup::Secp384r1), true, Y),
+            (A::Kx(KxGroup::Secp256r1), true, Y),
+            (A::Kx(KxGroup::X25519), true, N),
+            (A::Cipher(CipherSuite::Tls13Aes256GcmSha384), true, Y),
+            (A::Cipher(CipherSuite::Tls13Aes128GcmSha256), true, Y),
+            (A::Cipher(CipherSuite::Tls13Chacha20Poly1305Sha256), true, N),
+            (
+                A::Cipher(CipherSuite::Tls12EcdheEcdsaAes256GcmSha384),
+                true,
+                Y,
+            ),
+            (
+                A::Cipher(CipherSuite::Tls12EcdheEcdsaAes128GcmSha256),
+                true,
+                Y,
+            ),
+            (
+                A::Cipher(CipherSuite::Tls12EcdheEcdsaChacha20Poly1305Sha256),
+                true,
+                N,
+            ),
+            (
+                A::Cipher(CipherSuite::Tls12EcdheRsaAes256GcmSha384),
+                true,
+                Y,
+            ),
+            (
+                A::Cipher(CipherSuite::Tls12EcdheRsaAes128GcmSha256),
+                true,
+                Y,
+            ),
+            (
+                A::Cipher(CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256),
+                true,
+                N,
+            ),
+            (A::Hash(HashAlgorithm::Sha256), true, Y),
+            (A::Hash(HashAlgorithm::Sha384), true, Y),
+            (A::Hash(HashAlgorithm::Sha512), true, Y),
+            (A::Protocol(TlsVersion::Tls12), true, Y),
+            (A::Protocol(TlsVersion::Tls13), true, U),
+        ];
+        assert_eq!(expected.len(), Algorithm::all().len());
+        for m in [M3S, M3D] {
+            for (a, available, kind) in &expected {
+                let c = capability(m, *a);
+                let got = match c.approval {
+                    Approval::Approved { .. } => K::Approved,
+                    Approval::NotApproved { .. } => K::NotApproved,
+                    Approval::Unverified => K::Unverified,
+                };
+                assert_eq!((c.available, got), (*available, *kind), "{m:?} {a:?}");
+            }
+        }
     }
 }
