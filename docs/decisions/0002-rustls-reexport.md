@@ -19,7 +19,7 @@ aws-lc-rs is different: its types are not part of the backend's API, and a re-ex
 
 ## Consequences
 
-- The rustls version and features an application builds with are the ones the backend was tested with.
+- The rustls version an application builds with is the one the backend pins and was tested with (`=0.23.46`). Its features are not fixed: Cargo unifies features across the whole dependency graph, so they are the union of what every crate depending on rustls enables. An async TLS adapter with its default features, for example, adds rustls's `aws_lc_rs`, `logging` and `tls12` (`tokio-rustls-0.26.6/Cargo.toml`, `[features] default`).
 - The re-export does not stop an application from calling rustls's stock-provider entry points through it. This repository's `clippy.toml` refuses them in the crate's own code, but that lint does not reach a dependent crate. The documentation names this residual, and the provider internals reachable through `CryptoProvider`'s public fields (`docs/usage.md` section 5).
 - rustls's semver becomes part of the backend's: a rustls minor version that changes its API changes ours.
 - Round 3 replaces the built-in provider with one this project owns, which narrows what the re-exported types can reach.

@@ -21,7 +21,7 @@ ML-DSA is available only on the 4.x backend: aws-lc-rs 1.17.4 compiles its `pqds
 
 ## 2. Static or dynamic linkage
 
-**Selecting it.** aws-lc-fips-sys reads the environment variable `AWS_LC_FIPS_SYS_STATIC`, or the target-scoped `AWS_LC_FIPS_SYS_STATIC_<target_triple_with_underscores>`, which it checks first (`aws-lc-fips-sys-0.14.2/builder/main.rs:183-204,883`). A value beginning `0`, `n`, `off` or `f` means dynamic; `1`, `y`, `on` or `t` means static (`builder/main.rs:266-286`). There is no Cargo feature for it.
+**Selecting it.** aws-lc-fips-sys reads the environment variable `AWS_LC_FIPS_SYS_STATIC`, or the target-scoped `AWS_LC_FIPS_SYS_STATIC_<target_triple_with_underscores>`, which it checks first (`aws-lc-fips-sys-0.14.2/builder/main.rs:183-204,883`). The value is read case-insensitively: one beginning `0`, `n`, `off` or `f` means dynamic; one beginning with any other digit, or with `y`, `on` or `t`, means static (`builder/main.rs:266-286`). There is no Cargo feature for it.
 
 **The default when it is unset** (`aws-lc-fips-sys-0.14.2/builder/main.rs:288-306`):
 - static on Linux and the BSDs, on x86_64 and aarch64;
@@ -46,7 +46,7 @@ On Linux, a dynamic build loads `libaws_lc_fips_0_14_2_crypto.so`. The conforman
 - `crypto_profile_awslc4::MODULE` is the `Module { line, linkage }` this build links (`crypto-profile-awslc4/src/lib.rs`).
 - `crypto_profile_awslc4::fips::certificate()` returns that module's `Certificate`: its name, its number (absent while in review), its status as recorded when this crate version was released, and its security-policy URL (absent while none is published) (`crypto-profile/src/capability.rs`, `certificate`).
 
-**The non-FIPS `aws-lc-sys`.** rustls's `fips` feature enables its `aws_lc_rs` feature, which turns on `aws-lc-rs/aws-lc-sys` (`rustls-0.23.46/Cargo.toml`, `[features]`). rcgen's `aws_lc_rs` feature does the same. So `aws-lc-sys` 0.46.0 is in the lockfile and is compiled. With `fips` on, aws-lc-rs binds the FIPS library instead (`extern crate aws_lc_fips_sys as aws_lc`, `aws-lc-rs-1.18.2/src/lib.rs:245-248`), and a review of both round 1 test binaries, static and dynamic, found no symbols from the non-FIPS library in either.
+**The non-FIPS `aws-lc-sys`.** rustls's `fips` feature enables its `aws_lc_rs` feature, which turns on `aws-lc-rs/aws-lc-sys` (`rustls-0.23.46/Cargo.toml`, `[features]`). rcgen's `aws_lc_rs` feature does the same. So `aws-lc-sys` 0.46.0 is in the lockfile and is compiled. With `fips` on, aws-lc-rs binds the FIPS library instead (`extern crate aws_lc_fips_sys as aws_lc`, `aws-lc-rs-1.18.2/src/lib.rs:245-248`), None of the round 1 test binaries, static or dynamic, contains a symbol from the non-FIPS library. Each library's symbols carry a version prefix, so the check is repeatable: `nm <test binary> | grep -c aws_lc_0_46_0_` gives 0, and `grep -c aws_lc_fips_0_14_2_` gives about 2,280.
 
 ## 3. What the crate claims, and what it doesn't
 
@@ -77,9 +77,10 @@ AWS-LC's [`BUILDING.md`](https://github.com/aws/aws-lc/blob/main/BUILDING.md) is
 Use the re-exported crate: `crypto_profile_awslc4::rustls`. Don't declare `rustls` as a dependency of your own.
 
 - The backend builds rustls 0.23.46 with `default-features = false` and the features `fips`, `std` and `tls12` (`crypto-profile-awslc4/Cargo.toml`). A direct dependency with rustls's defaults adds `aws_lc_rs`, `logging`, `prefer-post-quantum`, `std` and `tls12` (`rustls-0.23.46/Cargo.toml`, `[features] default`), and Cargo unifies those onto the one rustls in your build.
+- Avoiding a direct dependency does not fix rustls's features. Cargo unifies features across the whole dependency graph, so any other crate that depends on rustls adds its own; an async TLS adapter with its default features, for example, adds `aws_lc_rs`, `logging` and `tls12` (`tokio-rustls-0.26.6/Cargo.toml`, `[features] default`). `cargo tree -e features -i rustls` shows what your build enables. Only the rustls version is fixed, by the backend's `=0.23.46` pin.
 - Build configurations through `tls::client_builder`, `tls::server_builder`, `tls::install_default` and the two verifier builders, which all take a `Policy`. rustls's own `ClientConfig::builder()` and `ServerConfig::builder()` use the process-default provider, and when none is installed they install rustls's stock aws-lc-rs provider from its crate features (`rustls-0.23.46/src/crypto/mod.rs:243-286`). That provider carries rustls's defaults, not your policy.
 
-**Residual: provider internals are reachable.** `rustls::crypto::CryptoProvider` has public fields: the cipher suites, the key-exchange groups, the signature verification algorithms, the random source and the key provider. Code holding a provider can call the primitives behind them directly. This repository's `clippy.toml` refuses those entry points (`disallowed-methods`) in the crate's own code, but that lint does not reach your crate. Round 3 replaces the built-in provider with one this project owns.
+**Residual: provider internals are reachable.** `rustls::crypto::CryptoProvider` has public fields: the cipher suites, the key-exchange groups, the signature verification algorithms, the random source and the key provider. Code holding a provider can call the primitives behind them directly. This repository's `clippy.toml` refuses the entry points it lists (`disallowed-methods`), such as key-exchange `start`, the HPKE functions, `SecureRandom::fill` and `KeyProvider::load_private_key`, in the crate's own code; it does not list every primitive reachable this way, but that lint does not reach your crate. Round 3 replaces the built-in provider with one this project owns.
 
 ## 6. TLS policies
 
@@ -117,12 +118,12 @@ The backend answers two questions that are easy to confuse.
 - A policy with the hybrid groups X25519MLKEM768 or SECP256R1MLKEM768 passes it. rustls classifies a hybrid by whichever component comes first, following SP 800-56C Rev. 2 (`rustls-0.23.46/src/crypto/aws_lc_rs/pq/hybrid.rs:71-90`).
 
 **The crate's validation claim.** `fips::approval(alg)` returns the capability cell's `Approval` for this build's module, as the module's security policy states it. It is void (`Unverified`) unless the module reports FIPS mode at the time of the call (`crypto-profile-awslc4/src/fips.rs`, `approval` and `approval_given`).
-- On 3.x, the hybrid groups are `Unverified`: neither 3.x security policy mentions hybrid key establishment (`crypto-profile/src/capability.rs`, `three_x`).
+- On 3.x, the hybrid groups are `Unverified`, because neither 3.x security policy mentions hybrid key establishment, and so is TLS 1.3, because the policies' TLS KDF row lists v1.0/1.1 and v1.2 only (`crypto-profile/src/capability.rs`, `three_x`).
 - On 4.x, everything is `Unverified`, because no 4.x security policy is published.
 
 **Passing the first is not the second.** A configuration that rustls classifies as FIPS can include algorithms whose approval this crate cannot source. Use `assert_fips_*` to refuse X25519, ChaCha20 and non-EMS TLS 1.2; use `approval` for what the module's security policy says.
 
-`fips::assert_fips_module()` is a third, narrower check: it refuses unless the loaded AWS-LC module reports FIPS mode. The sealed box calls it on every seal and open.
+`fips::assert_fips_module()` is a third, narrower check: it refuses unless the loaded AWS-LC module reports FIPS mode. The sealed box calls it on every seal and open. On a dynamic build it is the application's own check that the library the loader found is in FIPS mode. A shared library is found at run time, and if the FIPS library's directory is not on the loader's path, a different `libcrypto` may be loaded (`aws-lc-fips-sys-0.14.2/README.md:170-176`). aws-lc-fips-sys also links a start-up check that aborts the process if the runtime library is not in FIPS mode, to catch shared-library shadowing (`README.md:163-166`).
 
 ## 9. What a policy does not restrict in round 1
 
@@ -146,7 +147,7 @@ The crate holds secret material in zeroizing buffers that are sized at allocatio
 Two further residuals hold no secret material:
 
 - **Per-policy verifier tables.** Each distinct ordered `signature_schemes` list leaks one static verification-algorithm table, cached for the life of the process (`crypto-profile-awslc4/src/tls.rs`, `verification_algorithms`). This is bounded by the number of distinct lists an application builds.
-- **RSA public exponents.** `signature::verify` checks an RSA public key's length against the size its algorithm names, and those lengths assume the exponent 65537, which is what `KeyPair::generate` produces. A key whose exponent encodes to a different length is refused with `CryptoError::Verify`, so the check fails closed. Exponents other than 65537 are outside what the crate supports, and no test exercises one (`crypto-profile-awslc4/src/signature.rs`, `verify` and `matches_spki`).
+- **RSA public exponents.** `signature::verify` checks an RSA public key's length against the size its algorithm names, and those lengths assume the exponent 65537, which is what `KeyPair::generate` produces. A key whose exponent encodes to a different length is refused with `CryptoError::Verify`, so that case fails closed. An exponent with the same encoded length, such as 65539, passes the length check and is left to aws-lc. Exponents other than 65537 are unsupported, and no test exercises one (`crypto-profile-awslc4/src/signature.rs`, `verify` and `matches_spki`).
 
 ## 12. Known-answer coverage
 

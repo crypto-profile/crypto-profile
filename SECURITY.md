@@ -27,6 +27,6 @@ If you are not sure where a defect lies, report it here; we will help route it.
 - The crate, version or commit, and the backend.
 - The linkage (static or dynamic), the target triple, and the Rust version.
 - What you expected and what happened, with the smallest reproduction you can give: a test, a `Policy`, or the input bytes.
-- For a claim defect: the capability cell or document, and the security-policy table and page that contradicts it.
+- For a claim defect: the capability cell or document, and the security-policy table that contradicts it.
 - Whether you used AI assistance to find or describe the issue.
 - Whether the issue is public anywhere else, and any disclosure deadline you are working to.

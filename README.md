@@ -17,7 +17,7 @@ One reviewed place for an application's cryptographic choices:
   - a sealed box;
   - signature keys, signing and verification;
   - certificate-request generation.
-- **A capability table** that records, for each certified or submitted module and each algorithm, whether the backend implements it and what the module's security policy says about it, citing the table and page for every sourced cell.
+- **A capability table** that records, for each certified or submitted module and each algorithm, whether the backend implements it and what the module's security policy says about it, citing the policy table for every sourced cell.
 
 ## What it is not
 
@@ -34,14 +34,14 @@ Cargo resolves one `aws-lc-rs` 1.x per lockfile, so each module line gets its ow
 | `crypto-profile-awslc4` | AWS-LC FIPS 4.x, through aws-lc-rs 1.18 | Built in round 1. |
 | `crypto-profile-awslc3` | AWS-LC FIPS 3.x, through aws-lc-rs 1.17 | Planned for round 3. |
 
-The modules' certificate status, as recorded when this file was last updated. The [CMVP lists](https://csrc.nist.gov/projects/cryptographic-module-validation-program) are authoritative.
+The modules' certificate status, as recorded when this file was last updated (read 2026-10-28). The [CMVP lists](https://csrc.nist.gov/projects/cryptographic-module-validation-program) are authoritative.
 
 | Module | Status |
 |---|---|
 | AWS-LC FIPS 3.1.0 | Validated: certificate [#5314](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5314) (static) and [#5298](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5298) (dynamic). |
 | AWS-LC FIPS 4.x | Submitted, in CMVP review; no security policy published yet. Static and dynamic are separate submissions ([AWS-LC `FIPS.md`](https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/FIPS.md), "Modules in Process"). |
 
-aws-lc-rs 1.17 with its `fips` feature compiles ML-DSA out, so the 3.x backend will refuse ML-DSA with a typed error rather than fall back. See [`docs/usage.md`](docs/usage.md) for linkage, what the crate claims, and its limits.
+aws-lc-rs 1.17.4 with its `fips` feature compiles ML-DSA out, so the 3.x backend will refuse ML-DSA with a typed error rather than fall back. See [`docs/usage.md`](docs/usage.md) for linkage, what the crate claims, and its limits.
 
 ## Profiles (round 2)
 

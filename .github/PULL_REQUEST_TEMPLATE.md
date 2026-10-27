@@ -14,5 +14,5 @@ If yes, which tools, and for what:
 
 - [ ] Every commit carries a DCO `Signed-off-by` matching its author (`git commit -s`).
 - [ ] I ran the gates in `CONTRIBUTING.md` section 2 locally, including coverage, mutation testing and both linkages.
-- [ ] Every capability cell I added or changed cites its security policy's table and page, or is `Unverified`.
+- [ ] Every capability cell I added or changed cites its security policy and table (with the page, for an approval), or is `Unverified`.
 - [ ] No product or vendor names in compatibility text.

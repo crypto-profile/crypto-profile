@@ -13,7 +13,7 @@ These rules apply to every contributor, human or AI-assisted. [`docs/usage.md`](
   AWS_LC_FIPS_SYS_STATIC=0 cargo test --workspace --all-features
   ```
 
-  The two builds produce different artifacts, so a separate `CARGO_TARGET_DIR` for each avoids rebuilding AWS-LC every time you switch. On macOS only the dynamic linkage exists.
+  The two builds produce different artifacts, so a separate `CARGO_TARGET_DIR` for each avoids rebuilding AWS-LC every time you switch. On macOS only the dynamic linkage is supported.
 
 ## 2. The gates
 
@@ -64,16 +64,17 @@ When you add a value, take it from the registry or the standard, not from the co
 
 ## 5. Adding an algorithm
 
-1. **Add the enum variant** in `crypto-profile/src/algorithm.rs`. The algorithm enums are exhaustive by design ([decision 0001](docs/decisions/0001-founding.md)), and every `match` on them lists every variant with no `_` arm, so the compiler now refuses to build until every step below is done. Adding a variant is a minor-version bump while the crate is 0.x.
-2. **Add its literal identifiers** to core: `iana()` from the IANA TLS registries, or `signature_oid()` from the RFC that assigns the OID, and extend the literal tables in the tests that pin them.
-3. **Give it a `capability()` cell for every `Module`** in `crypto-profile/src/capability.rs`. Each cell states:
+1. **Add the enum variant** in `crypto-profile/src/algorithm.rs`. Adding a variant is a minor-version bump while the crate is 0.x. The algorithm enums are exhaustive by design ([decision 0001](docs/decisions/0001-founding.md)), and every `match` on them lists every variant with no `_` arm. So the compiler refuses to build until the variant has an arm in each of them: its `ordinal()`, `iana()` or `signature_oid()`, every `capability()` cell (step 4), and every backend mapping (step 5). It forces nothing else.
+2. **Add it to its family's `ALL` array,** at the position its `ordinal()` gives. The compiler does not check `ALL`. The test `<family>_all_lists_every_variant_in_ordinal_order` checks that `ALL` holds the ordinals `0..N` in order, so a variant left out of `ALL` fails it unless its ordinal is the last one, `N`. Review catches that case: give the new variant its ordinal and its place in `ALL` together. Everything that walks `ALL` skips a variant missing from it: the capability walk, the registry-literal tests and the CSR oracle table.
+3. **Add its literal identifiers** to core: `iana()` from the IANA TLS registries, or `signature_oid()` from the RFC that assigns the OID, and extend the literal tables in the tests that pin them.
+4. **Give it a `capability()` cell for every `Module`** in `crypto-profile/src/capability.rs`. Each cell states:
    - *available*: whether that module's backend implements it;
-   - *approval*: `Approved` or `NotApproved`, with a `source` naming the certificate, the security-policy table and the page, or `Unverified` when no published source settles it.
+   - *approval*: `Approved` or `NotApproved`, with a `source` naming the certificate and the security-policy table (and the page, for an approval), or `Unverified` when no published source settles it.
 
    A cell you cannot source is `Unverified`. Never mark a cell `Approved` on the strength of another module's policy, a vendor statement or an algorithm's general reputation.
-4. **Map it in every backend** (the rustls item, the aws-lc-rs algorithm, the rcgen algorithm, as applies).
-5. **Add conformance coverage.** The capability walk (`conformance_capability_honesty`) picks it up automatically once the variant is in `ALL`. Add known answers from a published vector set to `crypto-profile/src/conformance/vectors/`, recorded in `SOURCES.md`, and a row to the oracle table in the CSR test for a signature algorithm.
-6. **Note which round 2 profiles should admit it,** in the pull request.
+5. **Map it in every backend** (the rustls item, the aws-lc-rs algorithm, the rcgen algorithm, as applies).
+6. **Add conformance coverage.** The capability walk (`conformance_capability_honesty`) picks it up through `ALL`. The compiler does not force known answers or profiles. Add known answers from a published vector set to `crypto-profile/src/conformance/vectors/`, recorded in `SOURCES.md`, and a row to the oracle table in the CSR test for a signature algorithm.
+7. **Note which round 2 profiles should admit it,** in the pull request.
 
 ## 6. Adding a backend
 

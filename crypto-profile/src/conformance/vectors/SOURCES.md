@@ -47,4 +47,4 @@ The known answers in `conformance/mod.rs` (`vectors::sealbox`) are Maknae's seal
 The two reference policies the conformance macro builds are named for their shape. Their origins:
 
 - `reference_pq_first`: Maknae's TLS configuration: TLS 1.3 only, key-exchange groups MLKEM1024, X25519MLKEM768, SECP256R1MLKEM768, secp384r1, secp256r1.
-- `reference_cnsa1`: Microkosmos's CNSA 1.0 filter: TLS 1.3 AES-256-GCM-SHA384, plus TLS 1.2 ECDHE with ECDSA or RSA and AES-256-GCM-SHA384, over secp384r1.
+- `reference_cnsa1`: a CNSA 1.0 TLS filter used by another consumer: TLS 1.3 AES-256-GCM-SHA384, plus TLS 1.2 ECDHE with ECDSA or RSA and AES-256-GCM-SHA384, over secp384r1.

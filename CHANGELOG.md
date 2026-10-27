@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The core crate `crypto-profile`, with no aws-lc dependency:
   - exhaustive algorithm types: `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `TlsVersion` and `Algorithm`, with literal IANA codepoints (`iana()`) and X.509 signature OIDs (`signature_oid()`), and `FromStr` and `Display` for `SignatureAlgorithm`;
-  - the capability model: `Module { line, linkage }`, `certificate()` and `capability()`, with every 3.x cell citing Table 5 of the AWS-LC FIPS 3.1.0 security policy for certificate #5314 (static) or #5298 (dynamic), and every 4.x cell `Unverified`;
+  - the capability model: `Module { line, linkage }`, `certificate()` and `capability()`, where each 3.x cell cites the AWS-LC FIPS 3.1.0 security policy of its own certificate, #5314 (static) or #5298 (dynamic): an `Approved` cell cites Table 5 (pp. 8-11), a `NotApproved` cell cites its absence from Tables 5-8, and the two hybrid key-exchange groups and TLS 1.3 are `Unverified`, with no source; every 4.x cell is `Unverified`;
   - typed errors: `CryptoError`, with `Unavailable(Algorithm)`, `PolicyEmpty(Family)` and `PolicyDrift`, and the typed causes `CsrError` and `TlsError`;
   - the sealed box's version-1 framing (`sealbox_wire`);
   - the conformance suite behind the `conformance` feature, run by every backend through `conformance_tests!`.
