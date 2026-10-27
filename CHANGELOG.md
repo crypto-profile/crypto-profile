@@ -1,0 +1,24 @@
+# Changelog
+
+All notable changes to this project are documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project will adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it publishes. Nothing is published yet; the first release will be 0.1.0.
+
+## [Unreleased]
+
+### Added
+
+- The core crate `crypto-profile`, with no aws-lc dependency:
+  - exhaustive algorithm types: `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `TlsVersion` and `Algorithm`, with literal IANA codepoints (`iana()`) and X.509 signature OIDs (`signature_oid()`), and `FromStr` and `Display` for `SignatureAlgorithm`;
+  - the capability model: `Module { line, linkage }`, `certificate()` and `capability()`, with every 3.x cell citing Table 5 of the AWS-LC FIPS 3.1.0 security policy for certificate #5314 (static) or #5298 (dynamic), and every 4.x cell `Unverified`;
+  - typed errors: `CryptoError`, with `Unavailable(Algorithm)`, `PolicyEmpty(Family)` and `PolicyDrift`, and the typed causes `CsrError` and `TlsError`;
+  - the sealed box's version-1 framing (`sealbox_wire`);
+  - the conformance suite behind the `conformance` feature, run by every backend through `conformance_tests!`.
+- The backend `crypto-profile-awslc4`, on the AWS-LC FIPS 4.x module through aws-lc-rs 1.18.2:
+  - `MODULE`, with the linkage read from the build; the build fails if aws-lc-rs does not report it;
+  - `digest`, `random`, `aead` (AES-256-GCM with module-chosen nonces), `sealbox` (P-384 ECDH, HKDF-SHA384, AES-256-GCM), `signature` (key generation, signing, verification and the SubjectPublicKeyInfo shape check) and `csr` (PKCS#10 requests with a DN, DNS, IP and URI SANs, EKU and key usage, signed by the request's own key);
+  - `tls`: `Policy`, `crypto_provider`, the client and server builders, `install_default`, `assert_provider_matches`, `load_private_key` and the certificate-verifier builders, over rustls 0.23.46's aws-lc-rs provider with TLS 1.2 enabled;
+  - `fips`: `assert_fips_module`, `assert_fips_client_config`, `assert_fips_server_config`, `certificate` and `approval`;
+  - the `rustls` re-export, and `rcgen` under the `test-support` feature.
+- Known-answer tests: Wycheproof (ECDSA, Ed25519, RSA PKCS#1 v1.5 SHA-384, ML-DSA-87, AES-GCM), NIST CAVP SHA-2, RFC 8032 and a sealed-box version-1 blob.
+- Documentation: `docs/usage.md`, `CONTRIBUTING.md` (with the Developer Certificate of Origin and the AI-assistance disclosure), `SECURITY.md`, decision records 0001 to 0003 and the pull request template.
