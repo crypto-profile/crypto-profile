@@ -1,0 +1,121 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fmt:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - run: cargo fmt --all --check
+
+  clippy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: sudo apt-get install -y cmake golang clang
+      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+  deny:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          command: check
+          arguments: --locked
+
+  test:
+    name: test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(github.event.repository.private && '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"}]' || '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"},{"name":"linux-arm64-static","os":"ubuntu-24.04-arm","dynamic":"0"},{"name":"macos-arm64","os":"macos-15","dynamic":"0"}]') }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - name: Install build tools (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y cmake golang clang
+      - name: Install build tools (macOS)
+        if: runner.os == 'macOS'
+        run: brew install cmake go
+      - name: Test
+        env:
+          DYNAMIC: ${{ matrix.dynamic }}
+        run: |
+          if [ "$DYNAMIC" = 1 ]; then export AWS_LC_FIPS_SYS_STATIC=0; fi
+          cargo test --workspace --all-features --locked
+
+  msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install 1.99.1 --profile minimal
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: sudo apt-get install -y cmake golang clang
+      - run: cargo +1.99.1 check --workspace --all-features --locked
+
+  coverage:
+    if: ${{ !github.event.repository.private }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: sudo apt-get install -y cmake golang clang
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-llvm-cov
+      - run: cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
+
+  mutants:
+    if: ${{ !github.event.repository.private }}
+    name: mutants (shard ${{ matrix.shard }}/4)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup show
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - run: sudo apt-get install -y cmake golang clang
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-mutants
+      - run: cargo mutants --workspace --no-shuffle --shard ${{ matrix.shard }}/4
+
+  dco:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Every commit carries a Signed-off-by matching its author
+        run: |
+          fail=0
+          for c in $(git rev-list --no-merges ${{ github.event.pull_request.base.sha }}..${{ github.event.pull_request.head.sha }}); do
+            author="$(git show -s --format='%an <%ae>' "$c")"
+            case "$author" in 'dependabot[bot] <'*'+dependabot[bot]@users.noreply.github.com>') continue ;; esac
+            if ! git show -s --format=%B "$c" | grep -qxF "Signed-off-by: $author"; then
+              echo "::error::$c has no 'Signed-off-by: $author'"; fail=1
+            fi
+          done
+          exit $fail
