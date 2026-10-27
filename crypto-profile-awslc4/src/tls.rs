@@ -81,6 +81,26 @@ fn base_provider() -> CryptoProvider {
     rustls::crypto::aws_lc_rs::default_provider()
 }
 
+type SchemeMapping = (
+    rustls::SignatureScheme,
+    &'static [&'static dyn rustls::pki_types::SignatureVerificationAlgorithm],
+);
+
+fn select_schemes(
+    base: &[SchemeMapping],
+    schemes: &[T],
+) -> Result<Vec<SchemeMapping>, CryptoError> {
+    schemes
+        .iter()
+        .map(|t| {
+            base.iter()
+                .find(|(s, _)| *s == rustls_scheme(*t))
+                .copied()
+                .ok_or(CryptoError::Unavailable(Algorithm::Scheme(*t)))
+        })
+        .collect()
+}
+
 fn verification_algorithms(schemes: &[T]) -> Result<WebPkiSupportedAlgorithms, CryptoError> {
     static CACHE: OnceLock<Mutex<HashMap<Vec<T>, &'static WebPkiSupportedAlgorithms>>> =
         OnceLock::new();
@@ -92,13 +112,7 @@ fn verification_algorithms(schemes: &[T]) -> Result<WebPkiSupportedAlgorithms, C
         return Ok(*w);
     }
     let base = base_provider().signature_verification_algorithms;
-    let mut mapping = Vec::with_capacity(schemes.len());
-    for t in schemes {
-        match base.mapping.iter().find(|(s, _)| *s == rustls_scheme(*t)) {
-            Some(m) => mapping.push(*m),
-            None => return Err(CryptoError::Unavailable(Algorithm::Scheme(*t))),
-        }
-    }
+    let mapping = select_schemes(base.mapping, schemes)?;
     let w: &'static WebPkiSupportedAlgorithms = Box::leak(Box::new(WebPkiSupportedAlgorithms {
         all: base.all,
         mapping: Box::leak(mapping.into_boxed_slice()),
@@ -283,6 +297,28 @@ mod tests {
         for v in V::ALL {
             assert_eq!(cp(rustls_version(v).version.to_array()), v.iana(), "{v:?}");
         }
+    }
+
+    #[test]
+    fn a_scheme_missing_from_the_base_mapping_is_refused() {
+        let base = base_provider().signature_verification_algorithms.mapping;
+        let names = |m: &[SchemeMapping]| m.iter().map(|(s, _)| *s).collect::<Vec<_>>();
+        assert_eq!(
+            names(&select_schemes(base, &[T::Ed25519, T::EcdsaNistp384Sha384]).unwrap()),
+            [
+                rustls::SignatureScheme::ED25519,
+                rustls::SignatureScheme::ECDSA_NISTP384_SHA384
+            ]
+        );
+        let without: Vec<SchemeMapping> = base
+            .iter()
+            .filter(|(s, _)| *s != rustls::SignatureScheme::ED25519)
+            .copied()
+            .collect();
+        assert_eq!(
+            select_schemes(&without, &[T::EcdsaNistp384Sha384, T::Ed25519]).err(),
+            Some(CryptoError::Unavailable(Algorithm::Scheme(T::Ed25519)))
+        );
     }
 
     #[test]
@@ -548,10 +584,25 @@ mod tests {
             };
             let p = policy(&[s.version()], &[s], &[K::Secp384r1], &T::ALL);
             let n = handshake(&p, &p, key).unwrap_or_else(|e| panic!("{s:?}: {e}"));
-            assert_eq!((n.version, n.suite), (s.version(), s), "{s:?}");
-            if key == S::EcdsaP384Sha384 {
-                assert_eq!(n.scheme, T::EcdsaNistp384Sha384, "{s:?}");
-            }
+            let scheme = match key {
+                S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => T::RsaPssSha512,
+                S::MlDsa87
+                | S::EcdsaP256Sha256
+                | S::EcdsaP384Sha384
+                | S::EcdsaP521Sha384
+                | S::EcdsaP521Sha512
+                | S::Ed25519 => key.tls_scheme(),
+            };
+            assert_eq!(
+                n,
+                Negotiated {
+                    version: s.version(),
+                    suite: s,
+                    kx: K::Secp384r1,
+                    scheme,
+                },
+                "{s:?}"
+            );
         }
     }
 
@@ -560,21 +611,36 @@ mod tests {
         for a in S::ALL {
             let n = handshake(&one13(K::Secp384r1), &one13(K::Secp384r1), a)
                 .unwrap_or_else(|e| panic!("{a}: {e}"));
-            let rsa = matches!(
-                n.scheme,
-                T::RsaPssSha256 | T::RsaPssSha384 | T::RsaPssSha512
-            );
-            match a {
-                S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => {
-                    assert!(rsa, "{a}: {n:?}")
-                }
+            let full_offer = match a {
+                S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => T::RsaPssSha512,
                 S::MlDsa87
                 | S::EcdsaP256Sha256
                 | S::EcdsaP384Sha384
                 | S::EcdsaP521Sha384
                 | S::EcdsaP521Sha512
-                | S::Ed25519 => assert_eq!(n.scheme, a.tls_scheme(), "{a}"),
-            }
+                | S::Ed25519 => a.tls_scheme(),
+            };
+            assert_eq!(n.scheme, full_offer, "{a}");
+        }
+    }
+
+    #[test]
+    fn a_one_scheme_offer_gets_that_scheme() {
+        let rsa = [T::RsaPssSha256, T::RsaPssSha384, T::RsaPssSha512];
+        let cases = S::ALL
+            .into_iter()
+            .map(|a| (a, a.tls_scheme()))
+            .chain(rsa.into_iter().map(|t| (S::Rsa2048Sha384, t)));
+        for (a, t) in cases {
+            let client = policy(
+                &[V::Tls13],
+                &[C::Tls13Aes256GcmSha384],
+                &[K::Secp384r1],
+                &[t],
+            );
+            let n = handshake(&client, &one13(K::Secp384r1), a)
+                .unwrap_or_else(|e| panic!("{a} {t:?}: {e}"));
+            assert_eq!(n.scheme, t, "{a}");
         }
     }
 
@@ -587,14 +653,20 @@ mod tests {
             &[K::Secp384r1],
             &T::ALL,
         );
-        assert!(handshake(&client, &server, S::EcdsaP384Sha384).is_err());
+        assert_eq!(
+            handshake(&client, &server, S::EcdsaP384Sha384),
+            Err("peer is incompatible: NoCipherSuitesInCommon".to_string())
+        );
         let client = policy(
             &[V::Tls13],
             &[C::Tls13Aes256GcmSha384],
             &[K::Secp384r1],
             &[T::Ed25519],
         );
-        assert!(handshake(&client, &server, S::EcdsaP384Sha384).is_err());
+        assert_eq!(
+            handshake(&client, &server, S::EcdsaP384Sha384),
+            Err("peer is incompatible: NoSignatureSchemesInCommon".to_string())
+        );
     }
 
     #[test]

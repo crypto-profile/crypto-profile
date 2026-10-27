@@ -88,8 +88,15 @@ impl SignatureAlgorithm {
         }
     }
 
-    /// The TLS signature scheme a key of this algorithm signs handshakes with. RSA keys sign
-    /// TLS 1.3 handshakes with RSA-PSS whatever their CSR was signed with.
+    /// The TLS signature scheme this crate pairs with a key of this algorithm: the scheme the key
+    /// signs a handshake with when the peer offers this scheme alone.
+    ///
+    /// An ECDSA, Ed25519 or ML-DSA key has no other scheme. An RSA key's scheme comes from the
+    /// peer's offer, whatever the key's CSR was signed with: rustls signs with the first of RSA-PSS
+    /// with SHA-512, SHA-384 and SHA-256, then PKCS#1 v1.5 with SHA-512, SHA-384 and SHA-256, that
+    /// the peer offers (`rustls-0.23.46/src/crypto/aws_lc_rs/sign.rs:104-111,137-142`), and TLS 1.3
+    /// admits only the RSA-PSS ones (`src/enums.rs:554-579`). So an RSA key signs with RSA-PSS with
+    /// SHA-384 only when the peer offers it and does not offer RSA-PSS with SHA-512.
     pub const fn tls_scheme(self) -> TlsSignatureScheme {
         match self {
             SignatureAlgorithm::MlDsa87 => TlsSignatureScheme::MlDsa87,
