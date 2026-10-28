@@ -153,7 +153,7 @@ The Annex B ¶1 table (pp. B-1 to B-2) lists, as general-purpose algorithms, AES
 
 What RFC 9151 names and the stack does not implement is in section 4 (item 2): RSA key transport, which §5.2 says MUST be supported for TLS 1.2; and `TLS_RSA_WITH_AES_256_GCM_SHA384`, `TLS_DHE_RSA_WITH_AES_256_GCM_SHA384` and the ffdhe groups, which are options in "at least one of" lists (§6, §7). RFC 9151 makes Extended Master Secret a SHOULD (§6.1); rustls requires it on TLS 1.2 here, because a configuration built from `cnsa1` is FIPS-classified.
 
-- **Certificate-chain signatures are not restricted.** The chain may be signed with any algorithm in rustls's list (section 5). RFC 9151 says both sides "MUST use one of" `ecdsa_secp384r1_sha384` and `rsa_pkcs1_sha384` for certificate path validation (§6.3), and that a server "MUST only accept ECDSA or RSA" for it (§6.2, §7.2). `cnsa1` does not meet those requirements: a chain signed with Ed25519, ML-DSA, ECDSA on P-256 or RSA-2048 is accepted.
+- **Certificate-chain signatures are not restricted.** The chain may be signed with any algorithm in rustls's list (section 5). RFC 9151 says both sides "MUST use one of" `ecdsa_secp384r1_sha384` and `rsa_pkcs1_sha384` for certificate path validation (§6.3), and that a server "MUST only accept ECDSA or RSA" for it (§6.2, §7.2). `cnsa1` does not meet those requirements: a chain signed with Ed25519, ML-DSA, ECDSA on P-256 or RSA-2048 is accepted. §5.4 also requires certificates to comply with the CNSA Suite certificate and CRL profile (RFC 8603); no profile checks a certificate against RFC 8603.
 
 ### `bsi`
 
@@ -272,7 +272,7 @@ What each issuer's text says about the years after 2030, and which profile, with
 | **Canada:** CCCS ITSM.40.001 (June 2025) [^ca1] and ITSP.40.111 v5 (29 May 2026) [^ca2] | High-priority systems migrated by the end of 2031, the rest by the end of 2035. RSA of at least 3072 bits by the end of 2030. RSA, ECDH, ECDSA and EdDSA phased out "without a PQC scheme" by the end of 2035. | The texts name ML-KEM and ML-DSA, each in all three parameter sets, and no TLS groups: they name no algorithm set for TLS. |
 
 [^us]: CNSS Policy No. 15, *Use of Public Standards for Secure Information Sharing*, December 2024, Committee on National Security Systems. Link and hash: [sources](sources.md).
-[^au]: Australian Signals Directorate, *Information security manual: Guidelines for cryptography*, September 2026. Page numbers are the PDF's footers.
+[^au]: Australian Signals Directorate, *Information security manual: Guidelines for cryptography*, September 2026. Page numbers are the PDF's footers. Link and hash: [sources](sources.md).
 [^eu]: <https://ec.europa.eu/newsroom/dae/redirection/document/117507>
 [^uk1]: <https://www.ncsc.gov.uk/guidance/pqc-migration-timelines>
 [^uk2]: <https://www.ncsc.gov.uk/guidance/using-tls-to-protect-data>

@@ -20,7 +20,7 @@ This page lists every document a profile, citation or capability cell depends on
 
 | Document | Issuer | Edition | Link | Used by | SHA-256 |
 |---|---|---|---|---|---|
-| Information security manual, Guidelines for cryptography | ASD / ACSC | September 2026 (first published 7 September 2026) | Edition: <https://www.cyber.gov.au/ism/2026-09><br>Guideline: <https://www.cyber.gov.au/ism/2026-09/guidelines-for-cryptography> | `preferred` (ISM-cited cells); `docs/profiles.md` sections 5 and 7 | `de582a6a541f9221dce77e36bd13418694bd6514de9ba2f54c75eed9aa550ac2` |
+| Information security manual, Guidelines for cryptography | ASD / ACSC | September 2026 (first published 7 September 2026) | Edition: <https://www.cyber.gov.au/ism/2026-09><br>Guideline: <https://www.cyber.gov.au/ism/2026-09/guidelines-for-cryptography> | `preferred` (ISM-cited cells); `docs/profiles.md` sections 3, 4 and 7 | `de582a6a541f9221dce77e36bd13418694bd6514de9ba2f54c75eed9aa550ac2` |
 
 ## European Union / United Kingdom / Canada
 

@@ -22,7 +22,8 @@ pub enum Profile {
     Cnsa2,
     /// The CNSA 1.0 algorithm set of CNSSP 15 (20 October 2016), Annex B, in RFC 9151's TLS
     /// profile. A transition profile for CNSA 1.0 counterparts. Not every RFC 9151 requirement is
-    /// met; `docs/profiles.md` sections 4 and 5 name each one.
+    /// met: `docs/profiles.md` names the algorithm gaps (the `cnsa1` entry in section 3, sections 4
+    /// and 5), and the RFC 8603 certificate profile that §5.4 requires is not implemented.
     Cnsa1,
     /// BSI TR-02102-2 and TR-02102-1, version 2026-01.
     Bsi,
