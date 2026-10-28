@@ -121,7 +121,7 @@ The backend answers two questions that are easy to confuse.
 - On 3.x, the hybrid groups are `Unverified`, because neither 3.x security policy mentions hybrid key establishment, and so is TLS 1.3, because the policies' TLS KDF row lists v1.0/1.1 and v1.2 only (`crypto-profile/src/capability.rs`, `three_x`).
 - On 4.x, no security policy is published: a static-build cell is `Unverified`, and a dynamic-build cell is `AlgorithmTested` or `Unverified` as §3 lists. Neither is approved.
 
-`assert_module_approves(&resolved)` composes each capability cell with FIPS mode exactly as `fips::approval` does, over every algorithm a resolved profile names, and refuses every cell that is not `Approved`, `AlgorithmTested` included ([`profiles.md`](profiles.md) §6).
+`assert_module_approves(&resolved)` refuses with `NotFips` unless the module reports FIPS mode, and with `PolicyEmpty` if a family of the resolved profile is empty. Otherwise it checks the capability cell of every algorithm the resolved profile names, as `fips::approval` reports it in FIPS mode, and refuses every cell that is not `Approved`, `AlgorithmTested` included ([`profiles.md`](profiles.md) §6).
 
 **Passing the first is not the second.** A configuration that rustls classifies as FIPS can include algorithms whose approval this crate cannot source. Use `assert_fips_*` to refuse X25519, ChaCha20 and non-EMS TLS 1.2; use `approval` for the cell and its source, which is `Approved` only where a security policy says so.
 
@@ -136,6 +136,7 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 - **The algorithm of a key passed to `tls::load_private_key`.** The key is loaded through rustls's key provider and is not checked against any policy (`crypto-profile-awslc4/src/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
+- **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5).
 
 ## 10. Which module a build is
 
