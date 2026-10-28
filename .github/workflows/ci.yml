@@ -53,6 +53,13 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - run: ci/shipped-graph.sh
 
+  provider-build-negative:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - run: ci/provider-build-negative.sh
+
   openssl-interop:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
