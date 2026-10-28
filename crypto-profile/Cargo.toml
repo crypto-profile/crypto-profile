@@ -1,0 +1,19 @@
+[package]
+name = "crypto-profile"
+description = "Named cryptographic profiles over the AWS-LC FIPS module: algorithm types, per-module capabilities and a conformance suite"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lints]
+workspace = true
+
+[features]
+conformance = ["dep:serde_json", "dep:hex"]
+
+[dependencies]
+serde_json = { version = "1", optional = true }
+hex = { version = "0.4", optional = true }

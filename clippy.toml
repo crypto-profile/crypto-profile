@@ -1,0 +1,26 @@
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+disallowed-methods = [
+  { path = "rustls::crypto::aws_lc_rs::default_provider", reason = "build providers with crypto_profile_awslc4::tls::crypto_provider(&Policy)" },
+  { path = "rustls::crypto::default_fips_provider", reason = "build providers with crypto_profile_awslc4::tls::crypto_provider(&Policy)" },
+  { path = "rustls::ClientConfig::builder", reason = "installs the stock provider; use tls::client_builder(&Policy)" },
+  { path = "rustls::ClientConfig::builder_with_protocol_versions", reason = "installs the stock provider; use tls::client_builder(&Policy)" },
+  { path = "rustls::ServerConfig::builder", reason = "installs the stock provider; use tls::server_builder(&Policy)" },
+  { path = "rustls::ServerConfig::builder_with_protocol_versions", reason = "installs the stock provider; use tls::server_builder(&Policy)" },
+  { path = "rustls::server::WebPkiClientVerifier::builder", reason = "installs the stock provider; use tls::client_cert_verifier_builder" },
+  { path = "rustls::client::WebPkiServerVerifier::builder", reason = "installs the stock provider; use tls::server_cert_verifier_builder" },
+  { path = "rustls::crypto::SupportedKxGroup::start", reason = "cryptography goes through crypto-profile" },
+  { path = "rustls::crypto::hpke::Hpke::setup_sealer", reason = "cryptography goes through crypto-profile" },
+  { path = "rustls::crypto::hpke::Hpke::setup_opener", reason = "cryptography goes through crypto-profile" },
+  { path = "rustls::crypto::hpke::Hpke::seal", reason = "cryptography goes through crypto-profile" },
+  { path = "rustls::crypto::hpke::Hpke::open", reason = "cryptography goes through crypto-profile" },
+  { path = "rustls::crypto::SecureRandom::fill", reason = "cryptography goes through crypto-profile" },
+  { path = "rustls::crypto::KeyProvider::load_private_key", reason = "use tls::load_private_key" },
+  { path = "rustls::ClientConfig::builder_with_provider", reason = "use tls::client_builder(&Policy)" },
+  { path = "rustls::ServerConfig::builder_with_provider", reason = "use tls::server_builder(&Policy)" },
+  { path = "rustls::server::WebPkiClientVerifier::builder_with_provider", reason = "use tls::client_cert_verifier_builder" },
+  { path = "rustls::client::WebPkiServerVerifier::builder_with_provider", reason = "use tls::server_cert_verifier_builder" },
+  { path = "rustls::crypto::aws_lc_rs::sign::any_supported_type", reason = "use tls::load_private_key" },
+  { path = "rustls::crypto::aws_lc_rs::sign::any_ecdsa_type", reason = "use tls::load_private_key" },
+  { path = "rustls::crypto::aws_lc_rs::sign::any_eddsa_type", reason = "use tls::load_private_key" },
+]
