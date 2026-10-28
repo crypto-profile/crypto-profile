@@ -22,7 +22,7 @@ The crate's rustls `CryptoProvider` lives in a core macro, so each backend expan
    - contains no `$`, no `macro_rules!` and no inner attribute other than a leading `//!`;
    - names, in non-test code, only `std::`, `aws_lc_rs::`, `rustls::`, `crypto_profile::`, `zeroize::`, `super::<sibling>::` and `super::backend::`, the paths that resolve the same in a backend module and inside the macro expansion;
    - names `crate::` (the backend) only inside its `#[cfg(test)] mod tests`, and only once the generated macro carries `#[expect(clippy::crate_in_macro_def)]`; until then a test reaches a sibling's helpers through `super::super::<sibling>::tests::`;
-   - reads a fixture under `crypto-profile/src/provider/testdata/` only as `include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/../crypto-profile/src/provider/testdata/<file>"))`;
+   - embeds a test fixture in its test as a `const`, with the fixture's provenance on the const's doc line, and reads no file across the package boundary;
    - declares items `pub(crate)` or private, and every `pub(crate)` item outside its tests has a shipped consumer;
    - puts each call to a `clippy.toml`-disallowed method under `#[expect(clippy::disallowed_methods)]` on the function that makes it, test or not;
    - keeps its unit tests at the bottom as `#[cfg(test)] mod tests` (`pub(crate) mod tests` when a sibling's tests use its helpers).

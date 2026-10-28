@@ -345,7 +345,7 @@ mod tests {
     use super::*;
     use crypto_profile::SignatureAlgorithm as S;
 
-    /// A public RSA key used only by `a_pkcs1_rsa_key_loads`; it protects nothing and must never be used as a real key.
+    /// A published, test-only RSA private key used only by `a_pkcs1_rsa_key_loads`; it protects nothing and must never be used as a real key.
     const TEST_ONLY_RSA_2048_PKCS1: &str = concat!(
         "308204a30201000282010100c8c0ad24bab5ad72320f4471a21a327274a7f674cf25c57243842b1e55e61cfeec2ec445",
         "f02f8988f1abf8436fe7a541749c8be81354c29820d07b4ab7cf208b9e242dcb07fafaf0502f581ae686484fbd0b61a1",
