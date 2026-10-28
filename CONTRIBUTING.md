@@ -17,7 +17,7 @@ These rules apply to every contributor, human or AI-assisted. [`docs/usage.md`](
 
 ## 2. The gates
 
-CI runs these on every pull request. While the repository is private, CI runs formatting, clippy, cargo-deny, the shipped-graph check, the MSRV check, the Linux x86_64 tests on both linkages and the DCO check; run coverage, mutation testing, and the macOS and arm64 tests locally before you open a pull request.
+CI runs these on every pull request. While the repository is private, CI runs formatting, clippy, cargo-deny, the shipped-graph check, the OpenSSL interop test, the MSRV check, the Linux x86_64 tests on both linkages and the DCO check; run coverage, mutation testing, and the macOS and arm64 tests locally before you open a pull request.
 
 | Gate | Command |
 |---|---|
@@ -27,6 +27,7 @@ CI runs these on every pull request. While the repository is private, CI runs fo
 | Lints, provider source | `RUSTFLAGS="--cfg crypto_profile_provider_direct" cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | Supply chain | `cargo deny --locked check` |
 | Shipped graph | `ci/shipped-graph.sh` |
+| Interop, OpenSSL ≥ 3.5 | `ci/openssl-interop.sh` |
 | Tests, static | `cargo test --workspace --all-features --locked` |
 | Tests, dynamic | `AWS_LC_FIPS_SYS_STATIC=0 cargo test --workspace --all-features --locked` |
 | Coverage | `RUSTFLAGS="--cfg crypto_profile_provider_direct" cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support\|conformance)'` |

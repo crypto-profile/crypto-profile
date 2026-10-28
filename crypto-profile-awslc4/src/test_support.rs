@@ -192,6 +192,9 @@ fn e(x: impl std::fmt::Display) -> String {
 pub fn pki(ca: SignatureAlgorithm, key: SignatureAlgorithm) -> Result<Pki, String> {
     let ca_key = KeyPair::generate(ca).map_err(e)?;
     let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
+    ca_params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "crypto-profile test CA");
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     let ca_cert = ca_params.self_signed(&ca_key).map_err(e)?;
     let issuer = rcgen::Issuer::new(ca_params, &ca_key);

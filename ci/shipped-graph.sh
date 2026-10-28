@@ -6,8 +6,8 @@ trap 'rm -f "$err"' EXIT
 for features in "" "--all-features"; do
   rustls="$(tree --edges normal,features --invert rustls)"
   webpki="$(tree --edges normal,features --invert rustls-webpki)"
-  grep -q '^rustls v0\.23\.46' <<<"$rustls" || { echo "rustls is not in the shipped graph; the check read nothing"; exit 1; }
-  grep -q '^rustls-webpki v0\.103\.16' <<<"$webpki" || { echo "rustls-webpki is not in the shipped graph; the check read nothing"; exit 1; }
+  grep -q '^rustls v0\.23\.46' <<<"$rustls" || { echo "rustls v0.23.46 is not in the shipped graph; this check is written for that pin and read nothing"; exit 1; }
+  grep -q '^rustls-webpki v0\.103\.16' <<<"$webpki" || { echo "rustls-webpki v0.103.16 is not in the shipped graph; this check is written for that pin and read nothing"; exit 1; }
   if grep -E 'rustls feature "(aws_lc_rs|aws-lc-rs|custom-provider|fips|ring|prefer-post-quantum)"' <<<"$rustls"; then
     echo "a stock rustls provider, or custom-provider, reaches the shipped graph ($features)"; exit 1
   fi
