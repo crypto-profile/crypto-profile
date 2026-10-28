@@ -96,7 +96,8 @@ fn approves_given(
 /// Refuses unless every algorithm `r` names, each protocol version included, is `Approved` for
 /// the running module, and only while the module is in FIPS mode (as [`crate::fips::approval`]
 /// reports it). Fails on the first cell that is not `Approved`; `AlgorithmTested` is not. On the
-/// 4.x module it fails today: with no security policy published, no 4.x cell is `Approved`.
+/// 4.x module it fails today: a cell is `Approved` only where a published security policy lists
+/// it.
 pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
     approves_given(aws_lc_rs::try_fips_mode().is_ok(), r, |a| {
         crypto_profile::capability(crate::MODULE, a).approval

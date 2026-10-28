@@ -11,7 +11,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The core crate `crypto-profile`, with no aws-lc dependency:
   - exhaustive algorithm types: `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `TlsVersion` and `Algorithm`, with literal IANA codepoints (`iana()`) and X.509 signature OIDs (`signature_oid()`), and `FromStr` and `Display` for `SignatureAlgorithm`;
   - the capability model: `Module { line, linkage }`, `certificate()` and `capability()`, where each 3.x cell cites the AWS-LC FIPS 3.1.0 security policy of its own certificate, #5314 (static) or #5298 (dynamic): an `Approved` cell cites Table 5 (pp. 8-11), a `NotApproved` cell cites its absence from Tables 5-8, and the two hybrid key-exchange groups and TLS 1.3 are `Unverified`, with no source; every 4.x static cell is `Unverified`, and each 4.x dynamic cell is `Approval::AlgorithmTested`, citing the one AWS-LC FIPS 4.0.0 CAVP certificate that shows every operation it needs, or `Unverified` (decision record 0004); `AlgorithmTested`, like `Unverified`, is never approved;
-  - typed errors: `CryptoError`, with `Unavailable(Algorithm)`, `PolicyEmpty(Family)` and `PolicyDrift`, and the typed causes `CsrError` and `TlsError`;
+  - the seven profiles `unrestricted`, `preferred`, `cnsa2`, `cnsa1`, `bsi`, `fips1403` and `fips1402` as `const` `ProfileSpec` data, each entry cited in its constant's doc comment (0.x API: names and contents may change before 0.1); `Profile`, with `FromStr` and `Display` over exact names, and `GoverningText`;
+  - `Options` and its one option, post-quantum key exchange required (`pq_key_exchange_required`), with `KxGroup::is_post_quantum`;
+  - `crypto_profile::profile::select`, the backend-independent half of resolution, which refuses an algorithm the module lacks rather than dropping it;
+  - typed errors: `CryptoError`, with `Unavailable(Algorithm)`, `PolicyEmpty(Family)`, `PolicyDrift`, `EmptyProfile`, `KeyNotInProfile` and `NotApproved`, `Family::KeyAlgorithm`, and the typed causes `CsrError` and `TlsError`;
   - the sealed box's version-1 framing (`sealbox_wire`);
   - the conformance suite behind the `conformance` feature, run by every backend through `conformance_tests!`.
 - The backend `crypto-profile-awslc4`, on the AWS-LC FIPS 4.x module through aws-lc-rs 1.18.2:
@@ -19,6 +22,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `digest`, `random`, `aead` (AES-256-GCM with module-chosen nonces), `sealbox` (P-384 ECDH, HKDF-SHA384, AES-256-GCM), `signature` (key generation, signing, verification and the SubjectPublicKeyInfo shape check) and `csr` (PKCS#10 requests with a DN, DNS, IP and URI SANs, EKU and key usage, signed by the request's own key);
   - `tls`: `Policy`, `crypto_provider`, the client and server builders, `install_default`, `assert_provider_matches`, `load_private_key` and the certificate-verifier builders, over rustls 0.23.46's aws-lc-rs provider with TLS 1.2 enabled;
   - `fips`: `assert_fips_module`, `assert_fips_client_config`, `assert_fips_server_config`, `certificate` and `approval`;
+  - `resolve`, `Resolved` and `Resolved::admit_key`, and `assert_module_approves`, which refuses every cell that is not `Approved`;
+  - `test_support::handshake_with_ca`, a handshake whose CA key algorithm the caller chooses;
   - the `rustls` re-export, and `rcgen` under the `test-support` feature.
 - Known-answer tests: Wycheproof (ECDSA, Ed25519, RSA PKCS#1 v1.5 SHA-384, ML-DSA-87, AES-GCM), NIST CAVP SHA-2, RFC 8032 and a sealed-box version-1 blob.
-- Documentation: `docs/usage.md`, `CONTRIBUTING.md` (with the Developer Certificate of Origin and the AI-assistance disclosure), `SECURITY.md`, decision records 0001 to 0004 and the pull request template.
+- Documentation: `docs/usage.md`, `docs/profiles.md`, `CONTRIBUTING.md` (with the Developer Certificate of Origin and the AI-assistance disclosure), `SECURITY.md`, decision records 0001 to 0004 and the pull request template.

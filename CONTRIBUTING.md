@@ -74,7 +74,7 @@ When you add a value, take it from the registry or the standard, not from the co
    A cell you cannot source is `Unverified`. Never mark a cell `Approved` on the strength of another module's policy, a CAVP certificate alone, a vendor statement or an algorithm's general reputation.
 5. **Map it in every backend** (the rustls item, the aws-lc-rs algorithm, the rcgen algorithm, as applies).
 6. **Add conformance coverage.** The capability walk (`conformance_capability_honesty`) picks it up through `ALL`. The compiler does not force known answers or profiles. Add known answers from a published vector set to `crypto-profile/src/conformance/vectors/`, recorded in `SOURCES.md`, and a row to the oracle table in the CSR test for a signature algorithm.
-7. **Note which round 2 profiles should admit it,** in the pull request.
+7. **Decide which profiles admit it.** Add it to each profile constant in `crypto-profile/src/profile.rs` whose governing text admits it, with the citation in the constant's doc comment, and update the golden table in `crypto-profile-awslc4/tests/profiles.rs`. A regime-named profile admits only what its cited edition's tables admit.
 
 ## 6. Adding a backend
 
@@ -109,7 +109,7 @@ The linkage test looks for the 4.x shared library by name, `libaws_lc_fips_0_14_
 - a `PrivateKeyDer` handed to rustls is rustls's to hold;
 - each distinct ordered `signature_schemes` list leaks one static verifier table.
 
-Section 9 lists what a `Policy` does not restrict in round 1. A change that widens any of these needs its own decision record.
+Section 9 lists what a policy or profile does not restrict. A change that widens any of these needs its own decision record.
 
 ## 8. Hard rules
 

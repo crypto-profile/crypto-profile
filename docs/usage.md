@@ -1,6 +1,6 @@
 # Using crypto-profile
 
-This guide covers round 1: the core crate `crypto-profile` and the backend `crypto-profile-awslc4`. The named profiles are round 2 and are not described here.
+This guide covers the core crate `crypto-profile` and the backend `crypto-profile-awslc4`. The named profiles are in [`profiles.md`](profiles.md).
 
 Citations of the form `crate-x.y.z/path:line` refer to that crate's published source at that version. Paths without a version refer to this repository.
 
@@ -121,17 +121,21 @@ The backend answers two questions that are easy to confuse.
 - On 3.x, the hybrid groups are `Unverified`, because neither 3.x security policy mentions hybrid key establishment, and so is TLS 1.3, because the policies' TLS KDF row lists v1.0/1.1 and v1.2 only (`crypto-profile/src/capability.rs`, `three_x`).
 - On 4.x, no security policy is published: a static-build cell is `Unverified`, and a dynamic-build cell is `AlgorithmTested` or `Unverified` as §3 lists. Neither is approved.
 
+`assert_module_approves(&resolved)` composes each capability cell with FIPS mode exactly as `fips::approval` does, over every algorithm a resolved profile names, and refuses every cell that is not `Approved`, `AlgorithmTested` included ([`profiles.md`](profiles.md) §6).
+
 **Passing the first is not the second.** A configuration that rustls classifies as FIPS can include algorithms whose approval this crate cannot source. Use `assert_fips_*` to refuse X25519, ChaCha20 and non-EMS TLS 1.2; use `approval` for the cell and its source, which is `Approved` only where a security policy says so.
 
 `fips::assert_fips_module()` is a third, narrower check: it refuses unless the loaded AWS-LC module reports FIPS mode. The sealed box calls it on every seal and open. It is this build's only run-time check that the module in the process is in FIPS mode, and nothing runs it at start-up: **an application must call `fips::assert_fips_module()` at start-up and refuse to run if it fails.** On a dynamic build this is what refuses a non-FIPS library that the dynamic loader found in place of the FIPS one.
 
 aws-lc-fips-sys has a start-up check that aborts the process if the runtime library is not in FIPS mode, but it links that check only when it links a system-installed AWS-LC FIPS module (`aws-lc-fips-sys-0.14.2/builder/main.rs:1328-1329`, whose only caller is `builder/system_library.rs:380`; `README.md:89,156-166`). It builds the bundled source, as this crate's builds do, unless it finds a system-installed module: through `AWS_LC_FIPS_SYS_SYSTEM_DIR`, or by automatic detection from the `OPENSSL_*` variables and pkg-config, which `AWS_LC_FIPS_SYS_USE_SYSTEM=0` turns off (`README.md:89-140`). A bundled-source build, static or dynamic, links no start-up check.
 
-## 9. What a policy does not restrict in round 1
+## 9. What a policy or profile does not restrict
 
 - **Certificate-chain signature algorithms.** The verifiers keep rustls's full list of algorithms for signatures on certificates (`WebPkiSupportedAlgorithms::all`); a `Policy` narrows only the handshake-signature mapping (`crypto-profile-awslc4/src/tls.rs`, `verification_algorithms`).
 - **The scheme a local signing key chooses.** rustls picks the scheme this side signs with from the peer's offer and the key's type; `signature_schemes` does not narrow it.
 - **The algorithm of a key passed to `tls::load_private_key`.** The key is loaded through rustls's key provider and is not checked against any policy (`crypto-profile-awslc4/src/tls.rs`, `load_private_key`).
+- **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
+- **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
 
 ## 10. Which module a build is
 
