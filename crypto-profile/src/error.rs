@@ -54,6 +54,8 @@ pub enum CryptoError {
     Unavailable(Algorithm),
     /// A TLS policy names nothing in this family.
     PolicyEmpty(Family),
+    /// A TLS policy names this algorithm more than once.
+    PolicyDuplicate(Algorithm),
     /// A provider does not carry exactly a policy's algorithms.
     PolicyDrift,
     /// The process is not running the AWS-LC FIPS module, or a provider is not FIPS.
@@ -126,6 +128,7 @@ impl fmt::Display for CryptoError {
                 write!(f, "{a:?} is not available on this backend's module")
             }
             CryptoError::PolicyEmpty(fam) => write!(f, "the TLS policy names no {fam:?}"),
+            CryptoError::PolicyDuplicate(a) => write!(f, "the TLS policy names {a:?} twice"),
             CryptoError::PolicyDrift => {
                 f.write_str("the provider does not carry exactly the policy's algorithms")
             }
@@ -189,7 +192,7 @@ impl std::error::Error for CryptoError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithm::{Algorithm, KxGroup, SignatureAlgorithm};
+    use crate::algorithm::{Algorithm, KxGroup, SignatureAlgorithm, TlsSignatureScheme};
     use crate::capability::Approval;
     use crate::profile::{Options, Profile};
 
@@ -210,6 +213,11 @@ mod tests {
         assert_eq!(
             CryptoError::PolicyEmpty(Family::KxGroup).to_string(),
             "the TLS policy names no KxGroup"
+        );
+        assert_eq!(
+            CryptoError::PolicyDuplicate(Algorithm::Scheme(TlsSignatureScheme::Ed25519))
+                .to_string(),
+            "the TLS policy names Scheme(Ed25519) twice"
         );
         assert_eq!(
             CryptoError::Csr(CsrError::InvalidName).to_string(),

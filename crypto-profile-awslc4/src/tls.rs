@@ -11,7 +11,8 @@ use rustls::sign::{Signer, SigningKey};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// What a TLS configuration may use, each list in preference order.
+/// What a TLS configuration may use: versions, suites and groups in preference order, and a set
+/// of signature schemes.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Policy {
     /// Protocol versions.
@@ -22,7 +23,8 @@ pub struct Policy {
     pub kx_groups: Vec<K>,
     /// Handshake signature schemes: those this side accepts from its peer, and those a key loaded
     /// through this policy's provider signs with. Certificate-chain signature algorithms are not
-    /// restricted.
+    /// restricted. A duplicate is refused; a provider carries them in the crate's fixed preference
+    /// order, the order every profile lists them in, whatever order they are given in.
     pub signature_schemes: Vec<T>,
 }
 
@@ -104,26 +106,6 @@ fn select_schemes(
         .collect()
 }
 
-fn verification_algorithms(schemes: &[T]) -> Result<WebPkiSupportedAlgorithms, CryptoError> {
-    static CACHE: OnceLock<Mutex<HashMap<Vec<T>, &'static WebPkiSupportedAlgorithms>>> =
-        OnceLock::new();
-    let mut cache = CACHE
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    if let Some(w) = cache.get(schemes).copied() {
-        return Ok(*w);
-    }
-    let base = base_provider().signature_verification_algorithms;
-    let mapping = select_schemes(base.mapping, schemes)?;
-    let w: &'static WebPkiSupportedAlgorithms = Box::leak(Box::new(WebPkiSupportedAlgorithms {
-        all: base.all,
-        mapping: Box::leak(mapping.into_boxed_slice()),
-    }));
-    cache.insert(schemes.to_vec(), w);
-    Ok(*w)
-}
-
 #[derive(Debug)]
 struct PolicyKey {
     inner: Arc<dyn SigningKey>,
@@ -172,25 +154,86 @@ impl KeyProvider for PolicyKeyProvider {
     }
 }
 
-fn key_provider(schemes: &[T]) -> &'static dyn KeyProvider {
-    static CACHE: OnceLock<Mutex<HashMap<Vec<T>, &'static PolicyKeyProvider>>> = OnceLock::new();
-    let mut cache = CACHE
+const fn preference(t: T) -> u32 {
+    match t {
+        T::MlDsa87 => 0,
+        T::EcdsaNistp384Sha384 => 1,
+        T::EcdsaNistp256Sha256 => 2,
+        T::EcdsaNistp521Sha512 => 3,
+        T::Ed25519 => 4,
+        T::RsaPssSha384 => 5,
+        T::RsaPssSha512 => 6,
+        T::RsaPssSha256 => 7,
+        T::RsaPkcs1Sha384 => 8,
+        T::RsaPkcs1Sha512 => 9,
+        T::RsaPkcs1Sha256 => 10,
+    }
+}
+
+struct SchemeSet {
+    bits: u16,
+    ordered: Vec<T>,
+}
+
+fn scheme_set(schemes: &[T]) -> Result<SchemeSet, CryptoError> {
+    let mut bits = 0u16;
+    for t in schemes {
+        let bit = 1 << preference(*t);
+        if bits & bit != 0 {
+            return Err(CryptoError::PolicyDuplicate(Algorithm::Scheme(*t)));
+        }
+        bits |= bit;
+    }
+    let mut ordered = schemes.to_vec();
+    ordered.sort_by_key(|t| preference(*t));
+    Ok(SchemeSet { bits, ordered })
+}
+
+#[derive(Clone, Copy)]
+struct Tables {
+    verification: &'static WebPkiSupportedAlgorithms,
+    keys: &'static PolicyKeyProvider,
+}
+
+static TABLES: OnceLock<Mutex<HashMap<u16, Tables>>> = OnceLock::new();
+
+#[cfg(test)]
+fn cache_len() -> usize {
+    TABLES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .len()
+}
+
+fn tables(set: &SchemeSet) -> Result<Tables, CryptoError> {
+    let mut cache = TABLES
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    if let Some(k) = cache.get(schemes).copied() {
-        return k;
+    if let Some(t) = cache.get(&set.bits).copied() {
+        return Ok(t);
     }
-    let k: &'static PolicyKeyProvider = Box::leak(Box::new(PolicyKeyProvider {
-        base: base_provider().key_provider,
-        schemes: Box::leak(schemes.iter().map(|t| rustls_scheme(*t)).collect()),
-    }));
-    cache.insert(schemes.to_vec(), k);
-    k
+    let base = base_provider();
+    let verify = base.signature_verification_algorithms;
+    let mapping = select_schemes(verify.mapping, &set.ordered)?;
+    let t = Tables {
+        verification: Box::leak(Box::new(WebPkiSupportedAlgorithms {
+            all: verify.all,
+            mapping: Box::leak(mapping.into_boxed_slice()),
+        })),
+        keys: Box::leak(Box::new(PolicyKeyProvider {
+            base: base.key_provider,
+            schemes: Box::leak(set.ordered.iter().map(|t| rustls_scheme(*t)).collect()),
+        })),
+    };
+    cache.insert(set.bits, t);
+    Ok(t)
 }
 
-/// A provider carrying exactly `p`, refusing an empty family or an unavailable algorithm. A key
-/// loaded through its key provider signs only with a scheme in `p.signature_schemes`.
+/// A provider carrying exactly `p`, refusing an empty family, a duplicate signature scheme or an
+/// unavailable algorithm. A key loaded through its key provider signs only with a scheme in
+/// `p.signature_schemes`.
 pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     if p.versions.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::Version));
@@ -201,6 +244,7 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     if p.signature_schemes.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::SignatureScheme));
     }
+    let schemes = scheme_set(&p.signature_schemes)?;
     for v in &p.versions {
         ensure(Algorithm::Protocol(*v))?;
     }
@@ -222,11 +266,12 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     if suites.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::CipherSuite));
     }
+    let tables = tables(&schemes)?;
     Ok(CryptoProvider {
         cipher_suites: suites,
         kx_groups: p.kx_groups.iter().map(|k| rustls_group(*k)).collect(),
-        signature_verification_algorithms: verification_algorithms(&p.signature_schemes)?,
-        key_provider: key_provider(&p.signature_schemes),
+        signature_verification_algorithms: *tables.verification,
+        key_provider: tables.keys,
         ..base_provider()
     })
 }
@@ -262,8 +307,9 @@ pub fn install_default(p: &Policy) -> Result<(), CryptoError> {
         .map_err(|_| CryptoError::Tls(TlsError::DefaultProviderInstalled))
 }
 
-/// Refuses a provider that does not carry exactly `p`'s suites, groups and schemes, in order, or
-/// whose key provider is not the one `crypto_provider(p)` carries.
+/// Refuses a provider that does not carry exactly `p`'s suites and groups in order and its
+/// schemes in the fixed preference order, or whose key provider is not the one
+/// `crypto_provider(p)` carries.
 pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<(), CryptoError> {
     let want = crypto_provider(p)?;
     let suites = |x: &CryptoProvider| {
@@ -421,7 +467,7 @@ mod tests {
     }
 
     #[test]
-    fn verifiers_carry_the_policys_schemes() {
+    fn verifiers_carry_the_policys_schemes_in_the_canonical_order() {
         let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -436,7 +482,7 @@ mod tests {
             &[K::Secp384r1],
             &[T::Ed25519, T::EcdsaNistp384Sha384],
         );
-        let want: Vec<u16> = p.signature_schemes.iter().map(|t| t.iana()).collect();
+        let want = [T::EcdsaNistp384Sha384.iana(), T::Ed25519.iana()];
         let server_v = server_cert_verifier_builder(roots.clone(), &p)
             .unwrap()
             .build()
@@ -790,12 +836,16 @@ mod tests {
         }
     }
 
+    fn keys(schemes: &[T]) -> &'static PolicyKeyProvider {
+        tables(&scheme_set(schemes).unwrap()).unwrap().keys
+    }
+
     #[test]
     fn the_key_provider_is_fips_exactly_when_its_base_is() {
         let wrap = |base: &'static dyn KeyProvider| PolicyKeyProvider { base, schemes: &[] };
         assert!(!wrap(&NotFips).fips());
         assert!(wrap(base_provider().key_provider).fips());
-        assert!(key_provider(&T::ALL).fips());
+        assert!(keys(&T::ALL).fips());
     }
 
     #[test]
@@ -810,13 +860,95 @@ mod tests {
             Err(CryptoError::PolicyDrift)
         );
         let other = CryptoProvider {
-            key_provider: key_provider(&[T::Ed25519]),
+            key_provider: keys(&[T::Ed25519]),
             ..crypto_provider(&p).unwrap()
         };
         assert_eq!(
             assert_provider_matches(&other, &p),
             Err(CryptoError::PolicyDrift)
         );
+    }
+
+    fn subsets() -> impl Iterator<Item = Vec<T>> {
+        (1u16..1 << T::ALL.len()).map(|m| {
+            T::ALL
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| m & (1 << i) != 0)
+                .map(|(_, t)| t)
+                .collect()
+        })
+    }
+
+    fn with_schemes(schemes: Vec<T>) -> Policy {
+        Policy {
+            signature_schemes: schemes,
+            ..one13(K::Secp384r1)
+        }
+    }
+
+    #[test]
+    fn a_duplicate_scheme_is_refused_where_the_policy_enters() {
+        let roots = Arc::new(rustls::RootCertStore::empty());
+        let dup = with_schemes(vec![T::Ed25519, T::EcdsaNistp384Sha384, T::Ed25519]);
+        let want = Some(CryptoError::PolicyDuplicate(Algorithm::Scheme(T::Ed25519)));
+        assert_eq!(crypto_provider(&dup).err(), want);
+        assert_eq!(client_builder(&dup).err(), want);
+        assert_eq!(server_builder(&dup).err(), want);
+        assert_eq!(
+            server_cert_verifier_builder(roots.clone(), &dup).err(),
+            want
+        );
+        assert_eq!(client_cert_verifier_builder(roots, &dup).err(), want);
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(b"not a key".to_vec().into());
+        assert_eq!(load_private_key(&dup, der).err(), want);
+    }
+
+    #[test]
+    fn every_profile_lists_its_schemes_in_the_canonical_order() {
+        assert_eq!(
+            crate::Profile::Unrestricted.spec().signature_schemes.len(),
+            T::ALL.len()
+        );
+        for p in crate::Profile::ALL {
+            let s = p.spec().signature_schemes;
+            assert_eq!(scheme_set(s).unwrap().ordered, s, "{p}");
+        }
+    }
+
+    #[test]
+    fn a_permuted_policy_builds_the_same_provider() {
+        let q = with_schemes(vec![T::Ed25519, T::RsaPssSha384, T::EcdsaNistp384Sha384]);
+        let r = with_schemes(vec![T::RsaPssSha384, T::EcdsaNistp384Sha384, T::Ed25519]);
+        assert_eq!(
+            assert_provider_matches(&crypto_provider(&q).unwrap(), &r),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn retained_cache_state_is_bounded_by_the_distinct_scheme_sets() {
+        for s in subsets() {
+            crypto_provider(&with_schemes(s)).unwrap();
+        }
+        let sets = (1 << T::ALL.len()) - 1;
+        assert_eq!(cache_len(), sets);
+        for s in subsets() {
+            let mut rev = s.clone();
+            rev.reverse();
+            let mut rot = s.clone();
+            rot.rotate_left(1);
+            crypto_provider(&with_schemes(rev)).unwrap();
+            crypto_provider(&with_schemes(rot)).unwrap();
+            crypto_provider(&with_schemes(s.clone())).unwrap();
+            let mut dup = s.clone();
+            dup.push(s[0]);
+            assert_eq!(
+                crypto_provider(&with_schemes(dup)).err(),
+                Some(CryptoError::PolicyDuplicate(Algorithm::Scheme(s[0])))
+            );
+        }
+        assert_eq!(cache_len(), sets);
     }
 
     #[test]
