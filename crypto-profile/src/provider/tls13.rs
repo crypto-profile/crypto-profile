@@ -23,7 +23,7 @@ pub(crate) static TLS13_CHACHA20_POLY1305_SHA256: SupportedCipherSuite =
         },
         hkdf_provider: &AwsLcHkdf(hkdf::HKDF_SHA256, hmac::HMAC_SHA256),
         aead_alg: &ChachaAead,
-        quic: None,
+        quic: Some(&super::quic::CHACHA20_POLY1305),
     });
 
 pub(crate) static TLS13_AES_256_GCM_SHA384: SupportedCipherSuite =
@@ -38,7 +38,7 @@ pub(crate) static TLS13_AES_256_GCM_SHA384: SupportedCipherSuite =
             alg: &aead::AES_256_GCM,
             secrets: |key, iv| ConnectionTrafficSecrets::Aes256Gcm { key, iv },
         },
-        quic: None,
+        quic: Some(&super::quic::AES_256_GCM),
     });
 
 pub(crate) static TLS13_AES_128_GCM_SHA256: SupportedCipherSuite =
@@ -53,7 +53,7 @@ pub(crate) static TLS13_AES_128_GCM_SHA256: SupportedCipherSuite =
             alg: &aead::AES_128_GCM,
             secrets: |key, iv| ConnectionTrafficSecrets::Aes128Gcm { key, iv },
         },
-        quic: None,
+        quic: Some(&super::quic::AES_128_GCM),
     });
 
 pub(crate) fn chacha_key(key: &[u8]) -> Option<aead::LessSafeKey> {
@@ -438,7 +438,7 @@ pub(crate) mod tests {
         let fips: Vec<bool> = all.iter().map(|s| s.fips()).collect();
         assert_eq!(fips, [true, true, false]);
         assert!(all.iter().all(|s| suite(s).hkdf_provider.fips()));
-        assert!(all.iter().all(|s| suite(s).quic.is_none()));
+        assert!(all.iter().all(|s| suite(s).quic.is_some()));
         let hashes: Vec<usize> = all
             .iter()
             .map(|s| suite(s).common.hash_provider.output_len())

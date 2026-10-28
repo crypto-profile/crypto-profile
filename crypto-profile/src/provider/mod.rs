@@ -5,6 +5,7 @@ mod backend {
 pub(crate) mod assembly;
 pub(crate) mod hash;
 pub(crate) mod kx;
+pub(crate) mod quic;
 pub(crate) mod sign;
 pub(crate) mod tls12;
 pub(crate) mod tls13;
