@@ -94,9 +94,10 @@ impl SignatureAlgorithm {
     /// An ECDSA, Ed25519 or ML-DSA key has no other scheme. An RSA key's scheme comes from the
     /// peer's offer, whatever the key's CSR was signed with: rustls signs with the first of RSA-PSS
     /// with SHA-512, SHA-384 and SHA-256, then PKCS#1 v1.5 with SHA-512, SHA-384 and SHA-256, that
-    /// the peer offers (`rustls-0.23.46/src/crypto/aws_lc_rs/sign.rs:104-111,137-142`), and TLS 1.3
-    /// admits only the RSA-PSS ones (`src/enums.rs:554-579`). So an RSA key signs with RSA-PSS with
-    /// SHA-384 only when the peer offers it and does not offer RSA-PSS with SHA-512.
+    /// the peer offers (`RSA_SCHEMES` in `crypto-profile/src/provider/sign.rs`, the order rustls
+    /// 0.23.46 uses), and TLS 1.3 admits only the RSA-PSS ones (`src/enums.rs:554-579`). So an RSA
+    /// key signs with RSA-PSS with SHA-384 only when the peer offers it and does not offer RSA-PSS
+    /// with SHA-512.
     pub const fn tls_scheme(self) -> TlsSignatureScheme {
         match self {
             SignatureAlgorithm::MlDsa87 => TlsSignatureScheme::MlDsa87,

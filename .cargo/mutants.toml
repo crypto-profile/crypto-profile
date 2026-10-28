@@ -27,4 +27,8 @@ exclude_re = [
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/tls12\\.rs:[0-9]+:[0-9]+: replace <impl Tls12AeadAlgorithm for GcmAlgorithm>::fips -> bool with true$",
   # Tls12Prf::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by the_suites_carry_rustls_constants and tls12_fips_config_requires_ems.
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/tls12\\.rs:[0-9]+:[0-9]+: replace <impl Prf for Tls12Prf>::fips -> bool with true$",
+  # Rng::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by the_random_source_fills_and_two_fills_differ.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/assembly\\.rs:[0-9]+:[0-9]+: replace <impl SecureRandom for Rng>::fips -> bool with true$",
+  # Keys::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by the_key_provider_loads_through_any_supported_type.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/assembly\\.rs:[0-9]+:[0-9]+: replace <impl KeyProvider for Keys>::fips -> bool with true$",
 ]

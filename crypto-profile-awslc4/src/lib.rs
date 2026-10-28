@@ -19,10 +19,11 @@ pub mod test_support;
 pub mod tls;
 
 #[cfg(not(crypto_profile_provider_direct))]
-crypto_profile::provider!();
+crypto_profile::provider!(crate::provider_arms);
 #[cfg(crypto_profile_provider_direct)]
 #[path = "../../crypto-profile/src/provider/mod.rs"]
 mod provider;
+mod provider_arms;
 
 mod profiles;
 pub use profiles::{Resolved, assert_module_approves, resolve};

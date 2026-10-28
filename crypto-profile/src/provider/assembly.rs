@@ -1,8 +1,46 @@
-use rustls::crypto::SupportedKxGroup;
+use rustls::crypto::{GetRandomFailed, KeyProvider, SecureRandom, SupportedKxGroup};
+use rustls::pki_types::PrivateKeyDer;
+use rustls::sign::SigningKey;
+use std::sync::Arc;
 
 pub(crate) fn fips() -> bool {
     aws_lc_rs::try_fips_mode().is_ok()
 }
+
+#[derive(Debug)]
+pub(crate) struct Rng;
+
+impl SecureRandom for Rng {
+    fn fill(&self, buf: &mut [u8]) -> Result<(), GetRandomFailed> {
+        use aws_lc_rs::rand::SecureRandom as _;
+        aws_lc_rs::rand::SystemRandom::new()
+            .fill(buf)
+            .map_err(|_| GetRandomFailed)
+    }
+
+    fn fips(&self) -> bool {
+        fips()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Keys;
+
+impl KeyProvider for Keys {
+    fn load_private_key(
+        &self,
+        key_der: PrivateKeyDer<'static>,
+    ) -> Result<Arc<dyn SigningKey>, rustls::Error> {
+        super::sign::any_supported_type(&zeroize::Zeroizing::new(key_der))
+    }
+
+    fn fips(&self) -> bool {
+        fips()
+    }
+}
+
+pub(crate) static RNG: Rng = Rng;
+pub(crate) static KEYS: Keys = Keys;
 
 pub(crate) fn group(k: crypto_profile::KxGroup) -> &'static dyn SupportedKxGroup {
     use crypto_profile::KxGroup as K;
@@ -81,5 +119,37 @@ mod tests {
         for (c, cp) in table {
             assert_eq!(u16::from_be_bytes(suite(c).suite().to_array()), cp, "{c:?}");
         }
+    }
+
+    #[test]
+    #[expect(clippy::disallowed_methods)]
+    fn the_random_source_fills_and_two_fills_differ() {
+        let (mut a, mut b) = ([0u8; 32], [0u8; 32]);
+        RNG.fill(&mut a).unwrap();
+        RNG.fill(&mut b).unwrap();
+        assert_ne!(a, [0u8; 32]);
+        assert_ne!(a, b);
+        assert!(RNG.fips());
+    }
+
+    #[test]
+    #[expect(clippy::disallowed_methods)]
+    fn the_key_provider_loads_through_any_supported_type() {
+        let k = crate::signature::KeyPair::generate(
+            crypto_profile::SignatureAlgorithm::EcdsaP384Sha384,
+        )
+        .unwrap();
+        let key = KEYS
+            .load_private_key(PrivateKeyDer::Pkcs8(k.pkcs8_der().to_vec().into()))
+            .unwrap();
+        assert!(
+            key.choose_scheme(&[rustls::SignatureScheme::ECDSA_NISTP384_SHA384])
+                .is_some()
+        );
+        assert!(
+            KEYS.load_private_key(PrivateKeyDer::Pkcs8(b"x".to_vec().into()))
+                .is_err()
+        );
+        assert!(KEYS.fips());
     }
 }

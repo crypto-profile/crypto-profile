@@ -56,7 +56,11 @@ fn rustls_version(v: V) -> &'static rustls::SupportedProtocolVersion {
 
 #[expect(clippy::disallowed_methods)]
 fn base_provider() -> CryptoProvider {
-    rustls::crypto::aws_lc_rs::default_provider()
+    CryptoProvider {
+        secure_random: &crate::provider::assembly::RNG,
+        key_provider: &crate::provider::assembly::KEYS,
+        ..rustls::crypto::aws_lc_rs::default_provider()
+    }
 }
 
 type SchemeMapping = (
@@ -1034,5 +1038,30 @@ mod tests {
             load_private_key(&one13(K::Secp384r1), der).err(),
             Some(CryptoError::Tls(TlsError::PrivateKey))
         );
+    }
+
+    #[test]
+    fn an_ml_dsa_44_or_65_key_loads_but_no_policy_signs_with_it() {
+        use aws_lc_rs::signature::{ML_DSA_44_SIGNING, ML_DSA_65_SIGNING, PqdsaKeyPair};
+        for (alg, scheme) in [
+            (&ML_DSA_44_SIGNING, rustls::SignatureScheme::ML_DSA_44),
+            (&ML_DSA_65_SIGNING, rustls::SignatureScheme::ML_DSA_65),
+        ] {
+            let pkcs8 = PqdsaKeyPair::generate(alg).unwrap().to_pkcs8v1().unwrap();
+            let der = PrivateKeyDer::Pkcs8(pkcs8.as_ref().to_vec().into());
+            let key = load_private_key(&one13(K::Secp384r1), der).unwrap();
+            assert!(
+                key.choose_scheme(&[scheme, rustls::SignatureScheme::ML_DSA_87])
+                    .is_none(),
+                "{scheme:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_base_provider_draws_randomness_and_loads_keys_through_the_crates_own_provider() {
+        let base = base_provider();
+        assert_eq!(format!("{:?}", base.secure_random), "Rng");
+        assert_eq!(format!("{:?}", base.key_provider), "Keys");
     }
 }

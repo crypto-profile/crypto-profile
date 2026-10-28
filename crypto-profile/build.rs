@@ -9,6 +9,11 @@ fn main() {
             .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
             && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
     };
+    let backend = "mod backend {\n    pub(crate) use crate::provider_arms::*;\n}\n";
+    let root = match root.split_once(backend) {
+        Some((before, after)) => format!("{before}{after}"),
+        None => panic!("crypto-profile: src/provider/mod.rs must hold {backend:?}"),
+    };
     let mut names: Vec<&str> = Vec::new();
     let mut seen_purpose = false;
     for line in root.lines() {
@@ -25,7 +30,7 @@ fn main() {
         {
             Some(name) if is_ident(name) => names.push(name),
             _ => panic!(
-                "crypto-profile: src/provider/mod.rs may hold only blank lines, one `//!` line and `pub(crate) mod <name>;` lines, not {line:?}"
+                "crypto-profile: src/provider/mod.rs may hold only blank lines, one `//!` line, the `backend` module and `pub(crate) mod <name>;` lines, not {line:?}"
             ),
         }
     }
@@ -59,9 +64,11 @@ fn main() {
         "/// Emits this crate's rustls `CryptoProvider` as the module `provider` of the invoking\n\
          /// backend, which depends on `aws-lc-rs`, `rustls`, `zeroize` and `crypto-profile` under\n\
          /// those names (decision 0005).\n\
+         /// `arms` names the backend module holding the backend-only items (decision 0005).\n\
          #[doc(hidden)]\n\
          #[macro_export]\n\
-         macro_rules! provider {{\n    () => {{\n        mod provider {{\n{modules}        }}\n    }};\n}}\n"
+         #[expect(clippy::crate_in_macro_def)]\n\
+         macro_rules! provider {{\n    ($($arms:ident)::+) => {{\n        mod provider {{\n            mod backend {{\n                pub(crate) use $($arms)::+::*;\n            }}\n{modules}        }}\n    }};\n}}\n"
     );
     std::fs::write(std::path::Path::new(&out).join("provider.rs"), text)
         .unwrap_or_else(|e| panic!("crypto-profile: cannot write the provider macro: {e}"));

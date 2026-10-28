@@ -109,7 +109,7 @@ The suite checks the backend against the known answers, walks every capability c
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
 - `sealbox::PrivateKey::from_pkcs8_der` and `sealbox::open`.
 
-A backend instantiates the provider with `crypto_profile::provider!()` and carries the direct-mode module exactly as `crypto-profile-awslc4/src/lib.rs` does. A new provider file is listed in `crypto-profile/src/provider/mod.rs`, which is the only module list ([decision 0005](docs/decisions/0005-provider-source.md)).
+A backend instantiates the provider with `crypto_profile::provider!(crate::provider_arms)` and carries the direct-mode module exactly as `crypto-profile-awslc4/src/lib.rs` does. It supplies a `provider_arms` module with `pub(crate) fn load_pqdsa(pkcs8: &rustls::pki_types::PrivatePkcs8KeyDer<'_>) -> Option<std::sync::Arc<dyn rustls::sign::SigningKey>>`, which loads the ML-DSA keys the backend's module signs with (ML-DSA-44, -65 and -87 on 4.x) and returns `None` on a backend that has none. A new provider file is listed in `crypto-profile/src/provider/mod.rs`, which is the only module list ([decision 0005](docs/decisions/0005-provider-source.md)).
 
 The linkage test looks for the shared library `test_support::FIPS_LIBRARY` names: the backend's build script takes it from aws-lc-rs's link metadata (`DEP_AWS_LC_RS_*_SYS_LIBCRYPTO`) and fails the build if it is missing, empty, or contains a path separator or control character. An unprefixed build reports `crypto`, which is accepted.
 
