@@ -27,6 +27,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - the `rustls` re-export, and `rcgen` under the `test-support` feature.
 - Known-answer tests: Wycheproof (ECDSA, Ed25519, RSA PKCS#1 v1.5 SHA-384, ML-DSA-87, AES-GCM), NIST CAVP SHA-2, RFC 8032 and a sealed-box version-1 blob.
 - Documentation: `docs/usage.md`, `docs/profiles.md`, `CONTRIBUTING.md` (with the Developer Certificate of Origin and the AI-assistance disclosure), `SECURITY.md`, decision records 0001 to 0004 and the pull request template.
+- `docs/sources.md`: every document a profile, citation or capability cell depends on, with the edition followed, the issuer's link and the SHA-256 of the copy the maintainers read; linked from `docs/profiles.md` and the README.
 
 ### Known 0.x items
 

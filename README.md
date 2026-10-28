@@ -61,6 +61,7 @@ The option "post-quantum key exchange required" (`Options { pq_key_exchange_requ
 
 - [`docs/usage.md`](docs/usage.md): choosing a backend, linkage, what the crate claims, TLS policies, limits and residuals.
 - [`docs/profiles.md`](docs/profiles.md): the profiles, their governing texts and contents, the post-quantum option, module approval, named residuals and the after-2030 table.
+- [`docs/sources.md`](docs/sources.md): every document the profiles, citations and capability cells depend on, with edition, issuer link and SHA-256.
 - [`docs/decisions/`](docs/decisions/): the decision records.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md) and [`CHANGELOG.md`](CHANGELOG.md).
 

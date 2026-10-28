@@ -71,7 +71,7 @@ It differs from `fips1403` only in TLS: X25519 on its own and the ChaCha20-Poly1
 
 ### `preferred`
 
-**Governing text:** `GoverningText::CrateRecommendation`. Not a government profile.
+**Governing text:** `GoverningText::CrateRecommendation`. Not a government profile. The strictest current reading it follows is the ASD ISM; edition and hash: [sources](sources.md).
 
 `preferred` is the crate's recommendation: post-quantum first, TLS 1.3 only, and nothing a FIPS 140-3 or allied boundary would reject, the strictest current reading being ASD's ISM. So it excludes X25519 on its own, ChaCha20 and Ed25519.
 
@@ -97,7 +97,7 @@ Exclusions and their reasons:
 
 ### `cnsa2`
 
-**Governing text:** CNSSP 15 (December 2024), Annex B, pp. B-1 to B-2: the CNSA 2.0 algorithm set.
+**Governing text:** CNSSP 15 (December 2024), Annex B, pp. B-1 to B-2: the CNSA 2.0 algorithm set. Edition and hash: [sources](sources.md).
 
 | Family | Contents |
 |---|---|
@@ -113,7 +113,7 @@ The Annex B ¶1 table (pp. B-1 to B-2) lists, as general-purpose algorithms, AES
 
 ### `cnsa1`
 
-**Governing text:** CNSSP 15 (20 October 2016), Annex B (p. B-1), for the algorithms; RFC 9151 (April 2022), the CNSA Suite profile for TLS 1.2 and 1.3. § references below are RFC 9151's.
+**Governing text:** CNSSP 15 (20 October 2016), Annex B (p. B-1), for the algorithms; RFC 9151 (April 2022), the CNSA Suite profile for TLS 1.2 and 1.3. § references below are RFC 9151's. Editions and hashes: [sources](sources.md).
 
 `cnsa1` is a **transition profile** for CNSA 1.0 counterparts. CNSSP 15 (December 2024) ¶18 (p. 8) sets the dates: CNSA 1.0 algorithms "are acceptable in all products through 31 December 2025"; from 1 January 2027, CNSA 2.0 algorithms "will be required in all new products and services" unless excepted or waived; and "CNSA 2.0 algorithms are mandated for all protocol use by 31 December 2031".
 
@@ -131,7 +131,7 @@ What RFC 9151 names and the stack does not implement is in section 4 (item 2): R
 
 ### `bsi`
 
-**Governing text:** BSI TR-02102-2 (TLS) and TR-02102-1, version 2026-01.
+**Governing text:** BSI TR-02102-2 (TLS) and TR-02102-1, version 2026-01. Edition and hash: [sources](sources.md).
 
 | Family | Contents | Source |
 |---|---|---|
@@ -155,7 +155,7 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 
 ### `fips1403`
 
-**Governing text:** NIST SP 800-140C r2 and SP 800-140D r2, with the CMVP lists (updated 21 August 2026); the FIPS 140-3 Implementation Guidance (August 2026), IG C.K, D.Q and D.S; NIST SP 800-52r2; NIST SP 800-131A r2. The set a FIPS 140-3 boundary approves under the published texts.
+**Governing text:** NIST SP 800-140C r2 and SP 800-140D r2, with the CMVP lists (updated 21 August 2026); the FIPS 140-3 Implementation Guidance (August 2026), IG C.K, D.Q and D.S; NIST SP 800-52r2; NIST SP 800-131A r2. The set a FIPS 140-3 boundary approves under the published texts. Editions and hashes: [sources](sources.md).
 
 | Family | Contents |
 |---|---|
@@ -174,7 +174,7 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 
 ### `fips1402`
 
-**Governing text:** FIPS 140-2 Annex A and Annex D (2021); FIPS 186-4; NIST SP 800-131A r2; NIST SP 800-52r2. The set a FIPS 140-2 boundary approved, for peers whose boundary is 140-2.
+**Governing text:** FIPS 140-2 Annex A and Annex D (2021); FIPS 186-4; NIST SP 800-131A r2; NIST SP 800-52r2. The set a FIPS 140-2 boundary approved, for peers whose boundary is 140-2. Editions and hashes: [sources](sources.md).
 
 | Family | Contents |
 |---|---|
@@ -234,7 +234,7 @@ The three SHA-2 cells are not walked by `assert_module_approves`, which covers w
 
 ## 7. After 2030
 
-What each issuer's text says about the years after 2030, and which profile, with or without the option, carries the algorithms it names, or which part of them. This table makes no claim of conformance with any text.
+What each issuer's text says about the years after 2030, and which profile, with or without the option, carries the algorithms it names, or which part of them. This table makes no claim of conformance with any text. Each text's edition, link and hash are in [sources](sources.md).
 
 | Issuer and text | The dates, as written | Profile |
 |---|---|---|
@@ -245,7 +245,7 @@ What each issuer's text says about the years after 2030, and which profile, with
 | **Germany:** BSI TR-02102-2 and TR-02102-1, version 2026-01 [^de] | TLS 1.2 to the end of 2031 (TR-02102-2 Table 2). Classical key agreement alone to the end of 2031 (Table 10 note; TR-02102-1). Classical signatures alone to the end of 2035 (TR-02102-1). | To the end of 2031, `bsi` carries the TR-02102-2 TLS entries that rustls implements; Brainpool, AES-CCM and P-521 key exchange, which the TR lists, are absent (section 4, item 6). For key exchange after 2031 the text names no algorithm set: the edition lists no post-quantum TLS group, so no profile with the option matches it. |
 | **Canada:** CCCS ITSM.40.001 (June 2025) [^ca1] and ITSP.40.111 v5 (29 May 2026) [^ca2] | High-priority systems migrated by the end of 2031, the rest by the end of 2035. RSA of at least 3072 bits by the end of 2030. RSA, ECDH, ECDSA and EdDSA phased out "without a PQC scheme" by the end of 2035. | The texts name ML-KEM and ML-DSA, each in all three parameter sets, and no TLS groups: they name no algorithm set for TLS. |
 
-[^us]: CNSS Policy No. 15, *Use of Public Standards for Secure Information Sharing*, December 2024, Committee on National Security Systems.
+[^us]: CNSS Policy No. 15, *Use of Public Standards for Secure Information Sharing*, December 2024, Committee on National Security Systems. Link and hash: [sources](sources.md).
 [^au]: Australian Signals Directorate, *Information security manual: Guidelines for cryptography*, September 2026. Page numbers are the PDF's footers.
 [^eu]: <https://ec.europa.eu/newsroom/dae/redirection/document/117507>
 [^uk1]: <https://www.ncsc.gov.uk/guidance/pqc-migration-timelines>
