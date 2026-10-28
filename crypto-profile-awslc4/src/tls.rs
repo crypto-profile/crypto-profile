@@ -219,8 +219,8 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
     }
 }
 
-/// Loads a private key into a signing key. The key's algorithm is not checked against a policy
-/// in round 1; `docs/usage.md` names this.
+/// Loads a private key into a signing key. The key's algorithm is not checked against any
+/// profile; `Resolved::admit_key` is that check.
 #[expect(clippy::disallowed_methods)]
 pub fn load_private_key(
     der: rustls::pki_types::PrivateKeyDer<'static>,

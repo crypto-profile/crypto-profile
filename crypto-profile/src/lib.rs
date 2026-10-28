@@ -1,5 +1,5 @@
-//! Algorithm types, the per-module capability model and the conformance suite shared by every
-//! `crypto-profile` backend. This crate performs no cryptography.
+//! Algorithm types, the per-module capability model, the named profiles and the conformance suite
+//! shared by every `crypto-profile` backend. This crate performs no cryptography.
 #![deny(missing_docs)]
 
 pub mod algorithm;
