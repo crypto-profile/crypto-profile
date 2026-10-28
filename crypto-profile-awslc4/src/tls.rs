@@ -4,7 +4,6 @@ use crate::{
     Algorithm, CipherSuite as C, CryptoError, Family, KxGroup as K, TlsError,
     TlsSignatureScheme as T, TlsVersion as V, ensure,
 };
-use rustls::crypto::aws_lc_rs::cipher_suite;
 use rustls::crypto::{CryptoProvider, KeyProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{PrivateKeyDer, SubjectPublicKeyInfoDer};
 use rustls::sign::{Signer, SigningKey};
@@ -28,25 +27,8 @@ pub struct Policy {
     pub signature_schemes: Vec<T>,
 }
 
-pub(crate) fn rustls_suite(c: C) -> rustls::SupportedCipherSuite {
-    match c {
-        C::Tls13Aes256GcmSha384 => cipher_suite::TLS13_AES_256_GCM_SHA384,
-        C::Tls13Aes128GcmSha256 => cipher_suite::TLS13_AES_128_GCM_SHA256,
-        C::Tls13Chacha20Poly1305Sha256 => cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
-        C::Tls12EcdheEcdsaAes256GcmSha384 => cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-        C::Tls12EcdheEcdsaAes128GcmSha256 => cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-        C::Tls12EcdheEcdsaChacha20Poly1305Sha256 => {
-            cipher_suite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
-        }
-        C::Tls12EcdheRsaAes256GcmSha384 => cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-        C::Tls12EcdheRsaAes128GcmSha256 => cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-        C::Tls12EcdheRsaChacha20Poly1305Sha256 => {
-            cipher_suite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
-        }
-    }
-}
-
 pub(crate) use crate::provider::assembly::group as rustls_group;
+pub(crate) use crate::provider::assembly::suite as rustls_suite;
 
 fn rustls_scheme(t: T) -> rustls::SignatureScheme {
     use rustls::SignatureScheme as R;

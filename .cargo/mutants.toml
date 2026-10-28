@@ -17,4 +17,14 @@ exclude_re = [
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/kx\\.rs:[0-9]+:[0-9]+: replace <impl SupportedKxGroup for MlKem>::fips -> bool with true$",
   # Every hybrid's first group is FIPS in every test process, so Hybrid::fips is true either way (decision 0003); false is caught by fips_follows_rustls_classification.
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/kx\\.rs:[0-9]+:[0-9]+: replace <impl SupportedKxGroup for Hybrid>::fips -> bool with true$",
+  # Hash::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by sha2_of_abc_and_the_streaming_paths_agree.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/hash\\.rs:[0-9]+:[0-9]+: replace <impl crypto::hash::Hash for Hash>::fips -> bool with true$",
+  # GcmAead::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by the_suites_carry_rustls_constants and an_approved_only_policy_is_fips_and_x25519_or_chacha_is_not.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/tls13\\.rs:[0-9]+:[0-9]+: replace <impl Tls13AeadAlgorithm for GcmAead>::fips -> bool with true$",
+  # AwsLcHkdf::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by the_suites_carry_rustls_constants and an_approved_only_policy_is_fips_and_x25519_or_chacha_is_not.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/tls13\\.rs:[0-9]+:[0-9]+: replace <impl Hkdf for AwsLcHkdf>::fips -> bool with true$",
+  # GcmAlgorithm::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by the_suites_carry_rustls_constants and tls12_fips_config_requires_ems.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/tls12\\.rs:[0-9]+:[0-9]+: replace <impl Tls12AeadAlgorithm for GcmAlgorithm>::fips -> bool with true$",
+  # Tls12Prf::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by the_suites_carry_rustls_constants and tls12_fips_config_requires_ems.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/tls12\\.rs:[0-9]+:[0-9]+: replace <impl Prf for Tls12Prf>::fips -> bool with true$",
 ]
