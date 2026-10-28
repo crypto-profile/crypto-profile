@@ -13,7 +13,7 @@ use std::sync::{Arc, Mutex};
 pub const FIPS_LIBRARY: &str = env!("CRYPTO_PROFILE_FIPS_LIBRARY");
 
 /// What a completed handshake negotiated.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Negotiated {
     /// The protocol version.
     pub version: TlsVersion,
@@ -23,6 +23,8 @@ pub struct Negotiated {
     pub kx: KxGroup,
     /// The scheme the server signed the handshake with.
     pub scheme: TlsSignatureScheme,
+    /// The client's [`rustls::CommonState::handshake_kind`].
+    pub kind: rustls::HandshakeKind,
 }
 
 /// A server verifier that records the scheme of the handshake signature it checks.
@@ -229,12 +231,12 @@ pub fn recording(
 }
 
 /// An in-memory handshake; the wire codepoints of the version, suite, group and the server's
-/// handshake-signature scheme recorded in `seen`.
+/// handshake-signature scheme recorded in `seen`, and the client's handshake kind.
 pub fn drive(
     client: rustls::ClientConfig,
     server: rustls::ServerConfig,
     seen: &Mutex<Option<SignatureScheme>>,
-) -> Result<[u16; 4], String> {
+) -> Result<([u16; 4], rustls::HandshakeKind), String> {
     let name = rustls::pki_types::ServerName::try_from("localhost").map_err(e)?;
     let mut c = rustls::ClientConnection::new(Arc::new(client), name).map_err(e)?;
     let mut s = rustls::ServerConnection::new(Arc::new(server)).map_err(e)?;
@@ -257,7 +259,8 @@ pub fn drive(
         .unwrap_or_else(|e| e.into_inner())
         .map(|s| u16::from_be_bytes(s.to_array()))
         .ok_or("no handshake signature")?;
-    Ok([version, suite, group, scheme])
+    let kind = c.handshake_kind().ok_or("no handshake kind")?;
+    Ok(([version, suite, group, scheme], kind))
 }
 
 fn run(
@@ -279,7 +282,7 @@ fn run(
         .dangerous()
         .with_custom_certificate_verifier(verifier)
         .with_no_client_auth();
-    let [version_cp, suite_cp, group_cp, scheme_cp] = drive(client_cfg, server_cfg, &seen)?;
+    let ([version_cp, suite_cp, group_cp, scheme_cp], kind) = drive(client_cfg, server_cfg, &seen)?;
     let version = TlsVersion::ALL
         .into_iter()
         .find(|x| x.iana() == version_cp)
@@ -301,5 +304,6 @@ fn run(
         suite,
         kx,
         scheme,
+        kind,
     })
 }

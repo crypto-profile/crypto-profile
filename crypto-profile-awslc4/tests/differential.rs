@@ -13,7 +13,10 @@ use crypto_profile_awslc4::{
 use rustls::crypto::aws_lc_rs::{cipher_suite as rs, kx_group as rk};
 use rustls::crypto::{CryptoProvider, SupportedKxGroup, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{PrivateKeyDer, SignatureVerificationAlgorithm};
-use rustls::{ClientConfig, ServerConfig, SignatureScheme, SupportedCipherSuite};
+use rustls::quic::{DirectionalKeys, Version};
+use rustls::{
+    ClientConfig, HandshakeKind, ServerConfig, Side, SignatureScheme, SupportedCipherSuite,
+};
 use std::sync::{Arc, Mutex};
 
 type Seen = Arc<Mutex<Option<SignatureScheme>>>;
@@ -111,7 +114,7 @@ fn reference_client(c: &Case, p: &Pki) -> Result<(ClientConfig, Seen), String> {
     Ok((cfg, seen))
 }
 
-fn ours_to_reference(c: &Case, p: &Pki) -> Result<[u16; 4], String> {
+fn ours_to_reference(c: &Case, p: &Pki) -> Result<([u16; 4], HandshakeKind), String> {
     let inner = server_cert_verifier_builder(Arc::new(p.roots.clone()), &policy(c))
         .map_err(e)?
         .build()
@@ -125,7 +128,7 @@ fn ours_to_reference(c: &Case, p: &Pki) -> Result<[u16; 4], String> {
     drive(client, reference_server(c, p)?, &seen)
 }
 
-fn reference_to_ours(c: &Case, p: &Pki) -> Result<[u16; 4], String> {
+fn reference_to_ours(c: &Case, p: &Pki) -> Result<([u16; 4], HandshakeKind), String> {
     let (client, seen) = reference_client(c, p)?;
     let server = server_builder(&policy(c))
         .map_err(e)?
@@ -172,9 +175,10 @@ fn cases() -> Vec<Case> {
         0x0806,
         SignatureScheme::RSA_PSS_SHA512,
     );
-    for (version, suite, cp, rsuite, (key, scheme, scp, rscheme)) in [
+    for (version, vcp, suite, cp, rsuite, (key, scheme, scp, rscheme)) in [
         (
             V::Tls13,
+            0x0304,
             C::Tls13Aes256GcmSha384,
             0x1302,
             rs::TLS13_AES_256_GCM_SHA384,
@@ -182,6 +186,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             V::Tls13,
+            0x0304,
             C::Tls13Aes128GcmSha256,
             0x1301,
             rs::TLS13_AES_128_GCM_SHA256,
@@ -189,6 +194,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             V::Tls13,
+            0x0304,
             C::Tls13Chacha20Poly1305Sha256,
             0x1303,
             rs::TLS13_CHACHA20_POLY1305_SHA256,
@@ -196,6 +202,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             V::Tls12,
+            0x0303,
             C::Tls12EcdheEcdsaAes256GcmSha384,
             0xC02C,
             rs::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
@@ -203,6 +210,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             V::Tls12,
+            0x0303,
             C::Tls12EcdheEcdsaAes128GcmSha256,
             0xC02B,
             rs::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
@@ -210,6 +218,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             V::Tls12,
+            0x0303,
             C::Tls12EcdheEcdsaChacha20Poly1305Sha256,
             0xCCA9,
             rs::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256,
@@ -217,6 +226,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             V::Tls12,
+            0x0303,
             C::Tls12EcdheRsaAes256GcmSha384,
             0xC030,
             rs::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
@@ -224,6 +234,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             V::Tls12,
+            0x0303,
             C::Tls12EcdheRsaAes128GcmSha256,
             0xC02F,
             rs::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
@@ -231,6 +242,7 @@ fn cases() -> Vec<Case> {
         ),
         (
             V::Tls12,
+            0x0303,
             C::Tls12EcdheRsaChacha20Poly1305Sha256,
             0xCCA8,
             rs::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
@@ -243,23 +255,25 @@ fn cases() -> Vec<Case> {
             group: p384.0,
             scheme,
             key,
-            wire: [version.iana(), cp, 0x0018, scp],
+            wire: [vcp, cp, 0x0018, scp],
             reference: (rsuite, p384.2, rscheme),
         });
     }
     let t13 = (
         V::Tls13,
+        0x0304,
         C::Tls13Aes256GcmSha384,
         0x1302,
         rs::TLS13_AES_256_GCM_SHA384,
     );
     let t12 = (
         V::Tls12,
+        0x0303,
         C::Tls12EcdheRsaAes256GcmSha384,
         0xC030,
         rs::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
     );
-    for (scheme, scp, rscheme, key, (version, suite, cp, rsuite)) in [
+    for (scheme, scp, rscheme, key, (version, vcp, suite, cp, rsuite)) in [
         (
             T::EcdsaNistp256Sha256,
             0x0403,
@@ -344,7 +358,7 @@ fn cases() -> Vec<Case> {
             group: p384.0,
             scheme,
             key,
-            wire: [version.iana(), cp, 0x0018, scp],
+            wire: [vcp, cp, 0x0018, scp],
             reference: (rsuite, p384.2, rscheme),
         });
     }
@@ -359,12 +373,12 @@ fn every_shared_group_suite_and_scheme_interoperates_both_ways() {
         let p = pki(S::EcdsaP384Sha384, c.key).unwrap();
         assert_eq!(
             ours_to_reference(c, &p),
-            Ok(c.wire),
+            Ok((c.wire, HandshakeKind::Full)),
             "ours -> reference {c:?}"
         );
         assert_eq!(
             reference_to_ours(c, &p),
-            Ok(c.wire),
+            Ok((c.wire, HandshakeKind::Full)),
             "reference -> ours {c:?}"
         );
     }
@@ -389,6 +403,83 @@ fn every_shared_component_classifies_fips_as_the_reference() {
         (mine.secure_random.fips(), mine.key_provider.fips()),
         (stock().secure_random.fips(), stock().key_provider.fips())
     );
+}
+
+fn quic_fingerprint(k: &DirectionalKeys) -> Result<Vec<u8>, rustls::Error> {
+    let mut packet = b"\xc3\x00\x00\x00\x01quic differential payload".to_vec();
+    let (header, body) = packet.split_at_mut(5);
+    let tag = k.packet.encrypt_in_place(7, header, body)?;
+    packet.extend(tag.as_ref());
+    let (first, rest) = packet.split_at_mut(1);
+    let (pn, body) = rest.split_at_mut(4);
+    k.header.encrypt_in_place(&body[..16], &mut first[0], pn)?;
+    let mut path = b"multipath".to_vec();
+    let tag = k.packet.encrypt_in_place_for_path(3, 7, b"h", &mut path)?;
+    packet.extend(path);
+    packet.extend(tag.as_ref());
+    for n in [
+        k.packet.confidentiality_limit(),
+        k.packet.integrity_limit(),
+        k.packet.tag_len() as u64,
+        k.header.sample_len() as u64,
+    ] {
+        packet.extend(n.to_be_bytes());
+    }
+    Ok(packet)
+}
+
+#[test]
+fn every_quic_suite_derives_the_keys_of_the_reference() {
+    for (suite, reference) in [
+        (C::Tls13Aes256GcmSha384, rs::TLS13_AES_256_GCM_SHA384),
+        (C::Tls13Aes128GcmSha256, rs::TLS13_AES_128_GCM_SHA256),
+        (
+            C::Tls13Chacha20Poly1305Sha256,
+            rs::TLS13_CHACHA20_POLY1305_SHA256,
+        ),
+    ] {
+        let provider = crypto_provider(&Policy {
+            versions: vec![V::Tls13],
+            cipher_suites: vec![suite],
+            kx_groups: vec![K::Secp384r1],
+            signature_schemes: vec![T::EcdsaNistp384Sha384],
+        })
+        .unwrap();
+        let ours = provider.cipher_suites[0]
+            .tls13()
+            .unwrap()
+            .quic_suite()
+            .unwrap();
+        let theirs = reference.tls13().unwrap().quic_suite().unwrap();
+        assert_eq!(
+            ours.quic.fips(),
+            theirs.quic.fips() && suite != C::Tls13Chacha20Poly1305Sha256,
+            "{suite:?}"
+        );
+        assert_eq!(
+            ours.quic.aead_key_len(),
+            theirs.quic.aead_key_len(),
+            "{suite:?}"
+        );
+        for version in [Version::V1, Version::V2] {
+            for side in [Side::Client, Side::Server] {
+                let (o, t) = (
+                    ours.keys(b"connection id", side, version),
+                    theirs.keys(b"connection id", side, version),
+                );
+                assert_eq!(
+                    quic_fingerprint(&o.local).unwrap(),
+                    quic_fingerprint(&t.local).unwrap(),
+                    "{suite:?}"
+                );
+                assert_eq!(
+                    quic_fingerprint(&o.remote).unwrap(),
+                    quic_fingerprint(&t.remote).unwrap(),
+                    "{suite:?}"
+                );
+            }
+        }
+    }
 }
 
 fn every_scheme() -> Policy {

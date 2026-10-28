@@ -394,6 +394,7 @@ mod tests {
         );
         let n = handshake(&client, &one13(K::Secp384r1), S::EcdsaP384Sha384).unwrap();
         assert_eq!(n.kx.iana(), 0x0018);
+        assert_eq!(n.kind, rustls::HandshakeKind::Full);
     }
 
     #[test]
@@ -406,6 +407,7 @@ mod tests {
         );
         let n = handshake(&client, &one13(K::Secp384r1MlKem1024), S::EcdsaP384Sha384).unwrap();
         assert_eq!(n.kx.iana(), 0x11ED);
+        assert_eq!(n.kind, rustls::HandshakeKind::FullWithHelloRetryRequest);
     }
 
     #[test]
@@ -688,6 +690,7 @@ mod tests {
                     suite: C::Tls13Aes256GcmSha384,
                     kx: k,
                     scheme: T::EcdsaNistp384Sha384,
+                    kind: rustls::HandshakeKind::Full,
                 }
             );
         }
@@ -725,6 +728,7 @@ mod tests {
                     suite: s,
                     kx: K::Secp384r1,
                     scheme,
+                    kind: rustls::HandshakeKind::Full,
                 },
                 "{s:?}"
             );
