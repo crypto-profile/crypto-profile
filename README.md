@@ -8,7 +8,7 @@ Named cryptographic profiles for Rust: a policy layer and a [rustls](https://git
 
 One reviewed place for an application's cryptographic choices:
 
-- **Profiles.** Named, inspectable algorithm sets an application selects at start-up and that fail closed when the build can't satisfy them. None is built yet; they are round 2 (see below).
+- **Profiles.** Named, inspectable algorithm sets an application selects at start-up and that fail closed when the build can't satisfy them. See [Profiles](#profiles).
 - **A rustls provider** whose key-exchange groups, cipher suites and signature schemes follow a `tls::Policy`, and `fips::assert_fips_module`, which an application calls at start-up to refuse to run unless the loaded module reports FIPS mode.
 - **The functions applications need beside TLS,** each implemented once:
   - hashing;
@@ -17,7 +17,7 @@ One reviewed place for an application's cryptographic choices:
   - a sealed box;
   - signature keys, signing and verification;
   - certificate-request generation.
-- **A capability table** that records, for each certified or submitted module and each algorithm, whether the backend implements it and what the module's security policy says about it, citing the policy table for every sourced cell.
+- **A capability table** that records, for each certified or submitted module and each algorithm, whether the backend implements it and what the published evidence says about it: the module's security policy, cited by table for every sourced cell, or, for a module with no published security policy, one CAVP certificate, which is never an approval ([decision 0004](docs/decisions/0004-algorithm-tested.md)).
 
 ## What it is not
 
@@ -43,21 +43,25 @@ The modules' certificate status, as recorded when this file was last updated (re
 
 aws-lc-rs 1.17.4 with its `fips` feature compiles ML-DSA out, so the 3.x backend will refuse ML-DSA with a typed error rather than fall back. See [`docs/usage.md`](docs/usage.md) for linkage, what the crate claims, and its limits.
 
-## Profiles (round 2)
+## Profiles
 
-These are planned. Round 1 builds none of them; it builds the algorithm inventory and the capability model they will be defined over.
+A profile is an algorithm set, not a validation claim.
 
-- `unrestricted`
-- `preferred`
-- `cnsa2`
-- `cnsa1`
-- `bsi`
-- `fips1403`
-- `fips1402`
+- `unrestricted`: every algorithm in the inventory. Not a government profile.
+- `preferred`: the crate's recommendation, as [`docs/profiles.md`](docs/profiles.md) defines it. Not a government profile.
+- `cnsa2`: CNSSP 15 (December 2024) Annex B, on TLS 1.3 as the crate maps it.
+- `cnsa1`: CNSSP 15 (20 October 2016) Annex B in RFC 9151's TLS profile; a transition profile for CNSA 1.0 counterparts, with its gaps named in [`docs/profiles.md`](docs/profiles.md).
+- `bsi`: BSI TR-02102-2 and TR-02102-1, version 2026-01.
+- `fips1403`: what FIPS 140-3 approves under the published texts.
+- `fips1402`: what FIPS 140-2 approved, for peers whose boundary is 140-2.
+
+The option "post-quantum key exchange required" (`Options { pq_key_exchange_required: true }`) keeps only ML-KEM and hybrid key exchange on any profile, and so TLS 1.3 only. Whether the running module is validated for a resolved profile is a separate call, `assert_module_approves`, which fails closed.
 
 ## Documentation
 
 - [`docs/usage.md`](docs/usage.md): choosing a backend, linkage, what the crate claims, TLS policies, limits and residuals.
+- [`docs/profiles.md`](docs/profiles.md): the profiles, their governing texts and contents, the post-quantum option, module approval, named residuals and the after-2030 table.
+- [`docs/sources.md`](docs/sources.md): every document the profiles, citations and capability cells depend on, with edition, issuer link and SHA-256.
 - [`docs/decisions/`](docs/decisions/): the decision records.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), [`SECURITY.md`](SECURITY.md) and [`CHANGELOG.md`](CHANGELOG.md).
 

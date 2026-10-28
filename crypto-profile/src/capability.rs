@@ -1,5 +1,6 @@
-//! What each AWS-LC FIPS module can do and what its security policy says about each algorithm,
-//! with the policy citation for every sourced cell.
+//! What each AWS-LC FIPS module can do and what the published evidence says about each
+//! algorithm: the module's security policy, cited by table for every sourced cell, or, for a
+//! module with none published, one CAVP certificate, which is never an approval (decision 0004).
 use crate::algorithm::*;
 use crate::error::CryptoError;
 
@@ -58,7 +59,7 @@ pub struct Certificate {
     pub policy: Option<&'static str>,
 }
 
-/// A module's validation status for one algorithm.
+/// A module's approval status for one algorithm, as its published evidence settles it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Approval {
     /// Listed as approved; `source` cites the table.
@@ -71,12 +72,22 @@ pub enum Approval {
         /// The security-policy citation.
         source: &'static str,
     },
-    /// No source settles it. Treated as not approved everywhere.
+    /// One published CAVP certificate for this module shows every operation the cell needs, with
+    /// the parameters `cavp` names, but no security policy lists it as approved. Never approved.
+    /// It covers only those parameters: rustls verifies a `Scheme` cell's signatures over a wider
+    /// range of keys (decision 0004 §5). Tested on that certificate's processor variant; which
+    /// variant a build uses depends on the CPU.
+    AlgorithmTested {
+        /// The certificate, and the capabilities and parameters it shows.
+        cavp: &'static str,
+    },
+    /// No published source settles it: no security policy, and no single CAVP certificate under
+    /// decision 0004. Treated as not approved everywhere.
     Unverified,
 }
 
 impl Approval {
-    /// Whether the cell is approved. `Unverified` is not.
+    /// Whether the cell is approved. Only `Approved` is; `AlgorithmTested` and `Unverified` are not.
     pub const fn is_approved(self) -> bool {
         matches!(self, Approval::Approved { .. })
     }
@@ -88,7 +99,7 @@ impl Approval {
 pub struct Capability {
     /// The backend for this module implements the algorithm.
     pub available: bool,
-    /// The module's validation status for it.
+    /// The module's approval status for it.
     pub approval: Approval,
 }
 
@@ -205,69 +216,115 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
     }
 }
 
-const fn four_x(a: Algorithm) -> Capability {
-    let unsourced = Capability {
+const fn four_x(l: Linkage, a: Algorithm) -> Capability {
+    Capability {
         available: true,
-        approval: Approval::Unverified,
-    };
-    match a {
-        Algorithm::Signature(s) => match s {
-            SignatureAlgorithm::MlDsa87
-            | SignatureAlgorithm::EcdsaP256Sha256
-            | SignatureAlgorithm::EcdsaP384Sha384
-            | SignatureAlgorithm::EcdsaP521Sha384
-            | SignatureAlgorithm::EcdsaP521Sha512
-            | SignatureAlgorithm::Ed25519
-            | SignatureAlgorithm::Rsa2048Sha384
-            | SignatureAlgorithm::Rsa3072Sha384
-            | SignatureAlgorithm::Rsa4096Sha384 => unsourced,
-        },
-        Algorithm::Scheme(t) => match t {
-            TlsSignatureScheme::EcdsaNistp256Sha256
-            | TlsSignatureScheme::EcdsaNistp384Sha384
-            | TlsSignatureScheme::EcdsaNistp521Sha512
-            | TlsSignatureScheme::Ed25519
-            | TlsSignatureScheme::RsaPssSha256
-            | TlsSignatureScheme::RsaPssSha384
-            | TlsSignatureScheme::RsaPssSha512
-            | TlsSignatureScheme::RsaPkcs1Sha256
-            | TlsSignatureScheme::RsaPkcs1Sha384
-            | TlsSignatureScheme::RsaPkcs1Sha512
-            | TlsSignatureScheme::MlDsa87 => unsourced,
-        },
-        Algorithm::Kx(k) => match k {
-            KxGroup::MlKem1024
-            | KxGroup::X25519MlKem768
-            | KxGroup::Secp256r1MlKem768
-            | KxGroup::Secp384r1
-            | KxGroup::Secp256r1
-            | KxGroup::X25519 => unsourced,
-        },
-        Algorithm::Cipher(c) => match c {
-            CipherSuite::Tls13Aes256GcmSha384
-            | CipherSuite::Tls13Aes128GcmSha256
-            | CipherSuite::Tls13Chacha20Poly1305Sha256
-            | CipherSuite::Tls12EcdheEcdsaAes256GcmSha384
-            | CipherSuite::Tls12EcdheEcdsaAes128GcmSha256
-            | CipherSuite::Tls12EcdheEcdsaChacha20Poly1305Sha256
-            | CipherSuite::Tls12EcdheRsaAes256GcmSha384
-            | CipherSuite::Tls12EcdheRsaAes128GcmSha256
-            | CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256 => unsourced,
-        },
-        Algorithm::Hash(h) => match h {
-            HashAlgorithm::Sha256 | HashAlgorithm::Sha384 | HashAlgorithm::Sha512 => unsourced,
-        },
-        Algorithm::Protocol(v) => match v {
-            TlsVersion::Tls12 | TlsVersion::Tls13 => unsourced,
+        approval: match l {
+            Linkage::Static => Approval::Unverified,
+            Linkage::Dynamic => four_x_dynamic(a),
         },
     }
 }
 
-/// What the backend for `m` can do for `a`, and what that module's security policy says about it.
+const fn tested(cavp: &'static str) -> Approval {
+    Approval::AlgorithmTested { cavp }
+}
+
+/// Each `AlgorithmTested` cell cites the lowest-numbered AWS-LC FIPS 4.0.0 CAVP certificate
+/// (A7839-A7876, dynamic build) that alone shows every operation the cell needs, with the
+/// parameters the citation names (decision 0004).
+const fn four_x_dynamic(a: Algorithm) -> Approval {
+    match a {
+        Algorithm::Signature(s) => match s {
+            SignatureAlgorithm::MlDsa87 => {
+                tested("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)")
+            }
+            SignatureAlgorithm::Ed25519 => tested("A7855 (EDDSA KeyGen, SigGen, SigVer: ED-25519)"),
+            SignatureAlgorithm::Rsa2048Sha384 => tested(
+                "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 2048, SHA2-384)",
+            ),
+            SignatureAlgorithm::Rsa3072Sha384 => tested(
+                "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 3072, SHA2-384)",
+            ),
+            SignatureAlgorithm::Rsa4096Sha384 => tested(
+                "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
+            ),
+            SignatureAlgorithm::EcdsaP256Sha256
+            | SignatureAlgorithm::EcdsaP384Sha384
+            | SignatureAlgorithm::EcdsaP521Sha384
+            | SignatureAlgorithm::EcdsaP521Sha512 => Approval::Unverified,
+        },
+        Algorithm::Scheme(t) => match t {
+            TlsSignatureScheme::EcdsaNistp256Sha256 => {
+                tested("A7856 (ECDSA SigVer (FIPS186-5): P-256, SHA2-256)")
+            }
+            TlsSignatureScheme::EcdsaNistp384Sha384 => {
+                tested("A7856 (ECDSA SigVer (FIPS186-5): P-384, SHA2-384)")
+            }
+            TlsSignatureScheme::EcdsaNistp521Sha512 => {
+                tested("A7856 (ECDSA SigVer (FIPS186-5): P-521, SHA2-512)")
+            }
+            TlsSignatureScheme::Ed25519 => tested("A7855 (EDDSA SigVer: ED-25519)"),
+            TlsSignatureScheme::RsaPssSha256 => {
+                tested("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-256)")
+            }
+            TlsSignatureScheme::RsaPssSha384 => {
+                tested("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-384)")
+            }
+            TlsSignatureScheme::RsaPssSha512 => {
+                tested("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-512)")
+            }
+            TlsSignatureScheme::RsaPkcs1Sha256 => {
+                tested("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-256)")
+            }
+            TlsSignatureScheme::RsaPkcs1Sha384 => {
+                tested("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-384)")
+            }
+            TlsSignatureScheme::RsaPkcs1Sha512 => {
+                tested("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-512)")
+            }
+            TlsSignatureScheme::MlDsa87 => tested("A7855 (ML-DSA SigVer: ML-DSA-87)"),
+        },
+        Algorithm::Kx(k) => match k {
+            KxGroup::MlKem1024 => tested("A7855 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)"),
+            KxGroup::Secp384r1 => tested(
+                "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+            ),
+            KxGroup::Secp256r1 => tested(
+                "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
+            ),
+            KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 | KxGroup::X25519 => {
+                Approval::Unverified
+            }
+        },
+        Algorithm::Cipher(c) => match c {
+            CipherSuite::Tls13Aes256GcmSha384
+            | CipherSuite::Tls12EcdheEcdsaAes256GcmSha384
+            | CipherSuite::Tls12EcdheRsaAes256GcmSha384
+            | CipherSuite::Tls13Aes128GcmSha256
+            | CipherSuite::Tls12EcdheEcdsaAes128GcmSha256
+            | CipherSuite::Tls12EcdheRsaAes128GcmSha256
+            | CipherSuite::Tls13Chacha20Poly1305Sha256
+            | CipherSuite::Tls12EcdheEcdsaChacha20Poly1305Sha256
+            | CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256 => Approval::Unverified,
+        },
+        Algorithm::Hash(h) => match h {
+            HashAlgorithm::Sha256 => tested("A7855 (SHA2-256)"),
+            HashAlgorithm::Sha384 => tested("A7855 (SHA2-384)"),
+            HashAlgorithm::Sha512 => tested("A7855 (SHA2-512)"),
+        },
+        Algorithm::Protocol(v) => match v {
+            TlsVersion::Tls12 | TlsVersion::Tls13 => Approval::Unverified,
+        },
+    }
+}
+
+/// What the backend for `m` can do for `a`, and what that module's published evidence says about
+/// it: its security policy, or one CAVP certificate (decision 0004).
 pub const fn capability(m: Module, a: Algorithm) -> Capability {
     match m.line {
         ModuleLine::AwsLcFips3 => three_x(m.linkage, a),
-        ModuleLine::AwsLcFips4 => four_x(a),
+        ModuleLine::AwsLcFips4 => four_x(m.linkage, a),
     }
 }
 
@@ -335,6 +392,11 @@ mod tests {
                         };
                         assert!(source.contains(want), "{m:?} {a:?} cites {source}");
                     }
+                    Approval::AlgorithmTested { cavp } => {
+                        assert_eq!(m, M4D, "{a:?}");
+                        assert!(cavp.starts_with("A78"), "{a:?} cites {cavp}");
+                        assert_eq!(cavp.matches("A78").count(), 1, "{a:?} cites {cavp}");
+                    }
                     Approval::Unverified => {}
                 }
             }
@@ -342,18 +404,157 @@ mod tests {
     }
 
     #[test]
-    fn four_x_is_available_and_unverified_everywhere() {
-        for m in [M4S, M4D] {
-            for a in Algorithm::all() {
-                assert_eq!(
-                    capability(m, a),
-                    Capability {
-                        available: true,
-                        approval: Approval::Unverified
-                    },
-                    "{a:?}"
-                );
-            }
+    fn four_x_static_is_available_and_unverified_everywhere() {
+        for a in Algorithm::all() {
+            assert_eq!(
+                capability(M4S, a),
+                Capability {
+                    available: true,
+                    approval: Approval::Unverified
+                },
+                "{a:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn four_x_dynamic_cells_are_pinned_to_their_cavp_certificates() {
+        use Algorithm as A;
+        use CipherSuite as C;
+        use HashAlgorithm as H;
+        use KxGroup as K;
+        use SignatureAlgorithm as S;
+        use TlsSignatureScheme as T;
+        use TlsVersion as V;
+        let expected: [(Algorithm, Option<&'static str>); 40] = [
+            (
+                A::Signature(S::MlDsa87),
+                Some("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)"),
+            ),
+            (A::Signature(S::EcdsaP256Sha256), None),
+            (A::Signature(S::EcdsaP384Sha384), None),
+            (A::Signature(S::EcdsaP521Sha384), None),
+            (A::Signature(S::EcdsaP521Sha512), None),
+            (
+                A::Signature(S::Ed25519),
+                Some("A7855 (EDDSA KeyGen, SigGen, SigVer: ED-25519)"),
+            ),
+            (
+                A::Signature(S::Rsa2048Sha384),
+                Some(
+                    "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 2048, SHA2-384)",
+                ),
+            ),
+            (
+                A::Signature(S::Rsa3072Sha384),
+                Some(
+                    "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 3072, SHA2-384)",
+                ),
+            ),
+            (
+                A::Signature(S::Rsa4096Sha384),
+                Some(
+                    "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
+                ),
+            ),
+            (
+                A::Scheme(T::EcdsaNistp256Sha256),
+                Some("A7856 (ECDSA SigVer (FIPS186-5): P-256, SHA2-256)"),
+            ),
+            (
+                A::Scheme(T::EcdsaNistp384Sha384),
+                Some("A7856 (ECDSA SigVer (FIPS186-5): P-384, SHA2-384)"),
+            ),
+            (
+                A::Scheme(T::EcdsaNistp521Sha512),
+                Some("A7856 (ECDSA SigVer (FIPS186-5): P-521, SHA2-512)"),
+            ),
+            (
+                A::Scheme(T::Ed25519),
+                Some("A7855 (EDDSA SigVer: ED-25519)"),
+            ),
+            (
+                A::Scheme(T::RsaPssSha256),
+                Some("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-256)"),
+            ),
+            (
+                A::Scheme(T::RsaPssSha384),
+                Some("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-384)"),
+            ),
+            (
+                A::Scheme(T::RsaPssSha512),
+                Some("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-512)"),
+            ),
+            (
+                A::Scheme(T::RsaPkcs1Sha256),
+                Some("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-256)"),
+            ),
+            (
+                A::Scheme(T::RsaPkcs1Sha384),
+                Some("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-384)"),
+            ),
+            (
+                A::Scheme(T::RsaPkcs1Sha512),
+                Some("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-512)"),
+            ),
+            (
+                A::Scheme(T::MlDsa87),
+                Some("A7855 (ML-DSA SigVer: ML-DSA-87)"),
+            ),
+            (
+                A::Kx(K::MlKem1024),
+                Some("A7855 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)"),
+            ),
+            (A::Kx(K::X25519MlKem768), None),
+            (A::Kx(K::Secp256r1MlKem768), None),
+            (
+                A::Kx(K::Secp384r1),
+                Some(
+                    "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+                ),
+            ),
+            (
+                A::Kx(K::Secp256r1),
+                Some(
+                    "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
+                ),
+            ),
+            (A::Kx(K::X25519), None),
+            (A::Cipher(C::Tls13Aes256GcmSha384), None),
+            (A::Cipher(C::Tls13Aes128GcmSha256), None),
+            (A::Cipher(C::Tls13Chacha20Poly1305Sha256), None),
+            (A::Cipher(C::Tls12EcdheEcdsaAes256GcmSha384), None),
+            (A::Cipher(C::Tls12EcdheEcdsaAes128GcmSha256), None),
+            (A::Cipher(C::Tls12EcdheEcdsaChacha20Poly1305Sha256), None),
+            (A::Cipher(C::Tls12EcdheRsaAes256GcmSha384), None),
+            (A::Cipher(C::Tls12EcdheRsaAes128GcmSha256), None),
+            (A::Cipher(C::Tls12EcdheRsaChacha20Poly1305Sha256), None),
+            (A::Hash(H::Sha256), Some("A7855 (SHA2-256)")),
+            (A::Hash(H::Sha384), Some("A7855 (SHA2-384)")),
+            (A::Hash(H::Sha512), Some("A7855 (SHA2-512)")),
+            (A::Protocol(V::Tls12), None),
+            (A::Protocol(V::Tls13), None),
+        ];
+        assert!(
+            Algorithm::all()
+                .iter()
+                .all(|a| expected.iter().any(|(b, _)| b == a))
+        );
+        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 22);
+        for (a, cavp) in expected {
+            let approval = match cavp {
+                Some(cavp) => Approval::AlgorithmTested { cavp },
+                None => Approval::Unverified,
+            };
+            assert_eq!(
+                capability(M4D, a),
+                Capability {
+                    available: true,
+                    approval
+                },
+                "{a:?}"
+            );
+            assert!(!approval.is_approved(), "{a:?}");
         }
     }
 
@@ -407,6 +608,7 @@ mod tests {
     #[test]
     fn unverified_is_never_approved() {
         assert!(!Approval::Unverified.is_approved());
+        assert!(!Approval::AlgorithmTested { cavp: "A7855" }.is_approved());
         assert!(!Approval::NotApproved { source: "x" }.is_approved());
         assert!(Approval::Approved { source: "x" }.is_approved());
     }
@@ -504,6 +706,7 @@ mod tests {
                     Approval::Approved { .. } => K::Approved,
                     Approval::NotApproved { .. } => K::NotApproved,
                     Approval::Unverified => K::Unverified,
+                    Approval::AlgorithmTested { cavp } => panic!("{m:?} {a:?}: 3.x cites {cavp}"),
                 };
                 assert_eq!((c.available, got), (*available, *kind), "{m:?} {a:?}");
             }

@@ -18,6 +18,9 @@ pub mod signature;
 pub mod test_support;
 pub mod tls;
 
+mod profiles;
+pub use profiles::{Resolved, assert_module_approves, resolve};
+
 /// The AWS-LC FIPS module (line and linkage) this build links. Its certificate status is
 /// [`fips::certificate()`]; for 4.x the module is in CMVP review.
 pub const MODULE: Module = Module {

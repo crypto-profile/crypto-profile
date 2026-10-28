@@ -35,3 +35,7 @@ rustls-webpki = { version = "=0.103.16", default-features = false, features = ["
 [[test]]
 name = "conformance"
 required-features = ["test-support"]
+
+[[test]]
+name = "profiles"
+required-features = ["test-support"]

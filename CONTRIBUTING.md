@@ -69,12 +69,12 @@ When you add a value, take it from the registry or the standard, not from the co
 3. **Add its literal identifiers** to core: `iana()` from the IANA TLS registries, or `signature_oid()` from the RFC that assigns the OID, and extend the literal tables in the tests that pin them.
 4. **Give it a `capability()` cell for every `Module`** in `crypto-profile/src/capability.rs`. Each cell states:
    - *available*: whether that module's backend implements it;
-   - *approval*: `Approved` or `NotApproved`, with a `source` naming the certificate and the security-policy table (and the page, for an approval), or `Unverified` when no published source settles it.
+   - *approval*: `Approved` or `NotApproved`, with a `source` naming the certificate and the security-policy table (and the page, for an approval); for a module with CAVP certificates and no published security policy, `AlgorithmTested`, with a `cavp` naming one CAVP certificate (one processor variant, the lowest-numbered where several qualify) that shows every operation the cell needs, with the parameters it names ([decision 0004](docs/decisions/0004-algorithm-tested.md)); or `Unverified` when no published source settles it.
 
-   A cell you cannot source is `Unverified`. Never mark a cell `Approved` on the strength of another module's policy, a vendor statement or an algorithm's general reputation.
+   A cell you cannot source is `Unverified`. Never mark a cell `Approved` on the strength of another module's policy, a CAVP certificate alone, a vendor statement or an algorithm's general reputation.
 5. **Map it in every backend** (the rustls item, the aws-lc-rs algorithm, the rcgen algorithm, as applies).
 6. **Add conformance coverage.** The capability walk (`conformance_capability_honesty`) picks it up through `ALL`. The compiler does not force known answers or profiles. Add known answers from a published vector set to `crypto-profile/src/conformance/vectors/`, recorded in `SOURCES.md`, and a row to the oracle table in the CSR test for a signature algorithm.
-7. **Note which round 2 profiles should admit it,** in the pull request.
+7. **Decide which profiles admit it.** Add it to each profile constant in `crypto-profile/src/profile.rs` whose governing text admits it, with the citation in the constant's doc comment, and update the golden table in `crypto-profile-awslc4/tests/profiles.rs`. A regime-named profile admits only what its cited edition's tables admit.
 
 ## 6. Adding a backend
 
@@ -109,7 +109,7 @@ The linkage test looks for the 4.x shared library by name, `libaws_lc_fips_0_14_
 - a `PrivateKeyDer` handed to rustls is rustls's to hold;
 - each distinct ordered `signature_schemes` list leaks one static verifier table.
 
-Section 9 lists what a `Policy` does not restrict in round 1. A change that widens any of these needs its own decision record.
+Section 9 lists what a policy or profile does not restrict. A change that widens any of these needs its own decision record.
 
 ## 8. Hard rules
 
@@ -120,7 +120,7 @@ Section 9 lists what a `Policy` does not restrict in round 1. A change that wide
 - **Comments only where the code cannot be read without one:** one to three lines giving the mechanism or the invariant. Reasoning and history go in the commit message or a decision record.
 - **No `unsafe`.** Every crate sets `unsafe_code = "forbid"` through the workspace lints.
 - **No `aws_lc_rs` re-export.** The backend re-exports `rustls`, and `rcgen` only under `test-support`.
-- **Typed refusals.** `Unverified` is never treated as approved, and an algorithm a backend lacks is refused with `CryptoError::Unavailable`, never dropped silently.
+- **Typed refusals.** Only `Approved` is approved: `AlgorithmTested`, `NotApproved` and `Unverified` never are, and an algorithm a backend lacks is refused with `CryptoError::Unavailable`, never dropped silently.
 
 ## 9. Developer Certificate of Origin
 

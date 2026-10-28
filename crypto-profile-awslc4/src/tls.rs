@@ -5,11 +5,14 @@ use crate::{
     TlsSignatureScheme as T, TlsVersion as V, ensure,
 };
 use rustls::crypto::aws_lc_rs::{cipher_suite, kx_group};
-use rustls::crypto::{CryptoProvider, SupportedKxGroup, WebPkiSupportedAlgorithms};
+use rustls::crypto::{CryptoProvider, KeyProvider, SupportedKxGroup, WebPkiSupportedAlgorithms};
+use rustls::pki_types::{PrivateKeyDer, SubjectPublicKeyInfoDer};
+use rustls::sign::{Signer, SigningKey};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
-/// What a TLS configuration may use, each list in preference order.
+/// What a TLS configuration may use: versions, suites and groups in preference order, and a set
+/// of signature schemes. No list may name an entry twice.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Policy {
     /// Protocol versions.
@@ -18,8 +21,10 @@ pub struct Policy {
     pub cipher_suites: Vec<C>,
     /// Key-exchange groups.
     pub kx_groups: Vec<K>,
-    /// Handshake signature schemes this side accepts from its peer. Neither certificate-chain
-    /// signature algorithms nor the scheme a local signing key chooses are restricted.
+    /// Handshake signature schemes: those this side accepts from its peer, and those a key loaded
+    /// through this policy's provider signs with. Certificate-chain signature algorithms are not
+    /// restricted. A provider carries them in the crate's fixed preference order, the order every
+    /// profile lists them in, whatever order they are given in.
     pub signature_schemes: Vec<T>,
 }
 
@@ -101,28 +106,147 @@ fn select_schemes(
         .collect()
 }
 
-fn verification_algorithms(schemes: &[T]) -> Result<WebPkiSupportedAlgorithms, CryptoError> {
-    static CACHE: OnceLock<Mutex<HashMap<Vec<T>, &'static WebPkiSupportedAlgorithms>>> =
-        OnceLock::new();
-    let mut cache = CACHE
+#[derive(Debug)]
+struct PolicyKey {
+    inner: Arc<dyn SigningKey>,
+    schemes: &'static [rustls::SignatureScheme],
+}
+
+impl SigningKey for PolicyKey {
+    fn choose_scheme(&self, offered: &[rustls::SignatureScheme]) -> Option<Box<dyn Signer>> {
+        let allowed: Vec<_> = offered
+            .iter()
+            .copied()
+            .filter(|s| self.schemes.contains(s))
+            .collect();
+        self.inner.choose_scheme(&allowed)
+    }
+
+    fn public_key(&self) -> Option<SubjectPublicKeyInfoDer<'_>> {
+        self.inner.public_key()
+    }
+
+    fn algorithm(&self) -> rustls::SignatureAlgorithm {
+        self.inner.algorithm()
+    }
+}
+
+#[derive(Debug)]
+struct PolicyKeyProvider {
+    base: &'static dyn KeyProvider,
+    schemes: &'static [rustls::SignatureScheme],
+}
+
+impl KeyProvider for PolicyKeyProvider {
+    #[expect(clippy::disallowed_methods)]
+    fn load_private_key(
+        &self,
+        der: PrivateKeyDer<'static>,
+    ) -> Result<Arc<dyn SigningKey>, rustls::Error> {
+        Ok(Arc::new(PolicyKey {
+            inner: self.base.load_private_key(der)?,
+            schemes: self.schemes,
+        }))
+    }
+
+    fn fips(&self) -> bool {
+        self.base.fips()
+    }
+}
+
+const fn preference(t: T) -> u32 {
+    match t {
+        T::MlDsa87 => 0,
+        T::EcdsaNistp384Sha384 => 1,
+        T::EcdsaNistp256Sha256 => 2,
+        T::EcdsaNistp521Sha512 => 3,
+        T::Ed25519 => 4,
+        T::RsaPssSha384 => 5,
+        T::RsaPssSha512 => 6,
+        T::RsaPssSha256 => 7,
+        T::RsaPkcs1Sha384 => 8,
+        T::RsaPkcs1Sha512 => 9,
+        T::RsaPkcs1Sha256 => 10,
+    }
+}
+
+struct SchemeSet {
+    bits: u16,
+    ordered: Vec<T>,
+}
+
+fn scheme_set(schemes: &[T]) -> Result<SchemeSet, CryptoError> {
+    let mut bits = 0u16;
+    for t in schemes {
+        let bit = 1 << preference(*t);
+        if bits & bit != 0 {
+            return Err(CryptoError::PolicyDuplicate(Algorithm::Scheme(*t)));
+        }
+        bits |= bit;
+    }
+    let mut ordered = schemes.to_vec();
+    ordered.sort_by_key(|t| preference(*t));
+    Ok(SchemeSet { bits, ordered })
+}
+
+#[derive(Clone, Copy)]
+struct Tables {
+    verification: &'static WebPkiSupportedAlgorithms,
+    keys: &'static PolicyKeyProvider,
+}
+
+static TABLES: OnceLock<Mutex<HashMap<u16, Tables>>> = OnceLock::new();
+
+#[cfg(test)]
+fn cache_len() -> usize {
+    TABLES
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .len()
+}
+
+fn tables(set: &SchemeSet) -> Result<Tables, CryptoError> {
+    let mut cache = TABLES
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    if let Some(w) = cache.get(schemes).copied() {
-        return Ok(*w);
+    if let Some(t) = cache.get(&set.bits).copied() {
+        return Ok(t);
     }
-    let base = base_provider().signature_verification_algorithms;
-    let mapping = select_schemes(base.mapping, schemes)?;
-    let w: &'static WebPkiSupportedAlgorithms = Box::leak(Box::new(WebPkiSupportedAlgorithms {
-        all: base.all,
-        mapping: Box::leak(mapping.into_boxed_slice()),
-    }));
-    cache.insert(schemes.to_vec(), w);
-    Ok(*w)
+    let base = base_provider();
+    let verify = base.signature_verification_algorithms;
+    let mapping = select_schemes(verify.mapping, &set.ordered)?;
+    let t = Tables {
+        verification: Box::leak(Box::new(WebPkiSupportedAlgorithms {
+            all: verify.all,
+            mapping: Box::leak(mapping.into_boxed_slice()),
+        })),
+        keys: Box::leak(Box::new(PolicyKeyProvider {
+            base: base.key_provider,
+            schemes: Box::leak(set.ordered.iter().map(|t| rustls_scheme(*t)).collect()),
+        })),
+    };
+    cache.insert(set.bits, t);
+    Ok(t)
 }
 
-/// A provider carrying exactly `p`, refusing an empty family or an unavailable algorithm.
-pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
+fn no_duplicate<X: Copy + PartialEq>(
+    xs: &[X],
+    algorithm: fn(X) -> Algorithm,
+) -> Result<(), CryptoError> {
+    for (i, x) in xs.iter().enumerate() {
+        if xs[..i].contains(x) {
+            return Err(CryptoError::PolicyDuplicate(algorithm(*x)));
+        }
+    }
+    Ok(())
+}
+
+fn validate(
+    p: &Policy,
+    available: impl Fn(Algorithm) -> Result<(), CryptoError>,
+) -> Result<SchemeSet, CryptoError> {
     if p.versions.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::Version));
     }
@@ -132,18 +256,32 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     if p.signature_schemes.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::SignatureScheme));
     }
+    no_duplicate(&p.versions, Algorithm::Protocol)?;
+    no_duplicate(&p.cipher_suites, Algorithm::Cipher)?;
+    no_duplicate(&p.kx_groups, Algorithm::Kx)?;
+    let schemes = scheme_set(&p.signature_schemes)?;
     for v in &p.versions {
-        ensure(Algorithm::Protocol(*v))?;
+        available(Algorithm::Protocol(*v))?;
     }
     for c in &p.cipher_suites {
-        ensure(Algorithm::Cipher(*c))?;
+        available(Algorithm::Cipher(*c))?;
     }
     for k in &p.kx_groups {
-        ensure(Algorithm::Kx(*k))?;
+        available(Algorithm::Kx(*k))?;
     }
     for t in &p.signature_schemes {
-        ensure(Algorithm::Scheme(*t))?;
+        available(Algorithm::Scheme(*t))?;
     }
+    Ok(schemes)
+}
+
+/// A provider carrying exactly `p`. It refuses, in this order: an empty version, group or scheme
+/// list; a duplicate entry in any list, naming the first one found in versions, suites, groups,
+/// then schemes; an unavailable algorithm; and a suite list left empty once suites of unlisted
+/// versions are dropped. A key loaded through its key provider signs only with a scheme in
+/// `p.signature_schemes`.
+pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
+    let schemes = validate(p, ensure)?;
     let suites: Vec<_> = p
         .cipher_suites
         .iter()
@@ -153,10 +291,12 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     if suites.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::CipherSuite));
     }
+    let tables = tables(&schemes)?;
     Ok(CryptoProvider {
         cipher_suites: suites,
         kx_groups: p.kx_groups.iter().map(|k| rustls_group(*k)).collect(),
-        signature_verification_algorithms: verification_algorithms(&p.signature_schemes)?,
+        signature_verification_algorithms: *tables.verification,
+        key_provider: tables.keys,
         ..base_provider()
     })
 }
@@ -192,7 +332,9 @@ pub fn install_default(p: &Policy) -> Result<(), CryptoError> {
         .map_err(|_| CryptoError::Tls(TlsError::DefaultProviderInstalled))
 }
 
-/// Refuses a provider that does not carry exactly `p`'s suites, groups and schemes, in order.
+/// Refuses a provider that does not carry exactly `p`'s suites and groups in order and its
+/// schemes in the fixed preference order, or whose key provider is not the one
+/// `crypto_provider(p)` carries.
 pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<(), CryptoError> {
     let want = crypto_provider(p)?;
     let suites = |x: &CryptoProvider| {
@@ -212,6 +354,7 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
     if suites(provider) == suites(&want)
         && groups(provider) == groups(&want)
         && schemes(provider) == schemes(&want)
+        && std::ptr::addr_eq(provider.key_provider, want.key_provider)
     {
         Ok(())
     } else {
@@ -219,13 +362,15 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
     }
 }
 
-/// Loads a private key into a signing key. The key's algorithm is not checked against a policy
-/// in round 1; `docs/usage.md` names this.
+/// Loads a private key into a signing key that signs only with a scheme in
+/// `p.signature_schemes`. The key's algorithm is not checked against any profile;
+/// `Resolved::certified_key` checks it.
 #[expect(clippy::disallowed_methods)]
 pub fn load_private_key(
-    der: rustls::pki_types::PrivateKeyDer<'static>,
-) -> Result<Arc<dyn rustls::sign::SigningKey>, CryptoError> {
-    base_provider()
+    p: &Policy,
+    der: PrivateKeyDer<'static>,
+) -> Result<Arc<dyn SigningKey>, CryptoError> {
+    crypto_provider(p)?
         .key_provider
         .load_private_key(der)
         .map_err(|_| CryptoError::Tls(TlsError::PrivateKey))
@@ -347,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn verifiers_carry_the_policys_schemes() {
+    fn verifiers_carry_the_policys_schemes_in_the_canonical_order() {
         let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
@@ -362,7 +507,7 @@ mod tests {
             &[K::Secp384r1],
             &[T::Ed25519, T::EcdsaNistp384Sha384],
         );
-        let want: Vec<u16> = p.signature_schemes.iter().map(|t| t.iana()).collect();
+        let want = [T::EcdsaNistp384Sha384.iana(), T::Ed25519.iana()];
         let server_v = server_cert_verifier_builder(roots.clone(), &p)
             .unwrap()
             .build()
@@ -669,11 +814,255 @@ mod tests {
         );
     }
 
+    fn chosen(p: &Policy, a: S, offered: &[T]) -> Option<u16> {
+        let key = crate::signature::KeyPair::generate(a).unwrap();
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
+        let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t)).collect();
+        load_private_key(p, der)
+            .unwrap()
+            .choose_scheme(&offered)
+            .map(|s| cp(s.scheme().to_array()))
+    }
+
+    #[test]
+    fn a_loaded_key_signs_only_with_a_scheme_the_policy_lists() {
+        let rsa = |schemes: &[T]| {
+            policy(
+                &[V::Tls13],
+                &[C::Tls13Aes256GcmSha384],
+                &[K::Secp384r1],
+                schemes,
+            )
+        };
+        let offer = [T::RsaPssSha512, T::RsaPssSha384, T::RsaPssSha256];
+        let a = S::Rsa3072Sha384;
+        assert_eq!(chosen(&rsa(&T::ALL), a, &offer), Some(0x0806));
+        assert_eq!(chosen(&rsa(&[T::RsaPssSha384]), a, &offer), Some(0x0805));
+        assert_eq!(
+            chosen(&rsa(&[T::RsaPssSha256, T::RsaPssSha384]), a, &offer),
+            Some(0x0805)
+        );
+        assert_eq!(chosen(&rsa(&[T::RsaPkcs1Sha384]), a, &offer), None);
+        assert_eq!(
+            chosen(&rsa(&[T::MlDsa87]), S::EcdsaP384Sha384, &T::ALL),
+            None
+        );
+    }
+
+    #[derive(Debug)]
+    struct NotFips;
+
+    impl KeyProvider for NotFips {
+        fn load_private_key(
+            &self,
+            _: PrivateKeyDer<'static>,
+        ) -> Result<Arc<dyn SigningKey>, rustls::Error> {
+            Err(rustls::Error::General("not used".to_string()))
+        }
+    }
+
+    fn keys(schemes: &[T]) -> &'static PolicyKeyProvider {
+        tables(&scheme_set(schemes).unwrap()).unwrap().keys
+    }
+
+    #[test]
+    fn the_key_provider_is_fips_exactly_when_its_base_is() {
+        let wrap = |base: &'static dyn KeyProvider| PolicyKeyProvider { base, schemes: &[] };
+        assert!(!wrap(&NotFips).fips());
+        assert!(wrap(base_provider().key_provider).fips());
+        assert!(keys(&T::ALL).fips());
+    }
+
+    #[test]
+    fn a_provider_with_another_key_provider_is_drift() {
+        let p = one13(K::Secp384r1);
+        let stock = CryptoProvider {
+            key_provider: base_provider().key_provider,
+            ..crypto_provider(&p).unwrap()
+        };
+        assert_eq!(
+            assert_provider_matches(&stock, &p),
+            Err(CryptoError::PolicyDrift)
+        );
+        let other = CryptoProvider {
+            key_provider: keys(&[T::Ed25519]),
+            ..crypto_provider(&p).unwrap()
+        };
+        assert_eq!(
+            assert_provider_matches(&other, &p),
+            Err(CryptoError::PolicyDrift)
+        );
+    }
+
+    fn subsets() -> impl Iterator<Item = Vec<T>> {
+        (1u16..1 << T::ALL.len()).map(|m| {
+            T::ALL
+                .into_iter()
+                .enumerate()
+                .filter(|(i, _)| m & (1 << i) != 0)
+                .map(|(_, t)| t)
+                .collect()
+        })
+    }
+
+    fn with_schemes(schemes: Vec<T>) -> Policy {
+        Policy {
+            signature_schemes: schemes,
+            ..one13(K::Secp384r1)
+        }
+    }
+
+    #[test]
+    fn the_first_duplicate_in_any_list_is_refused_in_family_order() {
+        let p = one13(K::Secp384r1);
+        let versions = Policy {
+            versions: vec![V::Tls13, V::Tls12, V::Tls13],
+            cipher_suites: vec![C::Tls13Aes256GcmSha384, C::Tls13Aes256GcmSha384],
+            ..p.clone()
+        };
+        let suites = Policy {
+            cipher_suites: vec![
+                C::Tls13Aes256GcmSha384,
+                C::Tls13Aes128GcmSha256,
+                C::Tls13Aes128GcmSha256,
+                C::Tls13Aes256GcmSha384,
+            ],
+            kx_groups: vec![K::Secp384r1, K::Secp384r1],
+            ..p.clone()
+        };
+        let groups = Policy {
+            kx_groups: vec![K::MlKem1024, K::Secp384r1, K::MlKem1024],
+            signature_schemes: vec![T::Ed25519, T::Ed25519],
+            ..p.clone()
+        };
+        for (q, a) in [
+            (versions, Algorithm::Protocol(V::Tls13)),
+            (suites, Algorithm::Cipher(C::Tls13Aes128GcmSha256)),
+            (groups, Algorithm::Kx(K::MlKem1024)),
+        ] {
+            assert_eq!(
+                crypto_provider(&q).err(),
+                Some(CryptoError::PolicyDuplicate(a)),
+                "{q:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_duplicate_is_refused_before_an_unavailable_algorithm() {
+        let p = one13(K::Secp384r1);
+        let none = |a: Algorithm| Err(CryptoError::Unavailable(a));
+        for (q, a) in [
+            (
+                Policy {
+                    versions: vec![V::Tls13, V::Tls13],
+                    ..p.clone()
+                },
+                Algorithm::Protocol(V::Tls13),
+            ),
+            (
+                Policy {
+                    cipher_suites: vec![C::Tls13Aes256GcmSha384; 2],
+                    ..p.clone()
+                },
+                Algorithm::Cipher(C::Tls13Aes256GcmSha384),
+            ),
+            (
+                Policy {
+                    kx_groups: vec![K::Secp384r1; 2],
+                    ..p.clone()
+                },
+                Algorithm::Kx(K::Secp384r1),
+            ),
+            (
+                Policy {
+                    signature_schemes: vec![T::MlDsa87; 2],
+                    ..p.clone()
+                },
+                Algorithm::Scheme(T::MlDsa87),
+            ),
+        ] {
+            assert_eq!(
+                validate(&q, none).err(),
+                Some(CryptoError::PolicyDuplicate(a)),
+                "{q:?}"
+            );
+        }
+        assert_eq!(
+            validate(&p, none).err(),
+            Some(CryptoError::Unavailable(Algorithm::Protocol(V::Tls13)))
+        );
+    }
+
+    #[test]
+    fn a_duplicate_scheme_is_refused_where_the_policy_enters() {
+        let roots = Arc::new(rustls::RootCertStore::empty());
+        let dup = with_schemes(vec![T::Ed25519, T::EcdsaNistp384Sha384, T::Ed25519]);
+        let want = Some(CryptoError::PolicyDuplicate(Algorithm::Scheme(T::Ed25519)));
+        assert_eq!(crypto_provider(&dup).err(), want);
+        assert_eq!(client_builder(&dup).err(), want);
+        assert_eq!(server_builder(&dup).err(), want);
+        assert_eq!(
+            server_cert_verifier_builder(roots.clone(), &dup).err(),
+            want
+        );
+        assert_eq!(client_cert_verifier_builder(roots, &dup).err(), want);
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(b"not a key".to_vec().into());
+        assert_eq!(load_private_key(&dup, der).err(), want);
+    }
+
+    #[test]
+    fn every_profile_lists_its_schemes_in_the_canonical_order() {
+        assert_eq!(
+            crate::Profile::Unrestricted.spec().signature_schemes.len(),
+            T::ALL.len()
+        );
+        for p in crate::Profile::ALL {
+            let s = p.spec().signature_schemes;
+            assert_eq!(scheme_set(s).unwrap().ordered, s, "{p}");
+        }
+    }
+
+    #[test]
+    fn a_permuted_policy_builds_the_same_provider() {
+        let q = with_schemes(vec![T::Ed25519, T::RsaPssSha384, T::EcdsaNistp384Sha384]);
+        let r = with_schemes(vec![T::RsaPssSha384, T::EcdsaNistp384Sha384, T::Ed25519]);
+        assert_eq!(
+            assert_provider_matches(&crypto_provider(&q).unwrap(), &r),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn retained_cache_state_is_bounded_by_the_distinct_scheme_sets() {
+        for s in subsets() {
+            crypto_provider(&with_schemes(s)).unwrap();
+        }
+        let sets = (1 << T::ALL.len()) - 1;
+        assert_eq!(cache_len(), sets);
+        for s in subsets() {
+            let mut rev = s.clone();
+            rev.reverse();
+            let mut rot = s.clone();
+            rot.rotate_left(1);
+            crypto_provider(&with_schemes(rev)).unwrap();
+            crypto_provider(&with_schemes(rot)).unwrap();
+            crypto_provider(&with_schemes(s.clone())).unwrap();
+            let mut dup = s.clone();
+            dup.push(s[0]);
+            assert_eq!(
+                crypto_provider(&with_schemes(dup)).err(),
+                Some(CryptoError::PolicyDuplicate(Algorithm::Scheme(s[0])))
+            );
+        }
+        assert_eq!(cache_len(), sets);
+    }
+
     #[test]
     fn load_private_key_refuses_garbage() {
         let der = rustls::pki_types::PrivateKeyDer::Pkcs8(b"not a key".to_vec().into());
         assert_eq!(
-            load_private_key(der).err(),
+            load_private_key(&one13(K::Secp384r1), der).err(),
             Some(CryptoError::Tls(TlsError::PrivateKey))
         );
     }
