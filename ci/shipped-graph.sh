@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
-tree() { cargo tree -p crypto-profile-awslc4 --locked --target all $features "$@"; }
+tree() { cargo tree -p crypto-profile-awslc4 --locked --color never --target all $features "$@"; }
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 for features in "" "--all-features"; do
