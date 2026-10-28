@@ -1,4 +1,5 @@
 //! Shared conformance data and helpers for `crypto-profile` backends.
+use crate::{Algorithm, CryptoError, Module, SignatureAlgorithm, TlsSignatureScheme, capability};
 
 #[doc(hidden)]
 pub mod golden;
@@ -119,9 +120,104 @@ pub fn __cavp_short(file: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
     out
 }
 
+/// The handshake schemes a test peer offers on `module`: every scheme the module has.
+#[doc(hidden)]
+pub fn __peer_schemes(module: Module) -> Vec<TlsSignatureScheme> {
+    TlsSignatureScheme::ALL
+        .into_iter()
+        .filter(|t| capability(module, Algorithm::Scheme(*t)).available)
+        .collect()
+}
+
+/// What a handshake whose server key is a fresh `key` gives when the client lists no scheme for
+/// it: `no_scheme`, or, on a module without `key`, the refusal to generate that key.
+#[doc(hidden)]
+pub fn __unlisted_key(
+    module: Module,
+    key: SignatureAlgorithm,
+    no_scheme: &str,
+) -> Result<u16, String> {
+    let a = Algorithm::Signature(key);
+    if capability(module, a).available {
+        Err(no_scheme.to_string())
+    } else {
+        Err(CryptoError::Unavailable(a).to_string())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Linkage, ModuleLine, Options};
+
+    const M3S: Module = Module {
+        line: ModuleLine::AwsLcFips3,
+        linkage: Linkage::Static,
+    };
+    const M3D: Module = Module {
+        line: ModuleLine::AwsLcFips3,
+        linkage: Linkage::Dynamic,
+    };
+    const M4S: Module = Module {
+        line: ModuleLine::AwsLcFips4,
+        linkage: Linkage::Static,
+    };
+    const M4D: Module = Module {
+        line: ModuleLine::AwsLcFips4,
+        linkage: Linkage::Dynamic,
+    };
+
+    #[test]
+    fn the_profile_suite_hands_a_3x_module_only_what_it_has() {
+        let ml_dsa = SignatureAlgorithm::MlDsa87;
+        for m in [M3S, M3D] {
+            assert!(
+                __peer_schemes(m)
+                    .iter()
+                    .all(|t| capability(m, Algorithm::Scheme(*t)).available),
+                "{m:?}"
+            );
+            let missing: Vec<Algorithm> = Algorithm::all()
+                .into_iter()
+                .filter(|a| !capability(m, *a).available)
+                .collect();
+            assert_eq!(
+                missing,
+                [
+                    Algorithm::Signature(ml_dsa),
+                    Algorithm::Scheme(TlsSignatureScheme::MlDsa87)
+                ],
+                "{m:?}"
+            );
+            for g in golden::GOLDEN {
+                let o = Options {
+                    pq_key_exchange_required: g.pq,
+                };
+                if g.schemes.contains(&0x0906) || g.keys.contains(&"ml-dsa-87") {
+                    assert!(golden::expected(m, g.profile, o).is_err(), "{m:?} {o}");
+                }
+            }
+            assert_eq!(
+                __unlisted_key(m, ml_dsa, "no scheme"),
+                Err("Signature(MlDsa87) is not available on this backend's module".to_string())
+            );
+            assert_eq!(
+                __unlisted_key(m, SignatureAlgorithm::Ed25519, "no scheme"),
+                Err("no scheme".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn the_profile_suite_helpers_change_nothing_on_4x() {
+        for m in [M4S, M4D] {
+            assert_eq!(__peer_schemes(m), TlsSignatureScheme::ALL);
+            assert_eq!(
+                __unlisted_key(m, SignatureAlgorithm::MlDsa87, "no scheme"),
+                Err("no scheme".to_string())
+            );
+        }
+    }
 
     #[test]
     fn cavp_short_honours_len() {

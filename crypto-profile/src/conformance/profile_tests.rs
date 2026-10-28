@@ -13,6 +13,7 @@ macro_rules! __conformance_profile_tests {
             TlsVersion as V,
         };
         use $crate::conformance::golden::{GOLDEN, expected};
+        use $crate::conformance::{__peer_schemes, __unlisted_key};
 
         const PQ: Options = Options {
             pq_key_exchange_required: true,
@@ -32,7 +33,7 @@ macro_rules! __conformance_profile_tests {
                 versions: vec![v],
                 cipher_suites: vec![c],
                 kx_groups: k.to_vec(),
-                signature_schemes: T::ALL.to_vec(),
+                signature_schemes: __peer_schemes(MODULE),
             }
         }
 
@@ -268,7 +269,10 @@ macro_rules! __conformance_profile_tests {
                         })
                     );
                 }
-                assert_eq!(verifies(&b.tls, S::MlDsa87), err(NO_SCHEME));
+                assert_eq!(
+                    verifies(&b.tls, S::MlDsa87),
+                    __unlisted_key(MODULE, S::MlDsa87, NO_SCHEME)
+                );
                 assert_eq!(verifies(&b.tls, S::Ed25519), err(NO_SCHEME));
             }
         }
@@ -320,7 +324,10 @@ macro_rules! __conformance_profile_tests {
             if let Some(one) = &one {
                 assert_eq!(served(&mlkem, one, |n| n.kx.iana()), err(NO_GROUP));
                 assert_eq!(served(&p384, one, |n| n.kx.iana()), Ok(0x0018));
-                assert_eq!(verifies(&one.tls, S::MlDsa87), err(NO_SCHEME));
+                assert_eq!(
+                    verifies(&one.tls, S::MlDsa87),
+                    __unlisted_key(MODULE, S::MlDsa87, NO_SCHEME)
+                );
                 assert_eq!(
                     one.admit_key(S::MlDsa87),
                     Err(CryptoError::KeyNotInProfile {
@@ -389,7 +396,10 @@ macro_rules! __conformance_profile_tests {
             if let Some(b) = &b {
                 assert_eq!(served(&tls12(), b, |n| n.version.iana()), Ok(0x0303));
                 assert_eq!(served(&hybrid, b, |n| n.kx.iana()), err(NO_GROUP));
-                assert_eq!(verifies(&b.tls, S::MlDsa87), err(NO_SCHEME));
+                assert_eq!(
+                    verifies(&b.tls, S::MlDsa87),
+                    __unlisted_key(MODULE, S::MlDsa87, NO_SCHEME)
+                );
                 assert_eq!(
                     b.admit_key(S::MlDsa87),
                     Err(CryptoError::KeyNotInProfile {

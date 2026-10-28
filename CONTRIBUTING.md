@@ -88,7 +88,7 @@ A backend is a crate named for its module line. It must:
   crypto_profile::conformance_tests!(your_crate);
   ```
 
-The suite checks the backend against the known answers, walks every capability cell for its `MODULE`, and checks that the test binary's linkage matches `MODULE`. It checks each profile against the golden rows, and on a module that lacks an algorithm it asserts the `Unavailable` refusal rather than skipping the profile.
+The suite checks the backend against the known answers, walks every capability cell for its `MODULE`, and checks that the test binary's linkage matches `MODULE`. It checks each profile against the golden rows, and on a module that lacks an algorithm it asserts the `Unavailable` refusal rather than skipping the profile. The peers it builds offer only the module's algorithms, so a profile that resolves is still checked in full.
 
 `conformance_tests!` expands to `use your_crate::*;` and names these paths in your crate, so it compiles only if each exists with the shape `crypto-profile-awslc4` gives it (`crypto-profile/src/conformance/mod.rs`, `conformance_tests`):
 
