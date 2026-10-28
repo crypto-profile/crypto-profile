@@ -71,11 +71,11 @@ fn report_approval(r: &Resolved) -> Result<(), CryptoError> {
 
 | Profile | With the option |
 |---|---|
-| `unrestricted` | MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; TLS 1.3 and its three suites; eight schemes; all nine keys |
-| `preferred` | MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; otherwise unchanged |
+| `unrestricted` | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; TLS 1.3 and its three suites; eight schemes; all nine keys |
+| `preferred` | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; otherwise unchanged |
 | `cnsa2` | unchanged |
 | `cnsa1`, `bsi`, `fips1402` | refused: `EmptyProfile`, key-exchange groups |
-| `fips1403` | MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; TLS 1.3 and its two suites; eight schemes; all nine keys |
+| `fips1403` | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; TLS 1.3 and its two suites; eight schemes; all nine keys |
 
 ## 3. The profiles
 
@@ -88,7 +88,7 @@ Every list is in preference order. Schemes are the handshake signature schemes a
 | Family | Contents |
 |---|---|
 | Versions | TLS 1.3, TLS 1.2 |
-| Groups | MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768, secp384r1, secp256r1, x25519 |
+| Groups | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768, secp384r1, secp256r1, x25519 |
 | Suites | TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256, TLS_CHACHA20_POLY1305_SHA256; ECDHE-ECDSA and ECDHE-RSA with AES-256-GCM, AES-128-GCM and ChaCha20-Poly1305 |
 | Schemes | mldsa87, ecdsa_secp384r1_sha384, ecdsa_secp256r1_sha256, ecdsa_secp521r1_sha512, ed25519, rsa_pss_rsae_sha384, _sha512, _sha256, rsa_pkcs1_sha384, _sha512, _sha256 |
 | Keys | MlDsa87, EcdsaP384Sha384, EcdsaP256Sha256, EcdsaP521Sha512, EcdsaP521Sha384, Ed25519, Rsa3072Sha384, Rsa4096Sha384, Rsa2048Sha384 |
@@ -106,7 +106,7 @@ It differs from `fips1403` only in TLS: X25519 on its own and the ChaCha20-Poly1
 | Family | Contents | Source |
 |---|---|---|
 | Versions | TLS 1.3 | ISM-1139, p. 19 |
-| Groups | MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768, secp384r1, secp256r1 | ISM-1995, p. 10; hybrids: ISM p. 12, ISM-1996, p. 13, FIPS 140-3 IG D.S Scenario 2 and Additional Comment 8a; curves: ISM-1446, p. 7, ISM-0474 and ISM-1761, p. 8 |
+| Groups | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768, secp384r1, secp256r1 | ISM-1995, p. 10; hybrids: ISM p. 12, ISM-1996, p. 13, FIPS 140-3 IG D.S Scenario 2 and Additional Comment 8a; curves: ISM-1446, p. 7, ISM-0474 and ISM-1761, p. 8 |
 | Suites | TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256 | ISM-1369, p. 20; ISM-1769, p. 11 |
 | Schemes | mldsa87, ecdsa_secp384r1_sha384, ecdsa_secp256r1_sha256, ecdsa_secp521r1_sha512, rsa_pss_rsae_sha384, _sha512, _sha256 | ISM-1991, p. 9; ISM-1763, p. 8; ISM-1765, p. 10; ISM-1374, p. 20 |
 | Keys | MlDsa87, EcdsaP384Sha384, EcdsaP256Sha256, EcdsaP521Sha512, EcdsaP521Sha384, Rsa3072Sha384, Rsa4096Sha384 | ISM-1991, p. 9; ISM-1763, p. 8; ISM-1765, p. 10; ISM-1767, p. 11 |
@@ -119,7 +119,7 @@ Exclusions and their reasons:
 - **Ed25519:** EdDSA is not on the ISM's list of approved asymmetric algorithms (pp. 5-6).
 - **RSA PKCS#1 v1.5 handshake schemes:** TLS 1.3 forbids them in handshake signatures (RFC 8446 §4.2.3).
 - **RSA 2048 keys:** the ISM's SECRET-level minimum is 3072 bits (ISM-1765, p. 10).
-- **Hybrid groups are admitted, though the ISM does not recommend them:** "The use of post-quantum traditional hybrid schemes is not recommended; however, it is not prohibited" (p. 12). Each hybrid's ML-KEM-768 component is an approved algorithm, which is what ISM-1996 (p. 13) requires.
+- **Hybrid groups are admitted, though the ISM does not recommend them:** "The use of post-quantum traditional hybrid schemes is not recommended; however, it is not prohibited" (p. 12). Each hybrid has an approved ML-KEM component, which is what ISM-1996 (p. 13) requires: ML-KEM-1024 in SecP384r1MLKEM1024, ML-KEM-768 in the other two.
 
 ### `cnsa2`
 
@@ -186,13 +186,13 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 | Family | Contents |
 |---|---|
 | Versions | TLS 1.3, TLS 1.2 |
-| Groups | MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768, secp384r1, secp256r1 |
+| Groups | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768, secp384r1, secp256r1 |
 | Suites | TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256; ECDHE-ECDSA and ECDHE-RSA with AES-256-GCM and AES-128-GCM |
 | Schemes | mldsa87, ecdsa_secp384r1_sha384, ecdsa_secp256r1_sha256, ecdsa_secp521r1_sha512, ed25519, rsa_pss_rsae_sha384, _sha512, _sha256, rsa_pkcs1_sha384, _sha512, _sha256 |
 | Keys | all nine |
 
 - **Versions and suites:** SP 800-52r2 §3.1 (p. 8), §3.3.1.1.1-2 (pp. 16-17), §3.3.1.2 (p. 19), §4.1 (p. 33). TLS 1.2 requires Extended Master Secret (IG D.Q, pp. 220-221); rustls enforces it for a FIPS-classified configuration.
-- **Groups:** ML-KEM-1024, CMVP SP 800-140D list §6.2.10 and IG D.S Scenario 1 (p. 223); the hybrids, IG D.S Scenario 2 and Additional Comment 8a (pp. 223-226); the NIST curves, SP 800-56A r3 Appendix D, Table 24 (p. 132).
+- **Groups:** ML-KEM-1024, CMVP SP 800-140D list §6.2.10 and IG D.S Scenario 1 (p. 223); the hybrids SecP384r1MLKEM1024, X25519MLKEM768 and SecP256r1MLKEM768, IG D.S Scenario 2 and Additional Comment 8a (pp. 223-226), which name exactly these three; the NIST curves, SP 800-56A r3 Appendix D, Table 24 (p. 132).
 - **Signatures:** ECDSA, EdDSA and ML-DSA, CMVP SP 800-140C list §6.2.3.1; Ed25519, IG C.A (p. 136) and IG C.K Additional Comment 8 (p. 161); RSA-PSS and PKCS#1 v1.5 with SHA-256, 384 and 512 and RSA 2048 to 4096, FIPS 186-5 §5.1 and §5.4, IG C.F (pp. 142-143), SP 800-131A r2 Table 2 (p. 9).
 - **EcdsaP521Sha384:** FIPS 186-5 §6.4 (pp. 23-24) requires both the hash's and the curve's security strength to "meet or exceed the security strength required for the digital signature process", so SHA-384 with P-521 is permitted only where the signature needs 192 bits of strength or less. The same section says a weaker hash than the curve "ordinarily should not be used".
 - **Excluded:** X25519 on its own (IG C.K Resolution 5, p. 160) and ChaCha20-Poly1305 (SP 800-140C r2 §6.1; SP 800-52r2 §3.3.1.2).
@@ -224,13 +224,13 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 3. **`bsi` and the hybrid groups.** TR-02102-2 (2026-01) §3.4.2, in the Table 10 note, states BSI's intent to recommend SecP256r1MLKEM768 and SecP384r1MLKEM1024 once the corresponding RFC is adopted. RFC 10024 has since been published (August 2026), but no edition of TR-02102-2 lists the hybrids, so `bsi` does not offer them, and `bsi` with the option is empty. The profile waits on a new edition; a statement of intent is not admitted.
 4. **`fips1402` and the CMVP Historical list.** Every FIPS 140-2 certificate moved to the CMVP Historical list on 22 September 2026. `fips1402` is historical: it serves peers whose boundary is still 140-2.
 5. **The SP 800-131A r3 draft.** The initial public draft (October 2024) deprecates 112-bit classical algorithms after 2030. It is a draft and affects no profile until it is final.
-6. **Brainpool, AES-CCM and P-521 key exchange.** TR-02102-2 lists all three, and SP 800-52r2 lists AES-CCM suites and permits P-521 (§3.4.2.2), but rustls 0.23.46 implements none of them, so no profile lists them. SecP384r1MLKEM1024 is likewise absent from rustls's aws-lc-rs provider.
+6. **Brainpool, AES-CCM and P-521 key exchange.** TR-02102-2 lists all three, and SP 800-52r2 lists AES-CCM suites and permits P-521 (§3.4.2.2), but the crate's provider implements none of them, as rustls 0.23.46's built-in provider did not, so no profile lists them.
 7. **Composite certificates.** Composite (hybrid) ML-DSA certificates do not exist in the stack. When they do, a second option, "post-quantum signatures required", is a separate design.
 8. **ECDSA P-521 with SHA-384.** `fips1402` and `fips1403` admit `EcdsaP521Sha384`, though FIPS 186-4 §6.4 and FIPS 186-5 §6.4 say a hash weaker than the curve "ordinarily should not be used"; FIPS 186-5 §6.4 permits the pairing only where the signature needs 192 bits of strength or less. `preferred` admits it under ISM-1763 (p. 8) and ISM-1767 (p. 11); `bsi` does not.
 
 ## 5. What a profile does not restrict
 
-- **Certificate-chain signature algorithms.** The verifiers keep rustls's full list for signatures on certificates (`WebPkiSupportedAlgorithms::all`); a profile narrows only the handshake signature. Under every profile the list is: ECDSA on P-256, P-384 and P-521, each with SHA-256, SHA-384 and SHA-512; Ed25519; RSA-PSS and RSA PKCS#1 v1.5 with SHA-256, SHA-384 and SHA-512, moduli 2048 to 8192 bits; and ML-DSA-44, ML-DSA-65 and ML-DSA-87 (`rustls-0.23.46/src/crypto/aws_lc_rs/mod.rs:159-183`). So no regime profile (`cnsa2`, `cnsa1`, `bsi`, `fips1403`, `fips1402`) restricts the chain to its text; each profile's section says what that admits. An Ed25519-signed CA chain is accepted under `fips1402`, which admits no Ed25519 scheme (test `conformance_profiles::a_profile_does_not_restrict_the_chain_signature`, `crypto-profile/src/conformance/profile_tests.rs`). The opt-in option planned in section 4, item 1, would restrict the chain as well as the leaf; it will be off by default, because the transition expects mixed and hybrid chains.
+- **Certificate-chain signature algorithms.** The verifiers keep rustls's full list for signatures on certificates (`WebPkiSupportedAlgorithms::all`); a profile narrows only the handshake signature. Under every profile the list is: ECDSA on P-256, P-384 and P-521, each with SHA-256, SHA-384 and SHA-512; Ed25519; RSA-PSS and RSA PKCS#1 v1.5 with SHA-256, SHA-384 and SHA-512, moduli 2048 to 8192 bits; and ML-DSA-44, ML-DSA-65 and ML-DSA-87 (`crypto-profile/src/provider/verify.rs` and the 4.x arms, `crypto-profile-awslc4/src/provider_arms.rs`), the same list as rustls 0.23.46's built-in provider (tests `the_verification_tables_match_the_reference`, `every_verifier_accepts_and_refuses_as_the_reference`). So no regime profile (`cnsa2`, `cnsa1`, `bsi`, `fips1403`, `fips1402`) restricts the chain to its text; each profile's section says what that admits. An Ed25519-signed CA chain is accepted under `fips1402`, which admits no Ed25519 scheme (test `conformance_profiles::a_profile_does_not_restrict_the_chain_signature`, `crypto-profile/src/conformance/profile_tests.rs`). The opt-in option planned in section 4, item 1, would restrict the chain as well as the leaf; it will be off by default, because the transition expects mixed and hybrid chains.
 - **The peer leaf's key size and curve** (section 4, item 1).
 - **A signing key built outside the profile's provider.** A key loaded through `tls::load_private_key`, `Resolved::certified_key` or the builder's own key loading signs only with the profile's schemes. A `rustls::sign::SigningKey` built any other way signs with whatever scheme rustls picks from the peer's offer and the key's type.
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** It is not checked against any profile; `Resolved::certified_key` checks it.
@@ -249,8 +249,8 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
   - A7855 (SHA_AVX2) and A7856 (SHA_AVX) are x86 variants, tested on Intel Ice Lake and AMD Genoa. Every capability the A7855 cells cite appears, with the same parameters, on the arm64 certificates A7871 (SHA_CE) and A7872 (NEON). The ECDSA and RSA SigVer (FIPS186-5) capabilities the A7856 cells cite appear with the same parameters on A7872; A7871's FIPS186-5 SigVer capabilities list SHA3 hashes only.
   - A7864 (GENERIC_C) lists Intel Ice Lake, AMD Genoa and AWS Graviton4 for each capability its cells cite.
   - A7873 (NARROW_MULTIPLIER) is an arm64 variant, tested on AWS Graviton4 only.
-- **The 4.x dynamic build:** 22 cells are `AlgorithmTested`: the three RSA keys on A7873; the ML-DSA-87 and Ed25519 keys and schemes, ML-KEM-1024 and SHA-256, SHA-384 and SHA-512 on A7855; the three ECDSA and six RSA handshake schemes on A7856; secp384r1 and secp256r1 on A7864. 18 are `Unverified`, by reason:
-  - X25519 and the two hybrid groups: CAVP has no algorithm for them;
+- **The 4.x dynamic build:** 22 cells are `AlgorithmTested`: the three RSA keys on A7873; the ML-DSA-87 and Ed25519 keys and schemes, ML-KEM-1024 and SHA-256, SHA-384 and SHA-512 on A7855; the three ECDSA and six RSA handshake schemes on A7856; secp384r1 and secp256r1 on A7864. 19 are `Unverified`, by reason:
+  - X25519 and the three hybrid groups: CAVP has no algorithm for them;
   - the nine cipher suites: no ChaCha20 certificate exists, and no single certificate shows every operation the AES-GCM suites need;
   - TLS 1.2 and TLS 1.3: no certificate shows a TLS 1.2 KDF with extended master secret or a TLS 1.3 KDF;
   - the four ECDSA keys: no single certificate shows every operation they need.
@@ -265,7 +265,7 @@ What each issuer's text says about the years after 2030, and which profile, with
 | Issuer and text | The dates, as written | Profile |
 |---|---|---|
 | **US:** CNSSP 15 (December 2024), ¶18 (pp. 7-8; the dates are on p. 8) [^us] | CNSA 1.0 algorithms "are acceptable in all products through 31 December 2025". From 1 January 2027, CNSA 2.0 algorithms "will be required in all new products and services", unless excepted or waived. Equipment that cannot be updated is phased out "by 31 December 2030". CNSA 2.0 algorithms "are mandated for all protocol use by 31 December 2031". Transition complete by 2035 (NSM-10). | `cnsa2` carries the Annex B entries that apply to TLS (pp. B-1 to B-2): ML-KEM-1024, ML-DSA-87, and AES-256 with SHA-384. It does not use SHA-512, which no RFC 8446 cipher suite uses, or LMS, XMSS and SHA3, which the table allows only for software and firmware signatures and internal hardware functionality. The option changes nothing. Its TLS 1.3 mapping is the crate's, because no CNSA 2.0 TLS profile is published (¶8a, footnote 1, p. 5). `cnsa1` carries the part of the CNSA 1.0 set that ¶18 phases out which applies to TLS and which rustls implements: AES-256, ECDH and ECDSA on P-384, SHA-384, and RSA signatures with 3072- and 4096-bit moduli; not finite-field DH or RSA key establishment (section 4, item 2). Neither restricts certificate-chain signatures (section 5). |
-| **Australia:** ASD ISM, Guidelines for cryptography (September 2026) [^au] | DH, ECDH, ECDSA and RSA "will not be approved beyond 2030" (DH p. 7; ECDH and ECDSA p. 8; RSA p. 10); ML-DSA-65 (p. 9), ML-KEM-768 (p. 10), SHA-224 and SHA-256, and AES-128 and AES-192 (p. 11) likewise. ISM-1917 (p. 12): new equipment, applications and libraries support ML-DSA-87, ML-KEM-1024, SHA-384, SHA-512 and AES-256 "by no later than 2030". | Of the five algorithms ISM-1917 names, `cnsa2` carries ML-DSA-87, ML-KEM-1024, SHA-384 and AES-256. It does not use SHA-512, which no RFC 8446 cipher suite uses. |
+| **Australia:** ASD ISM, Guidelines for cryptography (September 2026) [^au] | DH, ECDH, ECDSA and RSA "will not be approved beyond 2030" (DH p. 7; ECDH and ECDSA p. 8; RSA p. 10); ML-DSA-65 (p. 9), ML-KEM-768 (p. 10), SHA-224 and SHA-256, and AES-128 and AES-192 (p. 11) likewise. ISM-1917 (p. 12): new equipment, applications and libraries support ML-DSA-87, ML-KEM-1024, SHA-384, SHA-512 and AES-256 "by no later than 2030". | Of the five algorithms ISM-1917 names, `cnsa2` carries ML-DSA-87, ML-KEM-1024, SHA-384 and AES-256. It does not use SHA-512, which no RFC 8446 cipher suite uses. Of the hybrid groups, only SecP384r1MLKEM1024 keeps an ISM-1917 component after 2030 (ML-KEM-1024), so it is the hybrid that stays eligible under ISM-1996 (p. 13), which needs one approved component; ML-KEM-768, the other hybrids' component, is not approved beyond 2030 (p. 10). This is derived from the text, not stated by ASD. `preferred` and `unrestricted` carry it. |
 | **EU:** EU PQC Workstream of the NIS Cooperation Group, *A Coordinated Implementation Roadmap for the Transition to Post-Quantum Cryptography*, Part 1, v1.1 (11.06.2025), §4.1 [^eu] | By 31.12.2026, first steps and national roadmaps. By 31.12.2030, the transition of high-risk use cases completed, and quantum-safe software and firmware upgrades enabled by default. By 31.12.2035, medium-risk use cases completed, and low-risk ones as far as feasible. | The text names no algorithm set. |
 | **UK:** NCSC, *Timelines for migration to post-quantum cryptography* (v1.0, 2025; PDF of August 2026) [^uk1] | By 2028, discovery and an initial plan. By 2031, the highest-priority migration. By 2035, migration complete. The dates are indicative. | The text names no algorithm set. NCSC's *Using TLS to protect data* v1.2 (15 October 2026) [^uk2] names hybrid and pure ML-KEM TLS groups and keeps AES-128-GCM, as a current recommendation rather than an end state. |
 | **Germany:** BSI TR-02102-2 and TR-02102-1, version 2026-01 [^de] | TLS 1.2 to the end of 2031 (TR-02102-2 Table 2). Classical key agreement alone to the end of 2031 (Table 10 note; TR-02102-1). Classical signatures alone to the end of 2035 (TR-02102-1). | To the end of 2031, `bsi` carries the TR-02102-2 TLS entries that rustls implements; Brainpool, AES-CCM and P-521 key exchange, which the TR lists, are absent (section 4, item 6). For key exchange after 2031 the text names no algorithm set: the edition lists no post-quantum TLS group, so no profile with the option matches it. |

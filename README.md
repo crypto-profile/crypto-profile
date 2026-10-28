@@ -76,6 +76,8 @@ at your option.
 
 AWS-LC, which this crate links, carries its own terms, including the OpenSSL licence for parts of the FIPS module. Anyone distributing binaries is responsible for its notices.
 
+The provider ports code from rustls (MIT) and rustls-webpki (ISC); their notices are in [`crypto-profile/LICENSE-THIRD-PARTY`](crypto-profile/LICENSE-THIRD-PARTY), and each published package carries an identical copy.
+
 ### Contribution
 
 Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.

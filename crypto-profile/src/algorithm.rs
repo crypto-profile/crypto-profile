@@ -94,9 +94,10 @@ impl SignatureAlgorithm {
     /// An ECDSA, Ed25519 or ML-DSA key has no other scheme. An RSA key's scheme comes from the
     /// peer's offer, whatever the key's CSR was signed with: rustls signs with the first of RSA-PSS
     /// with SHA-512, SHA-384 and SHA-256, then PKCS#1 v1.5 with SHA-512, SHA-384 and SHA-256, that
-    /// the peer offers (`rustls-0.23.46/src/crypto/aws_lc_rs/sign.rs:104-111,137-142`), and TLS 1.3
-    /// admits only the RSA-PSS ones (`src/enums.rs:554-579`). So an RSA key signs with RSA-PSS with
-    /// SHA-384 only when the peer offers it and does not offer RSA-PSS with SHA-512.
+    /// the peer offers (`RSA_SCHEMES` in `crypto-profile/src/provider/sign.rs`, the order rustls
+    /// 0.23.46 uses), and TLS 1.3 admits only the RSA-PSS ones (`src/enums.rs:554-579`). So an RSA
+    /// key signs with RSA-PSS with SHA-384 only when the peer offers it and does not offer RSA-PSS
+    /// with SHA-512.
     pub const fn tls_scheme(self) -> TlsSignatureScheme {
         match self {
             SignatureAlgorithm::MlDsa87 => TlsSignatureScheme::MlDsa87,
@@ -327,6 +328,8 @@ impl CipherSuite {
 pub enum KxGroup {
     /// ML-KEM-1024 (FIPS 203).
     MlKem1024,
+    /// The P-384 + ML-KEM-1024 hybrid (RFC 10024 §4.1-4.3; codepoint §7.3).
+    Secp384r1MlKem1024,
     /// The X25519 + ML-KEM-768 hybrid.
     X25519MlKem768,
     /// The P-256 + ML-KEM-768 hybrid.
@@ -343,7 +346,10 @@ impl KxGroup {
     /// Whether the group's key exchange includes ML-KEM: pure ML-KEM or a hybrid.
     pub const fn is_post_quantum(self) -> bool {
         match self {
-            KxGroup::MlKem1024 | KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 => true,
+            KxGroup::MlKem1024
+            | KxGroup::Secp384r1MlKem1024
+            | KxGroup::X25519MlKem768
+            | KxGroup::Secp256r1MlKem768 => true,
             KxGroup::Secp384r1 | KxGroup::Secp256r1 | KxGroup::X25519 => false,
         }
     }
@@ -352,6 +358,7 @@ impl KxGroup {
     pub const fn iana(self) -> u16 {
         match self {
             KxGroup::MlKem1024 => 0x0202,
+            KxGroup::Secp384r1MlKem1024 => 0x11ED,
             KxGroup::X25519MlKem768 => 0x11EC,
             KxGroup::Secp256r1MlKem768 => 0x11EB,
             KxGroup::Secp384r1 => 0x0018,
@@ -361,8 +368,9 @@ impl KxGroup {
     }
 
     /// Every key-exchange group.
-    pub const ALL: [KxGroup; 6] = [
+    pub const ALL: [KxGroup; 7] = [
         KxGroup::MlKem1024,
+        KxGroup::Secp384r1MlKem1024,
         KxGroup::X25519MlKem768,
         KxGroup::Secp256r1MlKem768,
         KxGroup::Secp384r1,
@@ -375,11 +383,12 @@ impl KxGroup {
     pub(crate) const fn ordinal(self) -> usize {
         match self {
             KxGroup::MlKem1024 => 0,
-            KxGroup::X25519MlKem768 => 1,
-            KxGroup::Secp256r1MlKem768 => 2,
-            KxGroup::Secp384r1 => 3,
-            KxGroup::Secp256r1 => 4,
-            KxGroup::X25519 => 5,
+            KxGroup::Secp384r1MlKem1024 => 1,
+            KxGroup::X25519MlKem768 => 2,
+            KxGroup::Secp256r1MlKem768 => 3,
+            KxGroup::Secp384r1 => 4,
+            KxGroup::Secp256r1 => 5,
+            KxGroup::X25519 => 6,
         }
     }
 }
@@ -509,7 +518,7 @@ mod tests {
     fn post_quantum_groups_are_the_ml_kem_ones() {
         assert_eq!(
             KxGroup::ALL.map(KxGroup::is_post_quantum),
-            [true, true, true, false, false, false]
+            [true, true, true, true, false, false, false]
         );
     }
 
@@ -598,7 +607,7 @@ mod tests {
         );
         assert_eq!(
             K::ALL.map(K::iana),
-            [0x0202, 0x11EC, 0x11EB, 0x0018, 0x0017, 0x001D]
+            [0x0202, 0x11ED, 0x11EC, 0x11EB, 0x0018, 0x0017, 0x001D]
         );
         assert_eq!(
             T::ALL.map(T::iana),
@@ -647,7 +656,7 @@ mod tests {
             + HashAlgorithm::ALL.len()
             + TlsVersion::ALL.len();
         assert_eq!(all.len(), expected);
-        assert_eq!(expected, 9 + 11 + 6 + 9 + 3 + 2);
+        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2);
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
@@ -681,7 +690,7 @@ mod tests {
     fn kx_group_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
             KxGroup::ALL.map(KxGroup::ordinal),
-            std::array::from_fn::<usize, 6, _>(|i| i)
+            std::array::from_fn::<usize, 7, _>(|i| i)
         );
     }
 

@@ -17,22 +17,27 @@ These rules apply to every contributor, human or AI-assisted. [`docs/usage.md`](
 
 ## 2. The gates
 
-CI runs these on every pull request. While the repository is private, CI runs formatting, clippy, cargo-deny, the MSRV check, the Linux x86_64 tests on both linkages and the DCO check; run coverage, mutation testing, and the macOS and arm64 tests locally before you open a pull request.
+CI runs these on every pull request. While the repository is private, CI runs formatting, clippy, cargo-deny, the shipped-graph check, the provider module-list check, the OpenSSL interop test, the MSRV check, the Linux x86_64 tests on both linkages and the DCO check; run coverage, mutation testing, and the macOS and arm64 tests locally before you open a pull request.
 
 | Gate | Command |
 |---|---|
 | Formatting | `cargo fmt --all --check` |
+| Formatting, provider source | `rustfmt --check --edition 2024 crypto-profile/src/provider/mod.rs` |
 | Lints | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
+| Lints, provider source | `RUSTFLAGS="--cfg crypto_profile_provider_direct" cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | Supply chain | `cargo deny --locked check` |
+| Shipped graph | `ci/shipped-graph.sh` |
+| Provider module list refuses a bad `mod.rs` | `ci/provider-build-negative.sh` |
+| Interop, OpenSSL ≥ 3.5 | `ci/openssl-interop.sh` |
 | Tests, static | `cargo test --workspace --all-features --locked` |
 | Tests, dynamic | `AWS_LC_FIPS_SYS_STATIC=0 cargo test --workspace --all-features --locked` |
-| Coverage | `cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support\|conformance)'` |
+| Coverage | `RUSTFLAGS="--cfg crypto_profile_provider_direct" cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support\|conformance)'` |
 | Mutation | `cargo mutants --workspace` |
 | Docs | `cargo doc --workspace --all-features --no-deps`, with no warnings |
 
 `--all-features` matters: the conformance suite needs the backend's `test-support` feature and is skipped without it.
 
-`clippy.toml` refuses rustls's stock-provider entry points (`disallowed-methods`). Code that has to call one, as `crypto-profile-awslc4/src/tls.rs` does to build a provider from a policy, carries `#[expect(clippy::disallowed_methods)]` on that function and nowhere wider.
+`clippy.toml` refuses rustls's stock-provider entry points (`disallowed-methods`). Code that has to call one, as `crypto-profile-awslc4/src/tls.rs` does to build a provider from a policy, carries `#[expect(clippy::disallowed_methods)]` on that function and nowhere wider. The stock-provider entries carry `allow-invalid`, because the library builds without rustls's provider and they resolve only where the dev-dependency brings it in; `crypto-profile-awslc4/tests/differential.rs` calls them under `#[expect]`. The provider's source is linted only in the direct build ("Lints, provider source"); inside the macro expansion clippy sees nothing ([decision 0005](docs/decisions/0005-provider-source.md)).
 
 ## 3. The quality bar
 
@@ -40,6 +45,8 @@ One bar for all shipped code ([decision 0003](docs/decisions/0003-quality-bar.md
 
 - at least **95% line coverage**;
 - **0 missed mutants** from `cargo mutants`.
+
+Use cargo-mutants 27.1.0 and cargo-llvm-cov 0.8.7, the versions CI pins.
 
 The test infrastructure (`crypto-profile-awslc4/src/test_support.rs` and the conformance scaffolding under `crypto-profile/src/conformance/`) is not shipped behaviour and is excluded from both. Nothing else is excluded by file.
 
@@ -58,6 +65,7 @@ A test that checks a mapping against the mapping itself proves nothing. The suit
 
 - **Registry codepoints.** Core carries literal IANA values: `iana()` for every cipher suite, key-exchange group, signature scheme and TLS version (`crypto-profile/src/algorithm.rs`, pinned by `iana_codepoints_are_the_registry_values`). Every backend mapping is tested against them (`every_mapping_carries_its_registry_codepoint` in `crypto-profile-awslc4/src/tls.rs`). The handshake helper reads the negotiated suite, group and scheme as wire codepoints and maps them back through `iana()`, never through the mapping under test (`crypto-profile-awslc4/src/test_support.rs`).
 - **CSR signatures.** Every algorithm's CSR signature is verified by rustls-webpki's `aws_lc_rs` verifiers, chosen by a literal per-algorithm table in the test, and the CSR's signature-algorithm OID is compared with core's literal `signature_oid()` (`every_algorithm_signs_a_request_for_its_own_key` in `crypto-profile-awslc4/src/csr.rs`). A wrong hash or OID in the signing path fails it.
+- **Provider behaviour.** `tests/differential.rs` drives every group, suite and scheme both the provider and rustls's reference provider implement, in both directions, against literal codepoints; compares the verification tables and `fips()` classification; checks that each TLS 1.3 suite's QUIC algorithm derives the same packet and header protection as rustls's for the same secret; and checks that every certificate-chain verifier accepts the same valid signature as rustls-webpki's and refuses the same flipped one.
 - **Known answers** come from published vector sets, byte for byte as retrieved, with their provenance and digests in `crypto-profile/src/conformance/vectors/SOURCES.md`.
 
 When you add a value, take it from the registry or the standard, not from the code you are testing.
@@ -95,7 +103,7 @@ The suite checks the backend against the known answers, walks every capability c
 - the core crate's types re-exported at the crate root (`SignatureAlgorithm`, `TlsVersion`, `CipherSuite`, `KxGroup`, `TlsSignatureScheme`, `Algorithm`, `CryptoError` and the rest), and `MODULE`;
 - `test_support::handshake(client: &Policy, server: &Policy, key: SignatureAlgorithm) -> Result<Negotiated, String>`, behind a `test-support` feature that the test target requires (`required-features = ["test-support"]`). It runs a real in-process handshake and reports the version, suite, group and scheme from their wire codepoints, mapped back through the core crate's `iana()`;
 - `test_support::FIPS_LIBRARY: &str`, the FIPS module's crypto library name, under the same feature;
-- `test_support::{Negotiated, handshake_certified, handshake_with_ca}`, with `Negotiated`'s four public fields (`version`, `suite`, `kx`, `scheme`), and the `rcgen` re-export, under the same feature;
+- `test_support::{Negotiated, handshake_certified, handshake_with_ca}`, with `Negotiated`'s five public fields (`version`, `suite`, `kx`, `scheme`, and `kind`, the client's `rustls::HandshakeKind`), and the `rcgen` re-export, under the same feature;
 - the `rustls` re-export, from which the suite names `rustls::RootCertStore` and `rustls::server::ResolvesServerCertUsingSni` and reads a config's `require_ems`;
 - `resolve`, and `Resolved` with its public fields, `admit_key` and `certified_key`, implementing `PartialEq` and `Debug`. `Resolved`'s four-field struct-literal shape (`profile`, `options`, `tls`, `keys`) is part of the contract, because the suite's `open_peer` builds one by literal;
 - `tls::Policy`, with the four public list fields, implementing `Clone`, `PartialEq` and `Debug`, `tls::crypto_provider`, `tls::client_builder` and `tls::server_builder`;
@@ -104,6 +112,8 @@ The suite checks the backend against the known answers, walks every capability c
 - `digest::digest`;
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
 - `sealbox::PrivateKey::from_pkcs8_der` and `sealbox::open`.
+
+A backend instantiates the provider with `crypto_profile::provider!(crate::provider_arms)`. Only `crypto-profile-awslc4` also carries the direct-mode `#[path]` module (`crypto-profile-awslc4/src/lib.rs`), so clippy, coverage and cargo-mutants see each provider file once, through that backend ([decision 0005](docs/decisions/0005-provider-source.md)); another backend instantiates the macro only, and its own code, `provider_arms` included, is ordinary code, linted, measured and mutated like the rest of the backend. It supplies a `provider_arms` module with three items: `pub(crate) fn load_pqdsa(pkcs8: &rustls::pki_types::PrivatePkcs8KeyDer<'_>) -> Option<std::sync::Arc<dyn rustls::sign::SigningKey>>`, which loads the ML-DSA keys the backend's module signs with (ML-DSA-44, -65 and -87 on 4.x) and returns `None` on a backend that has none; `pub(crate) static PQDSA_ALL: &[&dyn rustls::pki_types::SignatureVerificationAlgorithm]`, the ML-DSA certificate-chain verifiers (ML-DSA-44, -65 and -87 on 4.x); and `pub(crate) static PQDSA_MAPPING: &[(rustls::SignatureScheme, &[&dyn rustls::pki_types::SignatureVerificationAlgorithm])]`, the ML-DSA handshake schemes (ML-DSA-87 on 4.x). A backend without ML-DSA leaves both statics empty. A new provider file is listed in `crypto-profile/src/provider/mod.rs`, which is the only module list ([decision 0005](docs/decisions/0005-provider-source.md)).
 
 The linkage test looks for the shared library `test_support::FIPS_LIBRARY` names: the backend's build script takes it from aws-lc-rs's link metadata (`DEP_AWS_LC_RS_*_SYS_LIBCRYPTO`) and fails the build if it is missing, empty, or contains a path separator or control character. An unprefixed build reports `crypto`, which is accepted.
 
@@ -181,3 +191,5 @@ Disclosure does not lower the bar. The gates, the oracle rules and the hard rule
 ## 11. Licensing
 
 crypto-profile is licensed under MIT OR Apache-2.0. Contributions are accepted under the same terms (inbound equals outbound): unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+The provider ports code from rustls (MIT) and rustls-webpki (ISC); their notices are in [`crypto-profile/LICENSE-THIRD-PARTY`](crypto-profile/LICENSE-THIRD-PARTY), and each published package carries an identical copy. A file that ports third-party code names its source, version and licence in a header, and its licence text is in each package's `LICENSE-THIRD-PARTY`; the copies stay identical.

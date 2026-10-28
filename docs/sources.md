@@ -71,12 +71,19 @@ This page lists every document a profile, citation or capability cell depends on
 | Document | Issuer | Edition | Link | Used by | SHA-256 |
 |---|---|---|---|---|---|
 | RFC 9151, Commercial National Security Algorithm (CNSA) Suite Profile for TLS and DTLS 1.2 and 1.3 | IETF (Independent Submission) | April 2022 | <https://www.rfc-editor.org/rfc/rfc9151.txt> | `cnsa1`, `cnsa2` (protocol guidance) | txt `3be03b8dc9d664adcf94d5fb2c2b96d274b5320b6b518b489364f030a20336be`<br>pdf `b88774c477b83814482bd9dfcf056c22dc07b28f45345598c138a0b05aafad24` |
-| RFC 10024, Post-Quantum Traditional (PQ/T) Hybrid Key Agreement Mechanisms for TLS | IETF | August 2026 | <https://www.rfc-editor.org/rfc/rfc10024> | `bsi` (hybrid groups residual); hybrid group cells | txt `5efcfacef53549ec4ff57450dfec28085b34cf3f34d829c541c0ddbe19230dfe`<br>pdf `56e0f58c3f68f12c51010f4964a94f3b0deab2e519f07125e228bb5fbcd266d0`<br>html `844c9bcb3bb43926ef408d3747fe614f9bf3a720d9e4c81a5e07d97cc5fbfd73` |
+| RFC 10024, Post-Quantum Traditional (PQ/T) Hybrid Key Agreement Mechanisms for TLS | IETF | August 2026 | <https://www.rfc-editor.org/rfc/rfc10024> | `unrestricted`, `preferred`, `fips1403` (SecP384r1MLKEM1024: §4.1-4.3 share layout and secret, §7.3 codepoint); `bsi` (hybrid groups residual); hybrid group cells | txt `5efcfacef53549ec4ff57450dfec28085b34cf3f34d829c541c0ddbe19230dfe`<br>pdf `56e0f58c3f68f12c51010f4964a94f3b0deab2e519f07125e228bb5fbcd266d0`<br>html `844c9bcb3bb43926ef408d3747fe614f9bf3a720d9e4c81a5e07d97cc5fbfd73` |
+| RFC 9001, Using TLS to Secure QUIC | IETF | May 2021 | <https://www.rfc-editor.org/rfc/rfc9001.txt> | The provider's QUIC algorithms (§5 packet and header protection, §6.6 limits; Appendix A test vectors) | `3bbaecdf5afd278052a2c48348ce118c4ff8d0cf6b9915549858171b3f98a591` |
 | RFC 8446, The Transport Layer Security (TLS) Protocol Version 1.3 | IETF | August 2018 | <https://www.rfc-editor.org/rfc/rfc8446> | All profiles (section 4.2.3 signature schemes, section 7.1 key schedule) | `47871bc8820a2c3b6ea89f061055577058862cf543686b82d10131239702b3bd` |
 | RFC 8422, Elliptic Curve Cryptography (ECC) Cipher Suites for Transport Layer Security (TLS) Versions 1.2 and Earlier | IETF | August 2018 | <https://www.rfc-editor.org/rfc/rfc8422> | `cnsa1`, `fips1402` (TLS 1.2 key exchange) | `cac45754399e5115342cf1d773a51ac5a77ad221e9336e43ceadd8f294712350` |
 | RFC 7919, Negotiated Finite Field Diffie-Hellman Ephemeral Parameters for Transport Layer Security (TLS) | IETF | August 2016 | <https://www.rfc-editor.org/rfc/rfc7919> | `cnsa1`, `fips1402` (TLS 1.2 key exchange) | `e7ffd3d8109670aa48d218964ceccf82cc6d2fd36132403c89589434bf8a4d72` |
 | RFC 7627, Transport Layer Security (TLS) Session Hash and Extended Master Secret Extension | IETF | September 2015 | <https://www.rfc-editor.org/rfc/rfc7627> | `fips1403` (IG D.Q) | `3e908b1a511f5894b64b2c7867c5e0e8db43896add4d99a340fe67a07ee11a59` |
 | RFC 9206, Commercial National Security Algorithm (CNSA) Suite Cryptography for Internet Protocol Security (IPsec) | IETF | 2022 | <https://www.rfc-editor.org/rfc/rfc9206> | `cnsa2` (cited by CNSSP 15 p. 5 footnote 1) | `605d1c5c9945439c6e171f3e21fca9195d7bad5d8c8280e2af627b6bfb6a2dbe` |
+
+## Interoperability
+
+| Document | Issuer | Edition | Link | Used by | SHA-256 |
+|---|---|---|---|---|---|
+| OpenSSL 3.5.9, source release | OpenSSL Project | 29 September 2026 | <https://github.com/openssl/openssl/releases/download/openssl-3.5.9/openssl-3.5.9.tar.gz> (release page <https://github.com/openssl/openssl/releases/tag/openssl-3.5.9>) | SecP384r1MLKEM1024 interop test (`ci/openssl-interop.sh`) | `603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a` |
 
 ## CAVP certificates
 

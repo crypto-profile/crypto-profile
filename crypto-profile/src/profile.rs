@@ -203,7 +203,7 @@ impl Profile {
 
 /// `unrestricted`: the crate's own set, following no published text. Not a government profile.
 ///
-/// - Versions: TLS 1.3, TLS 1.2. Suites: all nine. Groups: all six. Schemes: all eleven. Keys:
+/// - Versions: TLS 1.3, TLS 1.2. Suites: all nine. Groups: all seven. Schemes: all eleven. Keys:
 ///   all nine (`crypto_profile::algorithm`, each family's `ALL`).
 pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
@@ -220,6 +220,7 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
     ],
     kx_groups: &[
         K::MlKem1024,
+        K::Secp384r1MlKem1024,
         K::X25519MlKem768,
         K::Secp256r1MlKem768,
         K::Secp384r1,
@@ -259,8 +260,8 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 /// - TLS 1.3 only: ISM-1139, p. 19.
 /// - TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256: ISM-1369, p. 20; ISM-1769, p. 11.
 /// - ML-KEM-1024: ISM-1995, p. 10.
-/// - X25519MLKEM768, SecP256r1MLKEM768: ISM p. 12; ISM-1996, p. 13; FIPS 140-3 IG D.S Scenario 2
-///   and Additional Comment 8a (August 2026, pp. 223-226).
+/// - SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768: ISM p. 12; ISM-1996, p. 13; FIPS 140-3 IG D.S
+///   Scenario 2 and Additional Comment 8a (August 2026, pp. 223-226), which names all three.
 /// - secp384r1, secp256r1: ISM-0474 and ISM-1761, p. 8; ISM-1446, p. 7.
 /// - X25519 on its own excluded: FIPS 140-3 IG C.K Resolution 5 (p. 160).
 /// - ChaCha20-Poly1305 excluded: ISM p. 6; SP 800-140Cr2 §6.1.
@@ -277,6 +278,7 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
     cipher_suites: &[C::Tls13Aes256GcmSha384, C::Tls13Aes128GcmSha256],
     kx_groups: &[
         K::MlKem1024,
+        K::Secp384r1MlKem1024,
         K::X25519MlKem768,
         K::Secp256r1MlKem768,
         K::Secp384r1,
@@ -388,8 +390,8 @@ pub const BSI: ProfileSpec = ProfileSpec {
 ///   (pp. 16-17).
 /// - ChaCha20-Poly1305 excluded: SP 800-140Cr2 §6.1; SP 800-52r2 §3.3.1.2.
 /// - ML-KEM-1024: CMVP SP 800-140D list §6.2.10; IG D.S Scenario 1 (p. 223).
-/// - X25519MLKEM768, SecP256r1MLKEM768: IG D.S Scenario 2 and Additional Comment 8a
-///   (pp. 223-226).
+/// - SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768: IG D.S Scenario 2 and Additional
+///   Comment 8a (pp. 223-226), the three IANA parameter sets it names.
 /// - secp384r1, secp256r1: SP 800-56A r3 Appendix D, Table 24 (p. 132); SP 800-52r2 §3.4.2.2
 ///   (pp. 24-25).
 /// - X25519 on its own excluded: IG C.K Resolution 5 (p. 160).
@@ -414,6 +416,7 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
     ],
     kx_groups: &[
         K::MlKem1024,
+        K::Secp384r1MlKem1024,
         K::X25519MlKem768,
         K::Secp256r1MlKem768,
         K::Secp384r1,

@@ -4,8 +4,7 @@ use crate::{
     Algorithm, CipherSuite as C, CryptoError, Family, KxGroup as K, TlsError,
     TlsSignatureScheme as T, TlsVersion as V, ensure,
 };
-use rustls::crypto::aws_lc_rs::{cipher_suite, kx_group};
-use rustls::crypto::{CryptoProvider, KeyProvider, SupportedKxGroup, WebPkiSupportedAlgorithms};
+use rustls::crypto::{CryptoProvider, KeyProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{PrivateKeyDer, SubjectPublicKeyInfoDer};
 use rustls::sign::{Signer, SigningKey};
 use std::collections::HashMap;
@@ -28,34 +27,8 @@ pub struct Policy {
     pub signature_schemes: Vec<T>,
 }
 
-pub(crate) fn rustls_suite(c: C) -> rustls::SupportedCipherSuite {
-    match c {
-        C::Tls13Aes256GcmSha384 => cipher_suite::TLS13_AES_256_GCM_SHA384,
-        C::Tls13Aes128GcmSha256 => cipher_suite::TLS13_AES_128_GCM_SHA256,
-        C::Tls13Chacha20Poly1305Sha256 => cipher_suite::TLS13_CHACHA20_POLY1305_SHA256,
-        C::Tls12EcdheEcdsaAes256GcmSha384 => cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-        C::Tls12EcdheEcdsaAes128GcmSha256 => cipher_suite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
-        C::Tls12EcdheEcdsaChacha20Poly1305Sha256 => {
-            cipher_suite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256
-        }
-        C::Tls12EcdheRsaAes256GcmSha384 => cipher_suite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
-        C::Tls12EcdheRsaAes128GcmSha256 => cipher_suite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-        C::Tls12EcdheRsaChacha20Poly1305Sha256 => {
-            cipher_suite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
-        }
-    }
-}
-
-pub(crate) fn rustls_group(k: K) -> &'static dyn SupportedKxGroup {
-    match k {
-        K::MlKem1024 => kx_group::MLKEM1024,
-        K::X25519MlKem768 => kx_group::X25519MLKEM768,
-        K::Secp256r1MlKem768 => kx_group::SECP256R1MLKEM768,
-        K::Secp384r1 => kx_group::SECP384R1,
-        K::Secp256r1 => kx_group::SECP256R1,
-        K::X25519 => kx_group::X25519,
-    }
-}
+pub(crate) use crate::provider::assembly::group as rustls_group;
+pub(crate) use crate::provider::assembly::suite as rustls_suite;
 
 fn rustls_scheme(t: T) -> rustls::SignatureScheme {
     use rustls::SignatureScheme as R;
@@ -81,9 +54,8 @@ fn rustls_version(v: V) -> &'static rustls::SupportedProtocolVersion {
     }
 }
 
-#[expect(clippy::disallowed_methods)]
 fn base_provider() -> CryptoProvider {
-    rustls::crypto::aws_lc_rs::default_provider()
+    crate::provider::assembly::full()
 }
 
 type SchemeMapping = (
@@ -413,6 +385,32 @@ mod tests {
     }
 
     #[test]
+    fn a_hybrid_offer_completes_on_its_classical_component() {
+        let client = policy(
+            &[V::Tls13],
+            &[C::Tls13Aes256GcmSha384],
+            &[K::Secp384r1MlKem1024, K::Secp384r1],
+            &T::ALL,
+        );
+        let n = handshake(&client, &one13(K::Secp384r1), S::EcdsaP384Sha384).unwrap();
+        assert_eq!(n.kx.iana(), 0x0018);
+        assert_eq!(n.kind, rustls::HandshakeKind::Full);
+    }
+
+    #[test]
+    fn a_retry_into_secp384r1mlkem1024_completes() {
+        let client = policy(
+            &[V::Tls13],
+            &[C::Tls13Aes256GcmSha384],
+            &[K::Secp384r1, K::Secp384r1MlKem1024],
+            &T::ALL,
+        );
+        let n = handshake(&client, &one13(K::Secp384r1MlKem1024), S::EcdsaP384Sha384).unwrap();
+        assert_eq!(n.kx.iana(), 0x11ED);
+        assert_eq!(n.kind, rustls::HandshakeKind::FullWithHelloRetryRequest);
+    }
+
+    #[test]
     fn every_mapping_carries_its_registry_codepoint() {
         for c in C::ALL {
             assert_eq!(cp(rustls_suite(c).suite().to_array()), c.iana(), "{c:?}");
@@ -692,6 +690,7 @@ mod tests {
                     suite: C::Tls13Aes256GcmSha384,
                     kx: k,
                     scheme: T::EcdsaNistp384Sha384,
+                    kind: rustls::HandshakeKind::Full,
                 }
             );
         }
@@ -729,6 +728,7 @@ mod tests {
                     suite: s,
                     kx: K::Secp384r1,
                     scheme,
+                    kind: rustls::HandshakeKind::Full,
                 },
                 "{s:?}"
             );
@@ -1037,5 +1037,30 @@ mod tests {
             load_private_key(&one13(K::Secp384r1), der).err(),
             Some(CryptoError::Tls(TlsError::PrivateKey))
         );
+    }
+
+    #[test]
+    fn an_ml_dsa_44_or_65_key_loads_but_no_policy_signs_with_it() {
+        use aws_lc_rs::signature::{ML_DSA_44_SIGNING, ML_DSA_65_SIGNING, PqdsaKeyPair};
+        for (alg, scheme) in [
+            (&ML_DSA_44_SIGNING, rustls::SignatureScheme::ML_DSA_44),
+            (&ML_DSA_65_SIGNING, rustls::SignatureScheme::ML_DSA_65),
+        ] {
+            let pkcs8 = PqdsaKeyPair::generate(alg).unwrap().to_pkcs8v1().unwrap();
+            let der = PrivateKeyDer::Pkcs8(pkcs8.as_ref().to_vec().into());
+            let key = load_private_key(&one13(K::Secp384r1), der).unwrap();
+            assert!(
+                key.choose_scheme(&[scheme, rustls::SignatureScheme::ML_DSA_87])
+                    .is_none(),
+                "{scheme:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_base_provider_draws_randomness_and_loads_keys_through_the_crates_own_provider() {
+        let base = base_provider();
+        assert_eq!(format!("{:?}", base.secure_random), "Rng");
+        assert_eq!(format!("{:?}", base.key_provider), "Keys");
     }
 }

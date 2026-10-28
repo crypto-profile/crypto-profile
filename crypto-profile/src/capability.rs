@@ -189,7 +189,9 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
         Algorithm::Kx(k) => match k {
             KxGroup::MlKem1024 | KxGroup::Secp384r1 | KxGroup::Secp256r1 => (true, yes),
             KxGroup::X25519 => (true, no),
-            KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 => (true, Approval::Unverified),
+            KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 | KxGroup::Secp384r1MlKem1024 => {
+                (true, Approval::Unverified)
+            }
         },
         Algorithm::Cipher(c) => match c {
             CipherSuite::Tls13Aes256GcmSha384
@@ -293,9 +295,10 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             KxGroup::Secp256r1 => tested(
                 "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
             ),
-            KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 | KxGroup::X25519 => {
-                Approval::Unverified
-            }
+            KxGroup::X25519MlKem768
+            | KxGroup::Secp256r1MlKem768
+            | KxGroup::Secp384r1MlKem1024
+            | KxGroup::X25519 => Approval::Unverified,
         },
         Algorithm::Cipher(c) => match c {
             CipherSuite::Tls13Aes256GcmSha384
@@ -426,7 +429,7 @@ mod tests {
         use SignatureAlgorithm as S;
         use TlsSignatureScheme as T;
         use TlsVersion as V;
-        let expected: [(Algorithm, Option<&'static str>); 40] = [
+        let expected: [(Algorithm, Option<&'static str>); 41] = [
             (
                 A::Signature(S::MlDsa87),
                 Some("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)"),
@@ -505,6 +508,7 @@ mod tests {
                 A::Kx(K::MlKem1024),
                 Some("A7855 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)"),
             ),
+            (A::Kx(K::Secp384r1MlKem1024), None),
             (A::Kx(K::X25519MlKem768), None),
             (A::Kx(K::Secp256r1MlKem768), None),
             (
@@ -632,7 +636,7 @@ mod tests {
             Unverified,
         }
         use K::{Approved as Y, NotApproved as N, Unverified as U};
-        let expected: [(Algorithm, bool, K); 40] = [
+        let expected: [(Algorithm, bool, K); 41] = [
             (A::Signature(S::MlDsa87), false, N),
             (A::Signature(S::EcdsaP256Sha256), true, Y),
             (A::Signature(S::EcdsaP384Sha384), true, Y),
@@ -654,6 +658,7 @@ mod tests {
             (A::Scheme(T::RsaPkcs1Sha512), true, Y),
             (A::Scheme(T::MlDsa87), false, N),
             (A::Kx(KxGroup::MlKem1024), true, Y),
+            (A::Kx(KxGroup::Secp384r1MlKem1024), true, U),
             (A::Kx(KxGroup::X25519MlKem768), true, U),
             (A::Kx(KxGroup::Secp256r1MlKem768), true, U),
             (A::Kx(KxGroup::Secp384r1), true, Y),
