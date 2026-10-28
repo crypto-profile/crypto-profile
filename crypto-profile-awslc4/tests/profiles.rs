@@ -1,10 +1,11 @@
 #![allow(missing_docs)]
 use crypto_profile_awslc4::test_support::{Negotiated, handshake, handshake_with_ca};
-use crypto_profile_awslc4::tls::{Policy, client_builder};
+use crypto_profile_awslc4::tls::{Policy, client_builder, server_builder};
 use crypto_profile_awslc4::{
     CipherSuite as C, CryptoError, Family, KxGroup as K, Options, Profile, Resolved,
     SignatureAlgorithm as S, TlsSignatureScheme as T, TlsVersion as V, resolve, rustls,
 };
+use std::sync::Arc;
 
 const PQ: Options = Options {
     pq_key_exchange_required: true,
@@ -542,6 +543,16 @@ fn rustls_classifies_every_profile_but_unrestricted_as_fips() -> Result<(), Cryp
         assert_eq!((cfg.fips(), cfg.require_ems), (fips, fips), "{p}");
         assert_eq!(
             crypto_profile_awslc4::fips::assert_fips_client_config(&cfg).is_ok(),
+            fips,
+            "{p}"
+        );
+        let srv = server_builder(&r(p)?.tls)
+            .unwrap()
+            .with_no_client_auth()
+            .with_cert_resolver(Arc::new(rustls::server::ResolvesServerCertUsingSni::new()));
+        assert_eq!((srv.fips(), srv.require_ems), (fips, fips), "{p}");
+        assert_eq!(
+            crypto_profile_awslc4::fips::assert_fips_server_config(&srv).is_ok(),
             fips,
             "{p}"
         );

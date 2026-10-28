@@ -1,6 +1,6 @@
 //! Profiles resolved against this backend's module.
 use crate::tls::Policy;
-use crate::{Algorithm, Approval, CryptoError, Options, Profile, SignatureAlgorithm};
+use crate::{Algorithm, Approval, CryptoError, Family, Options, Profile, SignatureAlgorithm};
 
 /// A profile resolved against this backend's module. `profile` and `options` say what `resolve`
 /// was called with; `tls` goes to `tls::client_builder`, `tls::server_builder` and the verifier
@@ -73,6 +73,17 @@ fn approves_under(
     r: &Resolved,
     approval: impl Fn(Algorithm) -> Approval,
 ) -> Result<(), CryptoError> {
+    for (empty, family) in [
+        (r.tls.versions.is_empty(), Family::Version),
+        (r.tls.cipher_suites.is_empty(), Family::CipherSuite),
+        (r.tls.kx_groups.is_empty(), Family::KxGroup),
+        (r.tls.signature_schemes.is_empty(), Family::SignatureScheme),
+        (r.keys.is_empty(), Family::KeyAlgorithm),
+    ] {
+        if empty {
+            return Err(CryptoError::PolicyEmpty(family));
+        }
+    }
     for algorithm in walk(r) {
         let approval = approval(algorithm);
         if !approval.is_approved() {
@@ -90,14 +101,17 @@ fn approves_given(
     r: &Resolved,
     cell: impl Fn(Algorithm) -> Approval,
 ) -> Result<(), CryptoError> {
-    approves_under(r, |a| crate::fips::approval_given(fips_mode, cell(a)))
+    if !fips_mode {
+        return Err(CryptoError::NotFips);
+    }
+    approves_under(r, cell)
 }
 
-/// Refuses unless every algorithm `r` names, each protocol version included, is `Approved` for
-/// the running module, and only while the module is in FIPS mode (as [`crate::fips::approval`]
-/// reports it). Fails on the first cell that is not `Approved`; `AlgorithmTested` is not. On the
-/// 4.x module it fails today: a cell is `Approved` only where a published security policy lists
-/// it.
+/// Refuses with `CryptoError::NotFips` unless the module is in FIPS mode, with
+/// `CryptoError::PolicyEmpty` naming the first family `r` leaves empty, and otherwise unless every
+/// algorithm `r` names, each protocol version included, is `Approved` for the running module.
+/// Fails on the first cell that is not `Approved`; `AlgorithmTested` is not. On the 4.x module it
+/// fails today: a cell is `Approved` only where a published security policy lists it.
 pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
     approves_given(aws_lc_rs::try_fips_mode().is_ok(), r, |a| {
         crypto_profile::capability(crate::MODULE, a).approval
@@ -158,7 +172,7 @@ mod tests {
             Err(CryptoError::EmptyProfile {
                 profile: Profile::Bsi,
                 options: PQ,
-                category: crate::Family::KxGroup,
+                category: Family::KxGroup,
             })
         );
     }
@@ -287,8 +301,31 @@ mod tests {
         }
     }
 
+    fn empty() -> Resolved {
+        Resolved {
+            profile: Profile::Unrestricted,
+            options: Options::default(),
+            tls: Policy {
+                versions: vec![],
+                cipher_suites: vec![],
+                kx_groups: vec![],
+                signature_schemes: vec![],
+            },
+            keys: vec![],
+        }
+    }
+
     #[test]
-    fn approves_given_voids_every_approval_outside_fips_mode() {
+    fn outside_fips_mode_the_refusal_is_not_fips_before_anything_else() {
+        for r in every_resolved().into_iter().chain([empty()]) {
+            assert_eq!(
+                approves_given(false, &r, synthetic),
+                Err(CryptoError::NotFips),
+                "{} {}",
+                r.profile,
+                r.options
+            );
+        }
         for r in every_resolved() {
             assert_eq!(
                 approves_given(true, &r, synthetic),
@@ -297,40 +334,64 @@ mod tests {
                 r.profile,
                 r.options
             );
-            assert_eq!(
-                approves_given(false, &r, synthetic),
-                Err(CryptoError::NotApproved {
-                    algorithm: Algorithm::Protocol(V::Tls13),
-                    approval: Approval::Unverified,
-                }),
-                "{} {}",
-                r.profile,
-                r.options
-            );
         }
     }
 
     #[test]
+    fn a_resolved_with_an_empty_family_is_refused() {
+        let base = resolve(Profile::Unrestricted, Options::default()).unwrap();
+        type Clear = fn(&mut Resolved);
+        let clear: [(Family, Clear); 5] = [
+            (Family::Version, |r| r.tls.versions.clear()),
+            (Family::CipherSuite, |r| r.tls.cipher_suites.clear()),
+            (Family::KxGroup, |r| r.tls.kx_groups.clear()),
+            (Family::SignatureScheme, |r| r.tls.signature_schemes.clear()),
+            (Family::KeyAlgorithm, |r| r.keys.clear()),
+        ];
+        for (i, (family, _)) in clear.iter().enumerate() {
+            let mut r = base.clone();
+            for (_, f) in &clear[i..] {
+                f(&mut r);
+            }
+            let want = Err(CryptoError::PolicyEmpty(*family));
+            assert_eq!(approves_under(&r, synthetic), want, "{family:?} on");
+            assert_eq!(approves_given(true, &r, synthetic), want, "{family:?} on");
+            assert_eq!(assert_module_approves(&r), want, "{family:?} on");
+            let mut only = base.clone();
+            clear[i].1(&mut only);
+            assert_eq!(approves_under(&only, synthetic), want, "{family:?} only");
+        }
+        assert_eq!(
+            assert_module_approves(&empty()),
+            Err(CryptoError::PolicyEmpty(Family::Version))
+        );
+    }
+
+    #[test]
     fn assert_module_approves_reports_each_cell_as_fips_approval_does() {
+        let base = resolve(Profile::Unrestricted, Options::default()).unwrap();
         for a in S::ALL {
             let r = Resolved {
-                profile: Profile::Unrestricted,
-                options: Options::default(),
-                tls: Policy {
-                    versions: vec![],
-                    cipher_suites: vec![],
-                    kx_groups: vec![],
-                    signature_schemes: vec![],
-                },
                 keys: vec![a],
+                ..base.clone()
             };
-            let cell = Algorithm::Signature(a);
-            let want = Err(CryptoError::NotApproved {
-                algorithm: cell,
-                approval: crate::fips::approval(cell),
-            });
-            assert_eq!(assert_module_approves(&r), want, "{a}");
-            assert_eq!(approves_given(true, &r, module_cell), want, "{a}");
+            let key = Algorithm::Signature(a);
+            let only_the_key = |b: Algorithm| {
+                if b == key {
+                    module_cell(b)
+                } else {
+                    synthetic(b)
+                }
+            };
+            let want = if module_cell(key).is_approved() {
+                Ok(())
+            } else {
+                Err(CryptoError::NotApproved {
+                    algorithm: key,
+                    approval: crate::fips::approval(key),
+                })
+            };
+            assert_eq!(approves_given(true, &r, only_the_key), want, "{a}");
         }
         for r in every_resolved() {
             assert_eq!(
@@ -357,7 +418,7 @@ mod tests {
                 Err(CryptoError::EmptyProfile {
                     profile: p,
                     options: PQ,
-                    category: crate::Family::KxGroup,
+                    category: Family::KxGroup,
                 })
             } else {
                 Ok(())
