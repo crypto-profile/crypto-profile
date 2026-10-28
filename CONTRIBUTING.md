@@ -104,7 +104,7 @@ The suite checks the backend against the known answers, walks every capability c
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
 - `sealbox::PrivateKey::from_pkcs8_der` and `sealbox::open`.
 
-The linkage test looks for the shared library `test_support::FIPS_LIBRARY` names: the backend's build script takes it from aws-lc-rs's link metadata (`DEP_AWS_LC_RS_*_SYS_LIBCRYPTO`) and fails the build if it is missing.
+The linkage test looks for the shared library `test_support::FIPS_LIBRARY` names: the backend's build script takes it from aws-lc-rs's link metadata (`DEP_AWS_LC_RS_*_SYS_LIBCRYPTO`) and fails the build if it is missing, empty, or contains a path separator or control character. An unprefixed build reports `crypto`, which is accepted.
 
 ## 7. Residuals you must not make worse
 

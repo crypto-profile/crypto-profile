@@ -145,6 +145,16 @@ pub fn __unlisted_key(
     }
 }
 
+/// Whether `name` can be a shared library's name without its `lib` prefix and extension: not
+/// empty, and no path separator or control character.
+#[doc(hidden)]
+pub fn __library_basename(name: &str) -> bool {
+    !name.is_empty()
+        && !name
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,6 +226,16 @@ mod tests {
                 __unlisted_key(m, SignatureAlgorithm::MlDsa87, "no scheme"),
                 Err("no scheme".to_string())
             );
+        }
+    }
+
+    #[test]
+    fn a_library_name_is_a_bare_basename() {
+        for ok in ["aws_lc_fips_0_14_2_crypto", "crypto"] {
+            assert!(__library_basename(ok), "{ok}");
+        }
+        for bad in ["", "a/crypto", "a\\crypto", "crypto\n", "cry\0pto"] {
+            assert!(!__library_basename(bad), "{bad:?}");
         }
     }
 
@@ -828,13 +848,16 @@ macro_rules! conformance_tests {
         #[test]
         fn conformance_linkage_matches_the_binary() {
             let lib = test_support::FIPS_LIBRARY;
-            assert!(
-                lib.starts_with("aws_lc_fips_") && lib.ends_with("_crypto"),
-                "{lib}"
-            );
+            assert!($crate::conformance::__library_basename(lib), "{lib:?}");
+            let named = |path: Option<&str>, file: &str| {
+                path.and_then(|p| p.rsplit('/').next()) == Some(file)
+            };
             if cfg!(target_os = "linux") {
                 let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
-                let shared = maps.lines().any(|l| l.contains(&format!("lib{lib}.so")));
+                let file = format!("lib{lib}.so");
+                let shared = maps
+                    .lines()
+                    .any(|l| named(l.split_whitespace().nth(5), &file));
                 assert_eq!(shared, MODULE.linkage == Linkage::Dynamic, "{MODULE:?}");
             } else if cfg!(target_os = "macos") {
                 let exe = std::env::current_exe().unwrap();
@@ -843,8 +866,10 @@ macro_rules! conformance_tests {
                     .arg(&exe)
                     .output()
                     .unwrap();
-                let shared =
-                    String::from_utf8_lossy(&out.stdout).contains(&format!("lib{lib}.dylib"));
+                let file = format!("lib{lib}.dylib");
+                let shared = String::from_utf8_lossy(&out.stdout)
+                    .lines()
+                    .any(|l| named(l.split_whitespace().next(), &file));
                 assert_eq!(shared, MODULE.linkage == Linkage::Dynamic, "{MODULE:?}");
             } else {
                 panic!("no linkage check for this target");

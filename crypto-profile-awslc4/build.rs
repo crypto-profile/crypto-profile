@@ -22,10 +22,13 @@ fn main() {
             "crypto-profile-awslc4: aws-lc-rs did not report how the FIPS module is linked ({other:?}); refusing to guess"
         ),
     }
-    match dep("_SYS_LIBCRYPTO") {
+    let lib = dep("_SYS_LIBCRYPTO");
+    let basename =
+        |n: &&str| !n.is_empty() && !n.chars().any(|c| c == '/' || c == '\\' || c.is_control());
+    match lib.as_deref().filter(basename) {
         Some(name) => println!("cargo::rustc-env=CRYPTO_PROFILE_FIPS_LIBRARY={name}"),
         None => panic!(
-            "crypto-profile-awslc4: aws-lc-rs did not report the FIPS module's library name; refusing to guess"
+            "crypto-profile-awslc4: aws-lc-rs did not report a usable FIPS module library name ({lib:?}); refusing to guess"
         ),
     }
 }
