@@ -123,8 +123,19 @@ pub fn handshake(
     server: &Policy,
     key: SignatureAlgorithm,
 ) -> Result<Negotiated, String> {
+    handshake_with_ca(client, server, SignatureAlgorithm::EcdsaP384Sha384, key)
+}
+
+/// Runs a full in-process handshake: a CA whose key is a fresh `ca` issues a `localhost` leaf
+/// whose key is a fresh `key`; the server is built on `server`, the client on `client`.
+pub fn handshake_with_ca(
+    client: &Policy,
+    server: &Policy,
+    ca: SignatureAlgorithm,
+    key: SignatureAlgorithm,
+) -> Result<Negotiated, String> {
     let e = |x: &dyn std::fmt::Display| x.to_string();
-    let ca_key = KeyPair::generate(SignatureAlgorithm::EcdsaP384Sha384).map_err(|x| e(&x))?;
+    let ca_key = KeyPair::generate(ca).map_err(|x| e(&x))?;
     let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(|x| e(&x))?;
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     let ca_cert = ca_params.self_signed(&ca_key).map_err(|x| e(&x))?;
