@@ -17,7 +17,7 @@ pub use capability::{
     certificate, ensure_available,
 };
 pub mod profile;
-pub use profile::{GoverningText, Options, ParseProfileError, Profile};
+pub use profile::{GoverningText, Options, ParseProfileError, Profile, ProfileSpec};
 #[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod sealbox_wire;
