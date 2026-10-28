@@ -1,6 +1,10 @@
 //! Shared conformance data and helpers for `crypto-profile` backends.
 
 #[doc(hidden)]
+pub mod golden;
+mod profile_tests;
+
+#[doc(hidden)]
 pub use hex as __hex;
 #[doc(hidden)]
 pub use serde_json as __serde_json;
@@ -749,6 +753,10 @@ macro_rules! conformance_tests {
             } else {
                 panic!("no linkage check for this target");
             }
+        }
+
+        mod conformance_profiles {
+            $crate::__conformance_profile_tests!($b);
         }
     };
 }

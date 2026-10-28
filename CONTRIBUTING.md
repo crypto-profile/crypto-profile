@@ -74,7 +74,7 @@ When you add a value, take it from the registry or the standard, not from the co
    A cell you cannot source is `Unverified`. Never mark a cell `Approved` on the strength of another module's policy, a CAVP certificate alone, a vendor statement or an algorithm's general reputation.
 5. **Map it in every backend** (the rustls item, the aws-lc-rs algorithm, the rcgen algorithm, as applies).
 6. **Add conformance coverage.** The capability walk (`conformance_capability_honesty`) picks it up through `ALL`. The compiler does not force known answers or profiles. Add known answers from a published vector set to `crypto-profile/src/conformance/vectors/`, recorded in `SOURCES.md`, and a row to the oracle table in the CSR test for a signature algorithm.
-7. **Decide which profiles admit it.** Add it to each profile constant in `crypto-profile/src/profile.rs` whose governing text admits it, with the citation in the constant's doc comment, and update the golden table in `crypto-profile-awslc4/tests/profiles.rs`. A regime-named profile admits only what its cited edition's tables admit.
+7. **Decide which profiles admit it.** Add it to each profile constant in `crypto-profile/src/profile.rs` whose governing text admits it, with the citation in the constant's doc comment, and update the golden table in `crypto-profile/src/conformance/golden.rs`. A regime-named profile admits only what its cited edition's tables admit.
 
 ## 6. Adding a backend
 
@@ -88,14 +88,17 @@ A backend is a crate named for its module line. It must:
   crypto_profile::conformance_tests!(your_crate);
   ```
 
-The suite checks the backend against the known answers, walks every capability cell for its `MODULE`, and checks that the test binary's linkage matches `MODULE`.
+The suite checks the backend against the known answers, walks every capability cell for its `MODULE`, and checks that the test binary's linkage matches `MODULE`. It checks each profile against the golden rows, and on a module that lacks an algorithm it asserts the `Unavailable` refusal rather than skipping the profile.
 
 `conformance_tests!` expands to `use your_crate::*;` and names these paths in your crate, so it compiles only if each exists with the shape `crypto-profile-awslc4` gives it (`crypto-profile/src/conformance/mod.rs`, `conformance_tests`):
 
 - the core crate's types re-exported at the crate root (`SignatureAlgorithm`, `TlsVersion`, `CipherSuite`, `KxGroup`, `TlsSignatureScheme`, `Algorithm`, `CryptoError` and the rest), and `MODULE`;
 - `test_support::handshake(client: &Policy, server: &Policy, key: SignatureAlgorithm) -> Result<Negotiated, String>`, behind a `test-support` feature that the test target requires (`required-features = ["test-support"]`). It runs a real in-process handshake and reports the version, suite, group and scheme from their wire codepoints, mapped back through the core crate's `iana()`;
 - `test_support::FIPS_LIBRARY: &str`, the FIPS module's crypto library name, under the same feature;
-- `tls::Policy`, with the four public list fields, and `tls::crypto_provider`;
+- `test_support::{Negotiated, handshake_certified, handshake_with_ca}`, and the `rcgen` re-export, under the same feature;
+- `resolve`, and `Resolved` with its public fields, `admit_key` and `certified_key`. `Resolved`'s four-field struct-literal shape (`profile`, `options`, `tls`, `keys`) is part of the contract, because the suite's `open_peer` builds one by literal;
+- `tls::Policy`, with the four public list fields, `tls::crypto_provider`, `tls::client_builder` and `tls::server_builder`;
+- `fips::assert_fips_client_config` and `fips::assert_fips_server_config`;
 - `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`;
 - `digest::digest`;
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;

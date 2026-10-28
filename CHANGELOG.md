@@ -16,7 +16,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `crypto_profile::profile::select`, the backend-independent half of resolution, which returns a `Selection` and refuses an algorithm the module lacks rather than dropping it;
   - typed errors: `CryptoError`, with `Unavailable(Algorithm)`, `PolicyEmpty(Family)`, `PolicyDuplicate(Algorithm)`, `PolicyDrift`, `EmptyProfile`, `KeyNotInProfile` and `NotApproved`, `Family::KeyAlgorithm`, and the typed causes `CsrError` and `TlsError`;
   - the sealed box's version-1 framing (`sealbox_wire`);
-  - the conformance suite behind the `conformance` feature, run by every backend through `conformance_tests!`.
+  - the conformance suite behind the `conformance` feature, run by every backend through `conformance_tests!`, including the profile golden tables and distinction handshakes.
 - The backend `crypto-profile-awslc4`, on the AWS-LC FIPS 4.x module through aws-lc-rs 1.18.2:
   - `MODULE`, with the linkage read from the build; the build fails if aws-lc-rs does not report it;
   - `digest`, `random`, `aead` (AES-256-GCM with module-chosen nonces), `sealbox` (P-384 ECDH, HKDF-SHA384, AES-256-GCM), `signature` (key generation, signing, verification and the SubjectPublicKeyInfo shape check) and `csr` (PKCS#10 requests with a DN, DNS, IP and URI SANs, EKU and key usage, signed by the request's own key);
