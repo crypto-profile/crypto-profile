@@ -328,7 +328,7 @@ impl CipherSuite {
 pub enum KxGroup {
     /// ML-KEM-1024 (FIPS 203).
     MlKem1024,
-    /// The P-384 + ML-KEM-1024 hybrid (RFC 10024 §7.3).
+    /// The P-384 + ML-KEM-1024 hybrid (RFC 10024 §4.1-4.3; codepoint §7.3).
     Secp384r1MlKem1024,
     /// The X25519 + ML-KEM-768 hybrid.
     X25519MlKem768,
