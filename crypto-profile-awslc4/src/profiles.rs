@@ -1,10 +1,15 @@
 //! Profiles resolved against this backend's module.
-use crate::tls::Policy;
-use crate::{Algorithm, Approval, CryptoError, Family, Options, Profile, SignatureAlgorithm};
+use crate::signature::KeyPair;
+use crate::tls::{Policy, load_private_key};
+use crate::{
+    Algorithm, Approval, CryptoError, Family, Options, Profile, SignatureAlgorithm, TlsError,
+};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
+use rustls::sign::CertifiedKey;
 
 /// A profile resolved against this backend's module. `profile` and `options` say what `resolve`
 /// was called with; `tls` goes to `tls::client_builder`, `tls::server_builder` and the verifier
-/// builders.
+/// builders; [`Resolved::certified_key`] binds this side's certificate and key to the profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Resolved {
     /// The profile.
@@ -47,6 +52,25 @@ impl Resolved {
                 algorithm: a,
             })
         }
+    }
+
+    /// The certificate chain and key for this side of a connection, for
+    /// `rustls::sign::SingleCertAndKey` or a resolver of the caller's. Refuses a key the profile
+    /// does not admit, and a chain whose end-entity certificate does not carry the key. The key
+    /// signs only with a scheme in `tls.signature_schemes`; a handshake whose peer offers none of
+    /// them fails.
+    pub fn certified_key(
+        &self,
+        chain: Vec<CertificateDer<'static>>,
+        key: &KeyPair,
+    ) -> Result<CertifiedKey, CryptoError> {
+        self.admit_key(key.algorithm())?;
+        let der = PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
+        let certified = CertifiedKey::new(chain, load_private_key(&self.tls, der)?);
+        certified
+            .keys_match()
+            .map_err(|_| CryptoError::Tls(TlsError::KeyMismatch))?;
+        Ok(certified)
     }
 }
 

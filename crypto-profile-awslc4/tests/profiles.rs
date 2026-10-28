@@ -1,9 +1,13 @@
 #![allow(missing_docs)]
-use crypto_profile_awslc4::test_support::{Negotiated, handshake, handshake_with_ca};
+use crypto_profile_awslc4::signature::KeyPair;
+use crypto_profile_awslc4::test_support::{
+    Negotiated, handshake, handshake_certified, handshake_with_ca,
+};
 use crypto_profile_awslc4::tls::{Policy, client_builder, server_builder};
 use crypto_profile_awslc4::{
     CipherSuite as C, CryptoError, Family, KxGroup as K, Options, Profile, Resolved,
-    SignatureAlgorithm as S, TlsSignatureScheme as T, TlsVersion as V, resolve, rustls,
+    SignatureAlgorithm as S, TlsError, TlsSignatureScheme as T, TlsVersion as V, rcgen, resolve,
+    rustls,
 };
 use std::sync::Arc;
 
@@ -42,7 +46,12 @@ fn tls12() -> Policy {
 }
 
 fn served(client: &Policy, server: &Resolved, pick: fn(Negotiated) -> u16) -> Result<u16, String> {
-    handshake(client, &server.tls, S::EcdsaP384Sha384).map(pick)
+    let key = if server.keys.contains(&S::EcdsaP384Sha384) {
+        S::EcdsaP384Sha384
+    } else {
+        server.keys[0]
+    };
+    handshake_certified(client, server, key).map(pick)
 }
 
 fn verifies(client: &Policy, key: S) -> Result<u16, String> {
@@ -570,5 +579,72 @@ fn a_profile_does_not_restrict_the_chain_signature() -> Result<(), CryptoError> 
     )
     .unwrap();
     assert_eq!(n.scheme.iana(), 0x0503);
+    Ok(())
+}
+
+#[test]
+fn cnsa1_signs_only_with_a_scheme_it_lists() -> Result<(), CryptoError> {
+    let one = r(Profile::Cnsa1)?;
+    let permissive = Policy {
+        signature_schemes: vec![T::RsaPssSha512, T::RsaPssSha384],
+        ..tls13(&[K::Secp384r1])
+    };
+    let outside = Policy {
+        signature_schemes: vec![T::RsaPssSha512, T::RsaPssSha256],
+        ..tls13(&[K::Secp384r1])
+    };
+    let scheme = |client: &Policy, server: &Policy| {
+        handshake(client, server, S::Rsa3072Sha384).map(|n| n.scheme.iana())
+    };
+    assert_eq!(scheme(&permissive, &one.tls), Ok(0x0805));
+    assert_eq!(scheme(&outside, &one.tls), err(NO_SCHEME));
+    assert_eq!(scheme(&outside, &r(Profile::Unrestricted)?.tls), Ok(0x0806));
+    Ok(())
+}
+
+#[test]
+fn a_certified_key_signs_only_with_a_scheme_the_profile_lists() -> Result<(), CryptoError> {
+    let one = r(Profile::Cnsa1)?;
+    let permissive = Policy {
+        signature_schemes: vec![T::RsaPssSha512, T::RsaPssSha384],
+        ..tls13(&[K::Secp384r1])
+    };
+    let outside = Policy {
+        signature_schemes: vec![T::RsaPssSha512, T::RsaPssSha256],
+        ..tls13(&[K::Secp384r1])
+    };
+    let scheme = |client: &Policy, server: &Resolved| {
+        handshake_certified(client, server, S::Rsa3072Sha384).map(|n| n.scheme.iana())
+    };
+    assert_eq!(scheme(&permissive, &one), Ok(0x0805));
+    assert_eq!(scheme(&outside, &one), err(NO_SCHEME));
+    assert_eq!(scheme(&outside, &r(Profile::Unrestricted)?), Ok(0x0806));
+    Ok(())
+}
+
+#[test]
+fn certified_key_refuses_a_key_the_profile_does_not_admit() -> Result<(), CryptoError> {
+    let key = KeyPair::generate(S::EcdsaP384Sha384)?;
+    let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+        .unwrap()
+        .self_signed(&key)
+        .unwrap();
+    let chain = vec![cert.der().clone()];
+    assert_eq!(
+        r(Profile::Cnsa2)?.certified_key(chain.clone(), &key).err(),
+        Some(CryptoError::KeyNotInProfile {
+            profile: Profile::Cnsa2,
+            algorithm: S::EcdsaP384Sha384
+        })
+    );
+    let one = r(Profile::Cnsa1)?;
+    assert!(one.certified_key(chain.clone(), &key).is_ok());
+    let other = KeyPair::generate(S::EcdsaP384Sha384)?;
+    for c in [chain, vec![]] {
+        assert_eq!(
+            one.certified_key(c, &other).err(),
+            Some(CryptoError::Tls(TlsError::KeyMismatch))
+        );
+    }
     Ok(())
 }

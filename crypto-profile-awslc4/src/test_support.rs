@@ -1,10 +1,11 @@
 //! Test infrastructure: in-memory certificates and an in-process handshake. Not shipped behaviour.
 use crate::signature::KeyPair;
 use crate::tls::{Policy, client_builder, server_builder, server_cert_verifier_builder};
-use crate::{CipherSuite, KxGroup, SignatureAlgorithm, TlsSignatureScheme, TlsVersion};
+use crate::{CipherSuite, KxGroup, Resolved, SignatureAlgorithm, TlsSignatureScheme, TlsVersion};
 use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
+use rustls::sign::SingleCertAndKey;
 use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 use std::sync::{Arc, Mutex};
 
@@ -134,6 +135,46 @@ pub fn handshake_with_ca(
     ca: SignatureAlgorithm,
     key: SignatureAlgorithm,
 ) -> Result<Negotiated, String> {
+    run(client, ca, key, |chain, leaf_key| {
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into());
+        server_builder(server)
+            .map_err(|x| x.to_string())?
+            .with_no_client_auth()
+            .with_single_cert(chain, der)
+            .map_err(|x| x.to_string())
+    })
+}
+
+/// Runs a full in-process handshake whose server installs its `key` leaf through
+/// [`Resolved::certified_key`]: a P-384 CA issues a `localhost` leaf whose key is a fresh `key`;
+/// the server is built on `server.tls`, the client on `client`.
+pub fn handshake_certified(
+    client: &Policy,
+    server: &Resolved,
+    key: SignatureAlgorithm,
+) -> Result<Negotiated, String> {
+    run(
+        client,
+        SignatureAlgorithm::EcdsaP384Sha384,
+        key,
+        |chain, leaf_key| {
+            let certified = server
+                .certified_key(chain, leaf_key)
+                .map_err(|x| x.to_string())?;
+            Ok(server_builder(&server.tls)
+                .map_err(|x| x.to_string())?
+                .with_no_client_auth()
+                .with_cert_resolver(Arc::new(SingleCertAndKey::from(certified))))
+        },
+    )
+}
+
+fn run(
+    client: &Policy,
+    ca: SignatureAlgorithm,
+    key: SignatureAlgorithm,
+    serve: impl FnOnce(Vec<CertificateDer<'static>>, &KeyPair) -> Result<rustls::ServerConfig, String>,
+) -> Result<Negotiated, String> {
     let e = |x: &dyn std::fmt::Display| x.to_string();
     let ca_key = KeyPair::generate(ca).map_err(|x| e(&x))?;
     let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(|x| e(&x))?;
@@ -146,12 +187,7 @@ pub fn handshake_with_ca(
         .signed_by(&leaf_key, &issuer)
         .map_err(|x| e(&x))?;
     let chain = vec![leaf.der().clone(), ca_cert.der().clone()];
-    let key_der = rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into());
-    let server_cfg = server_builder(server)
-        .map_err(|x| e(&x))?
-        .with_no_client_auth()
-        .with_single_cert(chain, key_der)
-        .map_err(|x| e(&x))?;
+    let server_cfg = serve(chain, &leaf_key)?;
     let mut roots = rustls::RootCertStore::empty();
     roots.add(ca_cert.der().clone()).map_err(|x| e(&x))?;
     let seen = Arc::new(Mutex::new(None));

@@ -91,15 +91,17 @@ Use the re-exported crate: `crypto_profile_awslc4::rustls`. Don't declare `rustl
 | `versions` | protocol versions |
 | `cipher_suites` | cipher suites; a suite whose version is not in `versions` is not offered |
 | `kx_groups` | key-exchange groups |
-| `signature_schemes` | the handshake signature schemes this side accepts from its peer |
+| `signature_schemes` | the handshake signature schemes this side accepts from its peer, and those its own key signs with |
 
 `tls::crypto_provider(&Policy)` builds a provider carrying exactly the policy's suites, groups and schemes, in the policy's order. It refuses:
 - an empty `versions`, `kx_groups` or `signature_schemes` list, or a cipher-suite list left empty once suites of unlisted versions are dropped, with `CryptoError::PolicyEmpty(family)`;
 - an algorithm the backend's module does not have, with `CryptoError::Unavailable(alg)`.
 
-`tls::assert_provider_matches(&provider, &policy)` refuses a provider whose suites, groups or schemes differ from the policy's, or are in a different order, with `CryptoError::PolicyDrift`.
+`tls::assert_provider_matches(&provider, &policy)` refuses a provider whose suites, groups or schemes differ from the policy's, or are in a different order, or whose key provider is not the policy's, with `CryptoError::PolicyDrift`.
 
-**What `signature_schemes` restricts:** the schemes this side's verifier accepts for the peer's handshake signature. The provider and both verifier builders carry the same list. **What it does not restrict** is in section 9.
+**What `signature_schemes` restricts:** the schemes this side's verifier accepts for the peer's handshake signature, and the schemes this side's own key signs with. The provider and both verifier builders carry the same list. A key loaded through the provider's key provider, which is what `with_single_cert`, `with_client_auth_cert`, `tls::load_private_key` and `Resolved::certified_key` use, signs only with a scheme that is both in the peer's offer and in the list; when none is, the handshake fails (`NoSignatureSchemesInCommon` on TLS 1.3). Under `cnsa1`, an RSA-3072 key offered RSA-PSS with SHA-512 and SHA-384 signs with SHA-384 (test `cnsa1_signs_only_with_a_scheme_it_lists`). **What it does not restrict** is in section 9.
+
+`Resolved::certified_key(chain, &key)` is the way to install this side's certificate under a profile: it refuses a key the profile does not admit (`KeyNotInProfile`) and a chain whose end-entity certificate does not carry the key (`TlsError::KeyMismatch`), and returns a `rustls::sign::CertifiedKey` whose key signs only with the profile's schemes, for `rustls::sign::SingleCertAndKey` or a resolver of your own.
 
 ## 7. Compatibility limits
 
@@ -132,8 +134,8 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 ## 9. What a policy or profile does not restrict
 
 - **Certificate-chain signature algorithms.** The verifiers keep rustls's full list of algorithms for signatures on certificates (`WebPkiSupportedAlgorithms::all`); a `Policy` narrows only the handshake-signature mapping (`crypto-profile-awslc4/src/tls.rs`, `verification_algorithms`).
-- **The scheme a local signing key chooses.** rustls picks the scheme this side signs with from the peer's offer and the key's type; `signature_schemes` does not narrow it.
-- **The algorithm of a key passed to `tls::load_private_key`.** The key is loaded through rustls's key provider and is not checked against any policy (`crypto-profile-awslc4/src/tls.rs`, `load_private_key`).
+- **A signing key built outside the policy's provider.** A `rustls::sign::SigningKey` that did not come through the provider's key provider, `tls::load_private_key` or `Resolved::certified_key` signs with whatever scheme rustls picks from the peer's offer and the key's type.
+- **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile-awslc4/src/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
 - **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5).
@@ -150,11 +152,11 @@ The same caution applies to round 3: aws-lc-fips-sys 0.13.17 bundles AWS-LC 3.6.
 
 The crate holds secret material in zeroizing buffers that are sized at allocation and never grow. `signature::KeyPair::generate` generates through aws-lc-rs, which returns the new key's PKCS#8 encoding in a container that zeroizes on drop (`aws-lc-rs-1.18.2/src/pkcs8.rs:30-34`, `src/buffer.rs:22-28`); `generate` copies the encoding into the crate's zeroizing buffer before that container drops. aws-lc wipes its own allocations, the key structure among them, when it frees them, unless an application has installed its own allocator (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/mem.c:224-248`). One place falls outside that, and a contributor must not widen it:
 
-- **Keys handed to rustls.** A `PrivateKeyDer` passed to `tls::load_private_key`, or to a rustls configuration, is rustls's to hold and drop.
+- **Keys handed to rustls.** A `PrivateKeyDer` passed to `tls::load_private_key`, or to a rustls configuration, is rustls's to hold and drop; so is the copy of a `KeyPair`'s PKCS#8 encoding that `Resolved::certified_key` loads.
 
 A further residual holds no secret material:
 
-- **Per-policy verifier tables.** Each distinct ordered `signature_schemes` list leaks one static verification-algorithm table, cached for the life of the process (`crypto-profile-awslc4/src/tls.rs`, `verification_algorithms`). This is bounded by the number of distinct lists an application builds.
+- **Per-policy verifier tables and key providers.** Each distinct ordered `signature_schemes` list leaks one static verification-algorithm table and one key provider, cached for the life of the process (`crypto-profile-awslc4/src/tls.rs`, `verification_algorithms` and `key_provider`). This is bounded by the number of distinct lists an application builds.
 
 RSA keys must have the public exponent 65537. `signature::KeyPair::from_pkcs8` refuses any other with `CryptoError::PrivateKey`, and `signature::verify` refuses a public key with any other with `CryptoError::Verify` (`crypto-profile-awslc4/src/signature.rs`, tests `an_rsa_key_whose_exponent_is_not_65537_is_refused` and `verify_refuses_an_rsa_key_whose_exponent_is_not_65537`).
 

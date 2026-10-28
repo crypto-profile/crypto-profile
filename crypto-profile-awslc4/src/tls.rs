@@ -5,7 +5,9 @@ use crate::{
     TlsSignatureScheme as T, TlsVersion as V, ensure,
 };
 use rustls::crypto::aws_lc_rs::{cipher_suite, kx_group};
-use rustls::crypto::{CryptoProvider, SupportedKxGroup, WebPkiSupportedAlgorithms};
+use rustls::crypto::{CryptoProvider, KeyProvider, SupportedKxGroup, WebPkiSupportedAlgorithms};
+use rustls::pki_types::{PrivateKeyDer, SubjectPublicKeyInfoDer};
+use rustls::sign::{Signer, SigningKey};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
@@ -18,8 +20,9 @@ pub struct Policy {
     pub cipher_suites: Vec<C>,
     /// Key-exchange groups.
     pub kx_groups: Vec<K>,
-    /// Handshake signature schemes this side accepts from its peer. Neither certificate-chain
-    /// signature algorithms nor the scheme a local signing key chooses are restricted.
+    /// Handshake signature schemes: those this side accepts from its peer, and those a key loaded
+    /// through this policy's provider signs with. Certificate-chain signature algorithms are not
+    /// restricted.
     pub signature_schemes: Vec<T>,
 }
 
@@ -121,7 +124,73 @@ fn verification_algorithms(schemes: &[T]) -> Result<WebPkiSupportedAlgorithms, C
     Ok(*w)
 }
 
-/// A provider carrying exactly `p`, refusing an empty family or an unavailable algorithm.
+#[derive(Debug)]
+struct PolicyKey {
+    inner: Arc<dyn SigningKey>,
+    schemes: &'static [rustls::SignatureScheme],
+}
+
+impl SigningKey for PolicyKey {
+    fn choose_scheme(&self, offered: &[rustls::SignatureScheme]) -> Option<Box<dyn Signer>> {
+        let allowed: Vec<_> = offered
+            .iter()
+            .copied()
+            .filter(|s| self.schemes.contains(s))
+            .collect();
+        self.inner.choose_scheme(&allowed)
+    }
+
+    fn public_key(&self) -> Option<SubjectPublicKeyInfoDer<'_>> {
+        self.inner.public_key()
+    }
+
+    fn algorithm(&self) -> rustls::SignatureAlgorithm {
+        self.inner.algorithm()
+    }
+}
+
+#[derive(Debug)]
+struct PolicyKeyProvider {
+    base: &'static dyn KeyProvider,
+    schemes: &'static [rustls::SignatureScheme],
+}
+
+impl KeyProvider for PolicyKeyProvider {
+    #[expect(clippy::disallowed_methods)]
+    fn load_private_key(
+        &self,
+        der: PrivateKeyDer<'static>,
+    ) -> Result<Arc<dyn SigningKey>, rustls::Error> {
+        Ok(Arc::new(PolicyKey {
+            inner: self.base.load_private_key(der)?,
+            schemes: self.schemes,
+        }))
+    }
+
+    fn fips(&self) -> bool {
+        self.base.fips()
+    }
+}
+
+fn key_provider(schemes: &[T]) -> &'static dyn KeyProvider {
+    static CACHE: OnceLock<Mutex<HashMap<Vec<T>, &'static PolicyKeyProvider>>> = OnceLock::new();
+    let mut cache = CACHE
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if let Some(k) = cache.get(schemes).copied() {
+        return k;
+    }
+    let k: &'static PolicyKeyProvider = Box::leak(Box::new(PolicyKeyProvider {
+        base: base_provider().key_provider,
+        schemes: Box::leak(schemes.iter().map(|t| rustls_scheme(*t)).collect()),
+    }));
+    cache.insert(schemes.to_vec(), k);
+    k
+}
+
+/// A provider carrying exactly `p`, refusing an empty family or an unavailable algorithm. A key
+/// loaded through its key provider signs only with a scheme in `p.signature_schemes`.
 pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     if p.versions.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::Version));
@@ -157,6 +226,7 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
         cipher_suites: suites,
         kx_groups: p.kx_groups.iter().map(|k| rustls_group(*k)).collect(),
         signature_verification_algorithms: verification_algorithms(&p.signature_schemes)?,
+        key_provider: key_provider(&p.signature_schemes),
         ..base_provider()
     })
 }
@@ -192,7 +262,8 @@ pub fn install_default(p: &Policy) -> Result<(), CryptoError> {
         .map_err(|_| CryptoError::Tls(TlsError::DefaultProviderInstalled))
 }
 
-/// Refuses a provider that does not carry exactly `p`'s suites, groups and schemes, in order.
+/// Refuses a provider that does not carry exactly `p`'s suites, groups and schemes, in order, or
+/// whose key provider is not the one `crypto_provider(p)` carries.
 pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<(), CryptoError> {
     let want = crypto_provider(p)?;
     let suites = |x: &CryptoProvider| {
@@ -212,6 +283,7 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
     if suites(provider) == suites(&want)
         && groups(provider) == groups(&want)
         && schemes(provider) == schemes(&want)
+        && std::ptr::addr_eq(provider.key_provider, want.key_provider)
     {
         Ok(())
     } else {
@@ -219,13 +291,15 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
     }
 }
 
-/// Loads a private key into a signing key. The key's algorithm is not checked against any
-/// profile; `Resolved::admit_key` is that check.
+/// Loads a private key into a signing key that signs only with a scheme in
+/// `p.signature_schemes`. The key's algorithm is not checked against any profile;
+/// `Resolved::certified_key` checks it.
 #[expect(clippy::disallowed_methods)]
 pub fn load_private_key(
-    der: rustls::pki_types::PrivateKeyDer<'static>,
-) -> Result<Arc<dyn rustls::sign::SigningKey>, CryptoError> {
-    base_provider()
+    p: &Policy,
+    der: PrivateKeyDer<'static>,
+) -> Result<Arc<dyn SigningKey>, CryptoError> {
+    crypto_provider(p)?
         .key_provider
         .load_private_key(der)
         .map_err(|_| CryptoError::Tls(TlsError::PrivateKey))
@@ -669,11 +743,87 @@ mod tests {
         );
     }
 
+    fn chosen(p: &Policy, a: S, offered: &[T]) -> Option<u16> {
+        let key = crate::signature::KeyPair::generate(a).unwrap();
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
+        let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t)).collect();
+        load_private_key(p, der)
+            .unwrap()
+            .choose_scheme(&offered)
+            .map(|s| cp(s.scheme().to_array()))
+    }
+
+    #[test]
+    fn a_loaded_key_signs_only_with_a_scheme_the_policy_lists() {
+        let rsa = |schemes: &[T]| {
+            policy(
+                &[V::Tls13],
+                &[C::Tls13Aes256GcmSha384],
+                &[K::Secp384r1],
+                schemes,
+            )
+        };
+        let offer = [T::RsaPssSha512, T::RsaPssSha384, T::RsaPssSha256];
+        let a = S::Rsa3072Sha384;
+        assert_eq!(chosen(&rsa(&T::ALL), a, &offer), Some(0x0806));
+        assert_eq!(chosen(&rsa(&[T::RsaPssSha384]), a, &offer), Some(0x0805));
+        assert_eq!(
+            chosen(&rsa(&[T::RsaPssSha256, T::RsaPssSha384]), a, &offer),
+            Some(0x0805)
+        );
+        assert_eq!(chosen(&rsa(&[T::RsaPkcs1Sha384]), a, &offer), None);
+        assert_eq!(
+            chosen(&rsa(&[T::MlDsa87]), S::EcdsaP384Sha384, &T::ALL),
+            None
+        );
+    }
+
+    #[derive(Debug)]
+    struct NotFips;
+
+    impl KeyProvider for NotFips {
+        fn load_private_key(
+            &self,
+            _: PrivateKeyDer<'static>,
+        ) -> Result<Arc<dyn SigningKey>, rustls::Error> {
+            Err(rustls::Error::General("not used".to_string()))
+        }
+    }
+
+    #[test]
+    fn the_key_provider_is_fips_exactly_when_its_base_is() {
+        let wrap = |base: &'static dyn KeyProvider| PolicyKeyProvider { base, schemes: &[] };
+        assert!(!wrap(&NotFips).fips());
+        assert!(wrap(base_provider().key_provider).fips());
+        assert!(key_provider(&T::ALL).fips());
+    }
+
+    #[test]
+    fn a_provider_with_another_key_provider_is_drift() {
+        let p = one13(K::Secp384r1);
+        let stock = CryptoProvider {
+            key_provider: base_provider().key_provider,
+            ..crypto_provider(&p).unwrap()
+        };
+        assert_eq!(
+            assert_provider_matches(&stock, &p),
+            Err(CryptoError::PolicyDrift)
+        );
+        let other = CryptoProvider {
+            key_provider: key_provider(&[T::Ed25519]),
+            ..crypto_provider(&p).unwrap()
+        };
+        assert_eq!(
+            assert_provider_matches(&other, &p),
+            Err(CryptoError::PolicyDrift)
+        );
+    }
+
     #[test]
     fn load_private_key_refuses_garbage() {
         let der = rustls::pki_types::PrivateKeyDer::Pkcs8(b"not a key".to_vec().into());
         assert_eq!(
-            load_private_key(der).err(),
+            load_private_key(&one13(K::Secp384r1), der).err(),
             Some(CryptoError::Tls(TlsError::PrivateKey))
         );
     }

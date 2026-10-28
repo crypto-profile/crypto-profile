@@ -42,6 +42,8 @@ pub enum TlsError {
     PrivateKey,
     /// A process-default provider is already installed.
     DefaultProviderInstalled,
+    /// The certificate chain is empty, or its end-entity certificate does not carry the key.
+    KeyMismatch,
 }
 
 /// A refusal from one of the crate's operations. It never carries key or plaintext material.
