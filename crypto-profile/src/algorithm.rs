@@ -322,6 +322,14 @@ pub enum KxGroup {
 }
 
 impl KxGroup {
+    /// Whether the group's key exchange includes ML-KEM: pure ML-KEM or a hybrid.
+    pub const fn is_post_quantum(self) -> bool {
+        match self {
+            KxGroup::MlKem1024 | KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 => true,
+            KxGroup::Secp384r1 | KxGroup::Secp256r1 | KxGroup::X25519 => false,
+        }
+    }
+
     /// The IANA TLS Supported Groups codepoint.
     pub const fn iana(self) -> u16 {
         match self {
@@ -462,6 +470,14 @@ impl Algorithm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn post_quantum_groups_are_the_ml_kem_ones() {
+        assert_eq!(
+            KxGroup::ALL.map(KxGroup::is_post_quantum),
+            [true, true, true, false, false, false]
+        );
+    }
 
     #[test]
     fn signature_names_are_stable_and_round_trip() {

@@ -1,8 +1,10 @@
 //! The crate's refusals.
-use crate::algorithm::Algorithm;
+use crate::algorithm::{Algorithm, SignatureAlgorithm};
+use crate::capability::Approval;
+use crate::profile::{Options, Profile};
 use std::fmt;
 
-/// A family of a TLS policy.
+/// A family of algorithms in a TLS policy or a profile.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum Family {
@@ -14,6 +16,8 @@ pub enum Family {
     KxGroup,
     /// Signature schemes.
     SignatureScheme,
+    /// Key algorithms.
+    KeyAlgorithm,
 }
 
 /// Why a certificate signing request could not be produced.
@@ -88,6 +92,29 @@ pub enum CryptoError {
     SealOpen,
     /// A cryptographic primitive failed.
     Primitive,
+    /// A profile, narrowed by its options, names nothing in a family.
+    EmptyProfile {
+        /// The profile.
+        profile: Profile,
+        /// The options it was narrowed by.
+        options: Options,
+        /// The family left empty.
+        category: Family,
+    },
+    /// A key algorithm the profile does not admit.
+    KeyNotInProfile {
+        /// The profile.
+        profile: Profile,
+        /// The refused key algorithm.
+        algorithm: SignatureAlgorithm,
+    },
+    /// An algorithm the running module does not approve.
+    NotApproved {
+        /// The first algorithm found not approved.
+        algorithm: Algorithm,
+        /// Its approval.
+        approval: Approval,
+    },
 }
 
 impl fmt::Display for CryptoError {
@@ -129,6 +156,28 @@ impl fmt::Display for CryptoError {
                 f.write_str("the sealed blob does not open under this key, domain and AAD")
             }
             CryptoError::Primitive => f.write_str("a cryptographic primitive failed"),
+            CryptoError::EmptyProfile {
+                profile,
+                options,
+                category,
+            } => {
+                write!(
+                    f,
+                    "the {profile} profile, with {options}, names no {category:?}"
+                )
+            }
+            CryptoError::KeyNotInProfile { profile, algorithm } => {
+                write!(f, "the {profile} profile does not admit {algorithm} keys")
+            }
+            CryptoError::NotApproved {
+                algorithm,
+                approval,
+            } => {
+                write!(
+                    f,
+                    "{algorithm:?} is not approved by the running module: {approval:?}"
+                )
+            }
         }
     }
 }
@@ -138,7 +187,9 @@ impl std::error::Error for CryptoError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithm::{Algorithm, SignatureAlgorithm};
+    use crate::algorithm::{Algorithm, KxGroup, SignatureAlgorithm};
+    use crate::capability::Approval;
+    use crate::profile::{Options, Profile};
 
     #[test]
     fn display_texts_are_pinned() {
@@ -166,6 +217,55 @@ mod tests {
             CryptoError::Tls(TlsError::PrivateKey).to_string(),
             "the TLS configuration was refused: PrivateKey"
         );
+    }
+
+    #[test]
+    fn profile_display_texts_are_pinned() {
+        let pq = Options {
+            pq_key_exchange_required: true,
+        };
+        let table: [(CryptoError, &str); 5] = [
+            (
+                CryptoError::EmptyProfile {
+                    profile: Profile::Cnsa1,
+                    options: pq,
+                    category: Family::KxGroup,
+                },
+                "the cnsa1 profile, with post-quantum key exchange required, names no KxGroup",
+            ),
+            (
+                CryptoError::EmptyProfile {
+                    profile: Profile::Cnsa2,
+                    options: Options::default(),
+                    category: Family::KeyAlgorithm,
+                },
+                "the cnsa2 profile, with no options, names no KeyAlgorithm",
+            ),
+            (
+                CryptoError::KeyNotInProfile {
+                    profile: Profile::Bsi,
+                    algorithm: SignatureAlgorithm::Rsa3072Sha384,
+                },
+                "the bsi profile does not admit rsa3072-sha384 keys",
+            ),
+            (
+                CryptoError::NotApproved {
+                    algorithm: Algorithm::Kx(KxGroup::X25519),
+                    approval: Approval::Unverified,
+                },
+                "Kx(X25519) is not approved by the running module: Unverified",
+            ),
+            (
+                CryptoError::NotApproved {
+                    algorithm: Algorithm::Signature(SignatureAlgorithm::MlDsa87),
+                    approval: Approval::AlgorithmTested { cavp: "A7855 (x)" },
+                },
+                "Signature(MlDsa87) is not approved by the running module: AlgorithmTested { cavp: \"A7855 (x)\" }",
+            ),
+        ];
+        for (e, text) in table {
+            assert_eq!(e.to_string(), text);
+        }
     }
 
     #[test]
