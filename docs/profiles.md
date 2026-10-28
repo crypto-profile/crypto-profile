@@ -8,25 +8,51 @@ The profiles are 0.x API: their names and contents may change before 0.1. The co
 
 ```rust
 use crypto_profile_awslc4 as crypto;
-use crypto::rustls::{ConfigBuilder, ServerConfig, WantsVerifier};
-use crypto::{CryptoError, Options, Profile, SignatureAlgorithm, assert_module_approves, resolve, tls};
+use crypto::rustls::ServerConfig;
+use crypto::rustls::pki_types::CertificateDer;
+use crypto::rustls::sign::SingleCertAndKey;
+use crypto::signature::KeyPair;
+use crypto::{Options, Profile, assert_module_approves, resolve, tls};
+use std::sync::Arc;
 
 fn server(
     name: &str,
-) -> Result<ConfigBuilder<ServerConfig, WantsVerifier>, Box<dyn std::error::Error>> {
+    chain: Vec<CertificateDer<'static>>,
+    key: &KeyPair,
+) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let profile: Profile = name.parse()?;
     let r = resolve(profile, Options { pq_key_exchange_required: true })?;
-    r.admit_key(SignatureAlgorithm::EcdsaP384Sha384)?;
-    match assert_module_approves(&r) {
-        Ok(()) => {}
-        Err(e @ CryptoError::NotApproved { .. }) => eprintln!("{} ({}): {e}", r.profile, r.options),
-        Err(e) => return Err(e.into()),
-    }
-    Ok(tls::server_builder(&r.tls)?)
+    assert_module_approves(&r)?;
+    let certified = r.certified_key(chain, key)?;
+    Ok(tls::server_builder(&r.tls)?
+        .with_no_client_auth()
+        .with_cert_resolver(Arc::new(SingleCertAndKey::from(certified))))
 }
 ```
 
-- **Module approval.** On the 4.x module `assert_module_approves` refuses every profile with `NotApproved` (section 6), so the example logs that refusal and goes on. A deployment that requires module approval returns it instead. Any other refusal is returned: `NotFips` when the module is not in FIPS mode, `PolicyEmpty` when a family is empty.
+- **Module approval.** The example returns every refusal from `assert_module_approves`: `NotFips` when the module is not in FIPS mode, `PolicyEmpty` when a family is empty, and `NotApproved` for a cell that is not `Approved`. On the 4.x module it refuses every profile with `NotApproved` (section 6), so this example builds no configuration on 4.x today. That is the behaviour a deployment with a validation obligation needs.
+- **This side's certificate and key.** `Resolved::certified_key` refuses a key the profile does not admit (`KeyNotInProfile`) and a chain whose end-entity certificate does not carry the key (`TlsError::KeyMismatch`). The key it returns signs only with a scheme that is both in the peer's offer and in the profile's `signature_schemes`; when none is, the handshake fails. Under `cnsa1`, an RSA-3072 key offered RSA-PSS with SHA-512 and SHA-384 signs with SHA-384 (test `a_certified_key_signs_only_with_a_scheme_the_profile_lists`). A key installed through the builder's `with_single_cert` or `with_client_auth_cert` has its schemes narrowed the same way, but its algorithm is not checked. A client installs its certificate the same way, with `with_client_cert_resolver`.
+
+### Report-only use
+
+A deployment with no validation obligation can log the `NotApproved` refusal and go on, while still returning every other refusal. Use this only there: the profile's algorithm set still governs every connection, but nothing then says the module is approved for it.
+
+```rust
+use crypto_profile_awslc4::{CryptoError, Resolved, assert_module_approves};
+
+fn report_approval(r: &Resolved) -> Result<(), CryptoError> {
+    match assert_module_approves(r) {
+        Ok(()) => Ok(()),
+        Err(e @ CryptoError::NotApproved { .. }) => {
+            eprintln!("{} ({}): {e}", r.profile, r.options);
+            Ok(())
+        }
+        Err(e) => Err(e),
+    }
+}
+```
+
+### Notes
 
 - **What to log.** `Resolved` carries the `profile` and `options` it was resolved with, beside the `tls` policy and the admitted `keys`. Logging the first two records exactly what a process runs.
 - **`Resolved`'s fields are public.** They are what `resolve` produced. A caller who changes them owns the result: `profile` and `options` then no longer describe `tls` and `keys`.
@@ -53,7 +79,7 @@ fn server(
 
 ## 3. The profiles
 
-Every list is in preference order. Schemes are the handshake signature schemes a side accepts from its peer; keys are the key algorithms `admit_key` admits. "PKCS#1" means RSASSA-PKCS1-v1_5, which rustls uses on TLS 1.2 only.
+Every list is in preference order. Schemes are the handshake signature schemes a side accepts from its peer and signs with; keys are the key algorithms `admit_key` admits. "PKCS#1" means RSASSA-PKCS1-v1_5, which rustls uses on TLS 1.2 only.
 
 ### `unrestricted`
 
@@ -193,7 +219,7 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 
 ## 4. Named residuals
 
-1. **The peer certificate's key size and curve.** rustls does not restrict a peer leaf's key size or curve. It verifies RSA moduli from 2048 to 8192 bits under every RSA scheme, and on TLS 1.2 each ECDSA scheme accepts a key on any of the three NIST curves: scheme 0x0503 (`ecdsa_secp384r1_sha384`) also accepts P-256 and P-521 leaves. RSA-2048 leaves pass on both versions. So `cnsa1` accepts leaves outside RFC 9151 §5.1 and §5.2, `bsi` accepts RSA leaves under TR-02102-2 Table 14's 3000 bits, and `preferred` accepts RSA leaves under ISM-1765's 3072 bits (p. 10). A profile's key list (`admit_key`) governs local keys only. A provider of the project's own, planned for round 3, can close this.
+1. **The peer certificate's key size and curve.** rustls does not restrict a peer leaf's key size or curve. It verifies RSA moduli from 2048 to 8192 bits under every RSA scheme, and on TLS 1.2 each ECDSA scheme accepts a key on any of the three NIST curves: scheme 0x0503 (`ecdsa_secp384r1_sha384`) also accepts P-256 and P-521 leaves. RSA-2048 leaves pass on both versions. So `cnsa1` accepts leaves outside RFC 9151 §5.1 and §5.2, `bsi` accepts RSA leaves under TR-02102-2 Table 14's 3000 bits, and `preferred` accepts RSA leaves under ISM-1765's 3072 bits (p. 10). A profile's key list (`admit_key`) governs local keys only. A provider of the project's own, planned for round 3, can close this. An opt-in narrowing option, "peer certificates must match the profile", is planned ([crypto-profile/crypto-profile#7](https://github.com/crypto-profile/crypto-profile/issues/7)); it will be off by default, because the transition expects mixed and hybrid chains.
 2. **`cnsa1` and RFC 9151 §5.2, §6 and §7.** For TLS 1.2, RFC 9151 says RSAES-PKCS1-v1_5 key transport "MUST be supported" (§5.2). The suites `TLS_RSA_WITH_AES_256_GCM_SHA384` and `TLS_DHE_RSA_WITH_AES_256_GCM_SHA384` are two of the four suites a TLS 1.2 client "MUST offer at least one of" (§6), and ffdhe3072 and ffdhe4096 (defined in §5.3) are two of the three groups a TLS 1.3 client "MUST include at least one of" (§7). rustls implements none of them, and SP 800-131A r2 Table 5 (p. 15) disallows PKCS#1 v1.5 key transport after 2023. As a client, `cnsa1` conforms: §6 requires a client to offer at least one of the four suites, and it offers the two ECDHE ones. As a server, it refuses a peer that offers only RSA key transport or finite-field DHE.
 3. **`bsi` and the hybrid groups.** TR-02102-2 (2026-01) §3.4.2, in the Table 10 note, states BSI's intent to recommend SecP256r1MLKEM768 and SecP384r1MLKEM1024 once the corresponding RFC is adopted. RFC 10024 has since been published (August 2026), but no edition of TR-02102-2 lists the hybrids, so `bsi` does not offer them, and `bsi` with the option is empty. The profile waits on a new edition; a statement of intent is not admitted.
 4. **`fips1402` and the CMVP Historical list.** Every FIPS 140-2 certificate moved to the CMVP Historical list on 22 September 2026. `fips1402` is historical: it serves peers whose boundary is still 140-2.
@@ -204,10 +230,10 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 
 ## 5. What a profile does not restrict
 
-- **Certificate-chain signature algorithms.** The verifiers keep rustls's full list for signatures on certificates (`WebPkiSupportedAlgorithms::all`); a profile narrows only the handshake signature. Under every profile the list is: ECDSA on P-256, P-384 and P-521, each with SHA-256, SHA-384 and SHA-512; Ed25519; RSA-PSS and RSA PKCS#1 v1.5 with SHA-256, SHA-384 and SHA-512, moduli 2048 to 8192 bits; and ML-DSA-44, ML-DSA-65 and ML-DSA-87 (`rustls-0.23.46/src/crypto/aws_lc_rs/mod.rs:159-183`). So no regime profile (`cnsa2`, `cnsa1`, `bsi`, `fips1403`, `fips1402`) restricts the chain to its text; each profile's section says what that admits. An Ed25519-signed CA chain is accepted under `fips1402`, which admits no Ed25519 scheme (test `a_profile_does_not_restrict_the_chain_signature`, `crypto-profile-awslc4/tests/profiles.rs`).
+- **Certificate-chain signature algorithms.** The verifiers keep rustls's full list for signatures on certificates (`WebPkiSupportedAlgorithms::all`); a profile narrows only the handshake signature. Under every profile the list is: ECDSA on P-256, P-384 and P-521, each with SHA-256, SHA-384 and SHA-512; Ed25519; RSA-PSS and RSA PKCS#1 v1.5 with SHA-256, SHA-384 and SHA-512, moduli 2048 to 8192 bits; and ML-DSA-44, ML-DSA-65 and ML-DSA-87 (`rustls-0.23.46/src/crypto/aws_lc_rs/mod.rs:159-183`). So no regime profile (`cnsa2`, `cnsa1`, `bsi`, `fips1403`, `fips1402`) restricts the chain to its text; each profile's section says what that admits. An Ed25519-signed CA chain is accepted under `fips1402`, which admits no Ed25519 scheme (test `a_profile_does_not_restrict_the_chain_signature`, `crypto-profile-awslc4/tests/profiles.rs`). The opt-in option planned in section 4, item 1, would restrict the chain as well as the leaf; it will be off by default, because the transition expects mixed and hybrid chains.
 - **The peer leaf's key size and curve** (section 4, item 1).
-- **The scheme a local signing key signs with.** rustls picks it from the peer's offer and the key's type.
-- **A key passed to `tls::load_private_key`.** It is loaded through rustls's key provider and not checked against any profile.
+- **A signing key built outside the profile's provider.** A key loaded through `tls::load_private_key`, `Resolved::certified_key` or the builder's own key loading signs only with the profile's schemes. A `rustls::sign::SigningKey` built any other way signs with whatever scheme rustls picks from the peer's offer and the key's type.
+- **The algorithm of a key passed to `tls::load_private_key` or a builder.** It is not checked against any profile; `Resolved::certified_key` checks it.
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Call `Resolved::admit_key` where a key is generated or a certificate request is made.
 - **Certificate requests.** `csr::generate_csr` generates a key of any algorithm it is asked for and signs the request with it.
 - **`aead`, `digest` and `sealbox`.** No profile governs them. `aead` is AES-256-GCM. `digest` hashes with SHA-256, SHA-384 or SHA-512, whichever is asked for. `sealbox` is fixed at P-384 ECDH, HKDF-SHA384 and AES-256-GCM, so it uses none of `cnsa2`'s algorithms for key establishment.
