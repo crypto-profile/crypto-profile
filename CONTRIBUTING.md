@@ -95,11 +95,12 @@ The suite checks the backend against the known answers, walks every capability c
 - the core crate's types re-exported at the crate root (`SignatureAlgorithm`, `TlsVersion`, `CipherSuite`, `KxGroup`, `TlsSignatureScheme`, `Algorithm`, `CryptoError` and the rest), and `MODULE`;
 - `test_support::handshake(client: &Policy, server: &Policy, key: SignatureAlgorithm) -> Result<Negotiated, String>`, behind a `test-support` feature that the test target requires (`required-features = ["test-support"]`). It runs a real in-process handshake and reports the version, suite, group and scheme from their wire codepoints, mapped back through the core crate's `iana()`;
 - `test_support::FIPS_LIBRARY: &str`, the FIPS module's crypto library name, under the same feature;
-- `test_support::{Negotiated, handshake_certified, handshake_with_ca}`, and the `rcgen` re-export, under the same feature;
-- `resolve`, and `Resolved` with its public fields, `admit_key` and `certified_key`. `Resolved`'s four-field struct-literal shape (`profile`, `options`, `tls`, `keys`) is part of the contract, because the suite's `open_peer` builds one by literal;
-- `tls::Policy`, with the four public list fields, `tls::crypto_provider`, `tls::client_builder` and `tls::server_builder`;
+- `test_support::{Negotiated, handshake_certified, handshake_with_ca}`, with `Negotiated`'s four public fields (`version`, `suite`, `kx`, `scheme`), and the `rcgen` re-export, under the same feature;
+- the `rustls` re-export, from which the suite names `rustls::RootCertStore` and `rustls::server::ResolvesServerCertUsingSni` and reads a config's `require_ems`;
+- `resolve`, and `Resolved` with its public fields, `admit_key` and `certified_key`, implementing `PartialEq` and `Debug`. `Resolved`'s four-field struct-literal shape (`profile`, `options`, `tls`, `keys`) is part of the contract, because the suite's `open_peer` builds one by literal;
+- `tls::Policy`, with the four public list fields, implementing `Clone`, `PartialEq` and `Debug`, `tls::crypto_provider`, `tls::client_builder` and `tls::server_builder`;
 - `fips::assert_fips_client_config` and `fips::assert_fips_server_config`;
-- `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`;
+- `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`, with `KeyPair` implementing `rcgen::SigningKey`;
 - `digest::digest`;
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
 - `sealbox::PrivateKey::from_pkcs8_der` and `sealbox::open`.

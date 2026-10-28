@@ -1,6 +1,7 @@
 //! The profile golden tables every backend's `resolve` is checked against; literal IANA
-//! codepoints and key names. In the three rows the option leaves empty (`cnsa1`, `bsi` and
-//! `fips1402` with the option), only the empty groups column and the availability walk are compared.
+//! codepoints and key names. The three rows the option leaves empty (`cnsa1`, `bsi` and `fips1402`
+//! with the option) specify the refusal `resolve` gives; their lists are never compared with a
+//! resolved profile.
 use crate::{
     Algorithm, CipherSuite, CryptoError, Family, KxGroup, Module, Options, Profile,
     SignatureAlgorithm, TlsSignatureScheme, TlsVersion, capability,
