@@ -14,7 +14,7 @@ The crate's rustls `CryptoProvider` lives in a core macro, so each backend expan
 
 ## Decision
 
-1. **The provider is plain Rust source under `crypto-profile/src/provider/`.** Core's `build.rs` takes the module list from `mod.rs`'s `pub(crate) mod X;` lines, panics if that list differs from the directory's `.rs` files, and wraps the listed files, verbatim, into the `#[doc(hidden)] #[macro_export]` `provider!` in `OUT_DIR`, which core `include!`s.
+1. **The provider is plain Rust source under `crypto-profile/src/provider/`.** Core's `build.rs` takes the module list from `mod.rs`'s `pub(crate) mod X;` lines. It panics if `mod.rs` holds any line other than a blank line, one `//!` line or `pub(crate) mod <identifier>;`, or if the list differs from the directory's `.rs` files. Otherwise it wraps the listed files, verbatim, into the `#[doc(hidden)] #[macro_export]` `provider!` in `OUT_DIR`, which core `include!`s.
 2. **A backend expands `provider!` and also carries the direct-mode module:** `#[cfg(crypto_profile_provider_direct)] #[path = "../../crypto-profile/src/provider/mod.rs"] mod provider;`. Clippy, coverage and cargo-mutants' file discovery use that mode. CI runs clippy in both modes and coverage in direct mode, with cargo-mutants 27.1.0 and cargo-llvm-cov 0.8.7 pinned.
 3. **The macro takes no argument yet (`provider!()`).** Backend-only items arrive with the signing keys, which amend this item.
 4. **A component whose `fips()` is the module's FIPS mode has an equivalent `-> true` mutant,** because every test process runs in FIPS mode. Each is excepted by one exact `exclude_re` (decision 0003); the `-> false` mutant stays live and is killed.
@@ -29,6 +29,6 @@ The crate's rustls `CryptoProvider` lives in a core macro, so each backend expan
 
 ## Consequences
 
-- `mod.rs` is the one module list: both modes compile exactly the files it names, and a file in the directory that it does not name fails the build.
+- `mod.rs` is the one module list and carries nothing else: no attribute, inner or outer, and no item, so nothing in it applies to one mode only. Both modes compile exactly the files it names, and a file in the directory that it does not name fails the build.
 - A backend that glob re-exports core (`pub use crypto_profile::*`, as `crypto-profile-awslc4` does) makes the hidden `provider!` reachable from the backend's root too. It stays `#[doc(hidden)]` there and is not part of either crate's API.
 - A second backend carries the same `#[path]` module, but only one backend may carry it for cargo-mutants, or each body mutant is tested twice.

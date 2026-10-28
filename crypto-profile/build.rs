@@ -3,10 +3,32 @@ fn main() {
     println!("cargo::rerun-if-changed=src/provider");
     let root = std::fs::read_to_string("src/provider/mod.rs")
         .unwrap_or_else(|e| panic!("crypto-profile: cannot read src/provider/mod.rs: {e}"));
-    let names: Vec<&str> = root
-        .lines()
-        .filter_map(|l| l.strip_prefix("pub(crate) mod ")?.strip_suffix(';'))
-        .collect();
+    let is_ident = |s: &str| {
+        s.chars()
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    let mut names: Vec<&str> = Vec::new();
+    let mut seen_purpose = false;
+    for line in root.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        if line.starts_with("//!") && !seen_purpose {
+            seen_purpose = true;
+            continue;
+        }
+        match line
+            .strip_prefix("pub(crate) mod ")
+            .and_then(|l| l.strip_suffix(';'))
+        {
+            Some(name) if is_ident(name) => names.push(name),
+            _ => panic!(
+                "crypto-profile: src/provider/mod.rs may hold only blank lines, one `//!` line and `pub(crate) mod <name>;` lines, not {line:?}"
+            ),
+        }
+    }
     let mut on_disk: Vec<String> = std::fs::read_dir("src/provider")
         .unwrap_or_else(|e| panic!("crypto-profile: cannot list src/provider: {e}"))
         .map(|entry| {
