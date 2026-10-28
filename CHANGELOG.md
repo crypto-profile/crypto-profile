@@ -10,7 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 - The core crate `crypto-profile`, with no aws-lc dependency:
   - exhaustive algorithm types: `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `TlsVersion` and `Algorithm`, with literal IANA codepoints (`iana()`) and X.509 signature OIDs (`signature_oid()`), and `FromStr` and `Display` for `SignatureAlgorithm`;
-  - the capability model: `Module { line, linkage }`, `certificate()` and `capability()`, where each 3.x cell cites the AWS-LC FIPS 3.1.0 security policy of its own certificate, #5314 (static) or #5298 (dynamic): an `Approved` cell cites Table 5 (pp. 8-11), a `NotApproved` cell cites its absence from Tables 5-8, and the two hybrid key-exchange groups and TLS 1.3 are `Unverified`, with no source; every 4.x cell is `Unverified`;
+  - the capability model: `Module { line, linkage }`, `certificate()` and `capability()`, where each 3.x cell cites the AWS-LC FIPS 3.1.0 security policy of its own certificate, #5314 (static) or #5298 (dynamic): an `Approved` cell cites Table 5 (pp. 8-11), a `NotApproved` cell cites its absence from Tables 5-8, and the two hybrid key-exchange groups and TLS 1.3 are `Unverified`, with no source; every 4.x static cell is `Unverified`, and each 4.x dynamic cell is `Approval::AlgorithmTested`, citing the one AWS-LC FIPS 4.0.0 CAVP certificate that shows every operation it needs, or `Unverified` (decision record 0004); `AlgorithmTested`, like `Unverified`, is never approved;
   - typed errors: `CryptoError`, with `Unavailable(Algorithm)`, `PolicyEmpty(Family)` and `PolicyDrift`, and the typed causes `CsrError` and `TlsError`;
   - the sealed box's version-1 framing (`sealbox_wire`);
   - the conformance suite behind the `conformance` feature, run by every backend through `conformance_tests!`.
@@ -21,4 +21,4 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `fips`: `assert_fips_module`, `assert_fips_client_config`, `assert_fips_server_config`, `certificate` and `approval`;
   - the `rustls` re-export, and `rcgen` under the `test-support` feature.
 - Known-answer tests: Wycheproof (ECDSA, Ed25519, RSA PKCS#1 v1.5 SHA-384, ML-DSA-87, AES-GCM), NIST CAVP SHA-2, RFC 8032 and a sealed-box version-1 blob.
-- Documentation: `docs/usage.md`, `CONTRIBUTING.md` (with the Developer Certificate of Origin and the AI-assistance disclosure), `SECURITY.md`, decision records 0001 to 0003 and the pull request template.
+- Documentation: `docs/usage.md`, `CONTRIBUTING.md` (with the Developer Certificate of Origin and the AI-assistance disclosure), `SECURITY.md`, decision records 0001 to 0004 and the pull request template.

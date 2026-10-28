@@ -17,7 +17,7 @@ One reviewed place for an application's cryptographic choices:
   - a sealed box;
   - signature keys, signing and verification;
   - certificate-request generation.
-- **A capability table** that records, for each certified or submitted module and each algorithm, whether the backend implements it and what the module's security policy says about it, citing the policy table for every sourced cell.
+- **A capability table** that records, for each certified or submitted module and each algorithm, whether the backend implements it and what the published evidence says about it: the module's security policy, cited by table for every sourced cell, or, for a module with no published security policy, one CAVP certificate, which is never an approval ([decision 0004](docs/decisions/0004-algorithm-tested.md)).
 
 ## What it is not
 

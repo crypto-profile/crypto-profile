@@ -41,9 +41,11 @@ pub fn approval_given(fips_mode: bool, a: crypto_profile::Approval) -> crypto_pr
 }
 
 /// This build's module approval for `alg`, void (`Unverified`) unless the module reports FIPS
-/// mode now. This is the module's approval as its security policy states it; [`assert_fips_client_config`] is rustls's
-/// FIPS-mode classification, which can differ (for example, rustls treats the hybrid
-/// key-exchange groups as FIPS while their approval here is `Unverified`).
+/// mode now. This is the capability cell, as its source states it: the module's security policy,
+/// or, with none published, one CAVP certificate (decision 0004), which never approves.
+/// [`assert_fips_client_config`] is rustls's FIPS-mode classification, which can differ (for
+/// example, rustls treats the hybrid key-exchange groups as FIPS while their approval here is
+/// `Unverified`).
 pub fn approval(alg: crypto_profile::Algorithm) -> crypto_profile::Approval {
     approval_given(
         aws_lc_rs::try_fips_mode().is_ok(),

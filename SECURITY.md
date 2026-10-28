@@ -12,7 +12,7 @@ In scope is this repository's own code and its claims:
 
 - the core crate `crypto-profile`: the algorithm types, the capability table and its citations, the sealed-box framing and the conformance suite;
 - the backend `crypto-profile-awslc4`: how it selects, composes and checks AWS-LC's primitives, its TLS policy and provider construction, its key, CSR, AEAD and sealed-box code, and its FIPS checks;
-- the claims the crate makes: a capability cell that misstates a security policy, a certificate status that is wrong for the release, or documentation that implies a validation the crate does not have.
+- the claims the crate makes: a capability cell that misstates its source (a security policy's table, or for an `AlgorithmTested` cell the CAVP certificate it names), a certificate status that is wrong for the release, or documentation that implies a validation the crate does not have.
 
 Out of scope here, and to be reported to the project that owns the code:
 
@@ -27,6 +27,6 @@ If you are not sure where a defect lies, report it here; we will help route it.
 - The crate, version or commit, and the backend.
 - The linkage (static or dynamic), the target triple, and the Rust version.
 - What you expected and what happened, with the smallest reproduction you can give: a test, a `Policy`, or the input bytes.
-- For a claim defect: the capability cell or document, and the security-policy table that contradicts it.
+- For a claim defect: the capability cell or document, and the security-policy table or CAVP certificate that contradicts it.
 - Whether you used AI assistance to find or describe the issue.
 - Whether the issue is public anywhere else, and any disclosure deadline you are working to.

@@ -52,7 +52,7 @@ On Linux, a dynamic build loads `libaws_lc_fips_0_14_2_crypto.so`. The conforman
 
 The crate claims two things:
 - which module a build links, as `MODULE`;
-- that module's certificate status as of the crate version's release, as `certificate()`, with the security-policy citation behind every capability cell.
+- that module's certificate status as of the crate version's release, as `certificate()`, with the source behind every capability cell: a security policy's table, or, for an `AlgorithmTested` cell, the CAVP certificate it names.
 
 The [CMVP validated and Modules In Process lists](https://csrc.nist.gov/projects/cryptographic-module-validation-program) are authoritative. A status recorded in a released crate does not move when the CMVP list does.
 
@@ -60,7 +60,7 @@ The crate never claims:
 - that it is validated or certified itself;
 - that a deployment's operating system or processor is a tested operational environment. Both 3.x certificates list Amazon Linux 2023 only, on Graviton4 and Xeon Platinum 8375C, each with and without PAA (#5314 and #5298 security policies, Table 3, p. 7). Whether a deployment falls inside a certificate's operational environments is the deployer's determination.
 
-**The 4.x module** is submitted, in CMVP review, with no security policy published (AWS-LC `FIPS.md:56-60`; the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), read 2026-10-28). With no policy to cite, every 4.x approval cell is `Approval::Unverified`, and `certificate()` reports `CertStatus::InProcess` with no number (`crypto-profile/src/capability.rs`, `four_x` and `certificate`). `Unverified` is never treated as approved (`Approval::is_approved`).
+**The 4.x module** is submitted, in CMVP review, with no security policy published (AWS-LC `FIPS.md:56-60`; the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), read 2026-10-28). With no policy to cite, every 4.x static cell is `Approval::Unverified`. A 4.x dynamic cell is `Approval::AlgorithmTested { cavp }` where one AWS-LC FIPS 4.0.0 CAVP certificate (A7839-A7876) shows every operation the cell needs, and `Unverified` otherwise ([decision 0004](decisions/0004-algorithm-tested.md)). An `AlgorithmTested` cell claims only the parameters its `cavp` names; for a signature scheme, rustls verifies a wider range of peer keys (decision 0004 §5). 22 dynamic cells are `AlgorithmTested` and 18 are `Unverified`: X25519 and the two hybrid groups, because CAVP has no algorithm for them; the ChaCha20 suites, because none exists; TLS 1.2 and TLS 1.3, because no certificate shows a TLS 1.2 KDF with extended master secret or a TLS 1.3 KDF; and the ECDSA keys and the AES-GCM suites, because no single certificate shows every operation they need. `certificate()` reports `CertStatus::InProcess` with no number (`crypto-profile/src/capability.rs`, `four_x`, `four_x_dynamic` and `certificate`). Neither `AlgorithmTested` nor `Unverified` is ever treated as approved (`Approval::is_approved`).
 
 ## 4. Build prerequisites
 
@@ -117,11 +117,11 @@ The backend answers two questions that are easy to confuse.
 - A policy with X25519 or ChaCha20-Poly1305 fails it: rustls marks both as not FIPS (`rustls-0.23.46/src/crypto/ring/kx.rs:81-93`; `src/crypto/aws_lc_rs/tls13.rs:116-118`, `tls12.rs:240-242`).
 - A policy with the hybrid groups X25519MLKEM768 or SECP256R1MLKEM768 passes it. rustls classifies a hybrid by whichever component comes first, following SP 800-56C Rev. 2 (`rustls-0.23.46/src/crypto/aws_lc_rs/pq/hybrid.rs:71-90`).
 
-**The crate's approval report.** `fips::approval(alg)` returns the capability cell's `Approval` for this build's module, as the module's security policy states it. It is void (`Unverified`) unless the module reports FIPS mode at the time of the call (`crypto-profile-awslc4/src/fips.rs`, `approval` and `approval_given`).
+**The crate's approval report.** `fips::approval(alg)` returns the capability cell's `Approval` for this build's module, as its source states it: the module's security policy, or, for a module with none published, the CAVP certificate behind an `AlgorithmTested` cell (decision 0004). It is void (`Unverified`) unless the module reports FIPS mode at the time of the call (`crypto-profile-awslc4/src/fips.rs`, `approval` and `approval_given`).
 - On 3.x, the hybrid groups are `Unverified`, because neither 3.x security policy mentions hybrid key establishment, and so is TLS 1.3, because the policies' TLS KDF row lists v1.0/1.1 and v1.2 only (`crypto-profile/src/capability.rs`, `three_x`).
-- On 4.x, everything is `Unverified`, because no 4.x security policy is published.
+- On 4.x, no security policy is published: a static-build cell is `Unverified`, and a dynamic-build cell is `AlgorithmTested` or `Unverified` as §3 lists. Neither is approved.
 
-**Passing the first is not the second.** A configuration that rustls classifies as FIPS can include algorithms whose approval this crate cannot source. Use `assert_fips_*` to refuse X25519, ChaCha20 and non-EMS TLS 1.2; use `approval` for what the module's security policy says.
+**Passing the first is not the second.** A configuration that rustls classifies as FIPS can include algorithms whose approval this crate cannot source. Use `assert_fips_*` to refuse X25519, ChaCha20 and non-EMS TLS 1.2; use `approval` for the cell and its source, which is `Approved` only where a security policy says so.
 
 `fips::assert_fips_module()` is a third, narrower check: it refuses unless the loaded AWS-LC module reports FIPS mode. The sealed box calls it on every seal and open. It is this build's only run-time check that the module in the process is in FIPS mode, and nothing runs it at start-up: **an application must call `fips::assert_fips_module()` at start-up and refuse to run if it fails.** On a dynamic build this is what refuses a non-FIPS library that the dynamic loader found in place of the FIPS one.
 
