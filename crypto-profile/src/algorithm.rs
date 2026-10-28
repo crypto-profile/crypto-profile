@@ -186,6 +186,24 @@ impl TlsSignatureScheme {
         }
     }
 
+    /// The scheme's rank in the canonical order every profile lists its schemes in, and in which a
+    /// backend carries a policy's schemes: 0 first, one rank per scheme.
+    pub const fn preference(self) -> u8 {
+        match self {
+            TlsSignatureScheme::MlDsa87 => 0,
+            TlsSignatureScheme::EcdsaNistp384Sha384 => 1,
+            TlsSignatureScheme::EcdsaNistp256Sha256 => 2,
+            TlsSignatureScheme::EcdsaNistp521Sha512 => 3,
+            TlsSignatureScheme::Ed25519 => 4,
+            TlsSignatureScheme::RsaPssSha384 => 5,
+            TlsSignatureScheme::RsaPssSha512 => 6,
+            TlsSignatureScheme::RsaPssSha256 => 7,
+            TlsSignatureScheme::RsaPkcs1Sha384 => 8,
+            TlsSignatureScheme::RsaPkcs1Sha512 => 9,
+            TlsSignatureScheme::RsaPkcs1Sha256 => 10,
+        }
+    }
+
     /// Every TLS signature scheme.
     pub const ALL: [TlsSignatureScheme; 11] = [
         TlsSignatureScheme::EcdsaNistp256Sha256,
@@ -470,6 +488,22 @@ impl Algorithm {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preference_is_the_canonical_order() {
+        let mut all = TlsSignatureScheme::ALL;
+        all.sort_by_key(|t| t.preference());
+        assert_eq!(
+            all.map(TlsSignatureScheme::iana),
+            [
+                0x0906, 0x0503, 0x0403, 0x0603, 0x0807, 0x0805, 0x0806, 0x0804, 0x0501, 0x0601,
+                0x0401
+            ]
+        );
+        let mut ranks = TlsSignatureScheme::ALL.map(TlsSignatureScheme::preference);
+        ranks.sort_unstable();
+        assert_eq!(ranks, std::array::from_fn::<u8, 11, _>(|i| i as u8));
+    }
 
     #[test]
     fn post_quantum_groups_are_the_ml_kem_ones() {
