@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
 
 /// What a TLS configuration may use: versions, suites and groups in preference order, and a set
-/// of signature schemes.
+/// of signature schemes. No list may name an entry twice.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Policy {
     /// Protocol versions.
@@ -23,8 +23,8 @@ pub struct Policy {
     pub kx_groups: Vec<K>,
     /// Handshake signature schemes: those this side accepts from its peer, and those a key loaded
     /// through this policy's provider signs with. Certificate-chain signature algorithms are not
-    /// restricted. A duplicate is refused; a provider carries them in the crate's fixed preference
-    /// order, the order every profile lists them in, whatever order they are given in.
+    /// restricted. A provider carries them in the crate's fixed preference order, the order every
+    /// profile lists them in, whatever order they are given in.
     pub signature_schemes: Vec<T>,
 }
 
@@ -231,10 +231,22 @@ fn tables(set: &SchemeSet) -> Result<Tables, CryptoError> {
     Ok(t)
 }
 
-/// A provider carrying exactly `p`, refusing an empty family, a duplicate signature scheme or an
-/// unavailable algorithm. A key loaded through its key provider signs only with a scheme in
-/// `p.signature_schemes`.
-pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
+fn no_duplicate<X: Copy + PartialEq>(
+    xs: &[X],
+    algorithm: fn(X) -> Algorithm,
+) -> Result<(), CryptoError> {
+    for (i, x) in xs.iter().enumerate() {
+        if xs[..i].contains(x) {
+            return Err(CryptoError::PolicyDuplicate(algorithm(*x)));
+        }
+    }
+    Ok(())
+}
+
+fn validate(
+    p: &Policy,
+    available: impl Fn(Algorithm) -> Result<(), CryptoError>,
+) -> Result<SchemeSet, CryptoError> {
     if p.versions.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::Version));
     }
@@ -244,19 +256,32 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     if p.signature_schemes.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::SignatureScheme));
     }
+    no_duplicate(&p.versions, Algorithm::Protocol)?;
+    no_duplicate(&p.cipher_suites, Algorithm::Cipher)?;
+    no_duplicate(&p.kx_groups, Algorithm::Kx)?;
     let schemes = scheme_set(&p.signature_schemes)?;
     for v in &p.versions {
-        ensure(Algorithm::Protocol(*v))?;
+        available(Algorithm::Protocol(*v))?;
     }
     for c in &p.cipher_suites {
-        ensure(Algorithm::Cipher(*c))?;
+        available(Algorithm::Cipher(*c))?;
     }
     for k in &p.kx_groups {
-        ensure(Algorithm::Kx(*k))?;
+        available(Algorithm::Kx(*k))?;
     }
     for t in &p.signature_schemes {
-        ensure(Algorithm::Scheme(*t))?;
+        available(Algorithm::Scheme(*t))?;
     }
+    Ok(schemes)
+}
+
+/// A provider carrying exactly `p`. It refuses, in this order: an empty version, group or scheme
+/// list; a duplicate entry in any list, naming the first one found in versions, suites, groups,
+/// then schemes; an unavailable algorithm; and a suite list left empty once suites of unlisted
+/// versions are dropped. A key loaded through its key provider signs only with a scheme in
+/// `p.signature_schemes`.
+pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
+    let schemes = validate(p, ensure)?;
     let suites: Vec<_> = p
         .cipher_suites
         .iter()
@@ -885,6 +910,88 @@ mod tests {
             signature_schemes: schemes,
             ..one13(K::Secp384r1)
         }
+    }
+
+    #[test]
+    fn the_first_duplicate_in_any_list_is_refused_in_family_order() {
+        let p = one13(K::Secp384r1);
+        let versions = Policy {
+            versions: vec![V::Tls13, V::Tls12, V::Tls13],
+            cipher_suites: vec![C::Tls13Aes256GcmSha384, C::Tls13Aes256GcmSha384],
+            ..p.clone()
+        };
+        let suites = Policy {
+            cipher_suites: vec![
+                C::Tls13Aes256GcmSha384,
+                C::Tls13Aes128GcmSha256,
+                C::Tls13Aes128GcmSha256,
+                C::Tls13Aes256GcmSha384,
+            ],
+            kx_groups: vec![K::Secp384r1, K::Secp384r1],
+            ..p.clone()
+        };
+        let groups = Policy {
+            kx_groups: vec![K::MlKem1024, K::Secp384r1, K::MlKem1024],
+            signature_schemes: vec![T::Ed25519, T::Ed25519],
+            ..p.clone()
+        };
+        for (q, a) in [
+            (versions, Algorithm::Protocol(V::Tls13)),
+            (suites, Algorithm::Cipher(C::Tls13Aes128GcmSha256)),
+            (groups, Algorithm::Kx(K::MlKem1024)),
+        ] {
+            assert_eq!(
+                crypto_provider(&q).err(),
+                Some(CryptoError::PolicyDuplicate(a)),
+                "{q:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_duplicate_is_refused_before_an_unavailable_algorithm() {
+        let p = one13(K::Secp384r1);
+        let none = |a: Algorithm| Err(CryptoError::Unavailable(a));
+        for (q, a) in [
+            (
+                Policy {
+                    versions: vec![V::Tls13, V::Tls13],
+                    ..p.clone()
+                },
+                Algorithm::Protocol(V::Tls13),
+            ),
+            (
+                Policy {
+                    cipher_suites: vec![C::Tls13Aes256GcmSha384; 2],
+                    ..p.clone()
+                },
+                Algorithm::Cipher(C::Tls13Aes256GcmSha384),
+            ),
+            (
+                Policy {
+                    kx_groups: vec![K::Secp384r1; 2],
+                    ..p.clone()
+                },
+                Algorithm::Kx(K::Secp384r1),
+            ),
+            (
+                Policy {
+                    signature_schemes: vec![T::MlDsa87; 2],
+                    ..p.clone()
+                },
+                Algorithm::Scheme(T::MlDsa87),
+            ),
+        ] {
+            assert_eq!(
+                validate(&q, none).err(),
+                Some(CryptoError::PolicyDuplicate(a)),
+                "{q:?}"
+            );
+        }
+        assert_eq!(
+            validate(&p, none).err(),
+            Some(CryptoError::Unavailable(Algorithm::Protocol(V::Tls13)))
+        );
     }
 
     #[test]

@@ -95,7 +95,7 @@ Use the re-exported crate: `crypto_profile_awslc4::rustls`. Don't declare `rustl
 
 `tls::crypto_provider(&Policy)` builds a provider carrying exactly the policy's suites and groups, in the policy's order, and its signature schemes in the crate's fixed preference order, the order every profile lists them in: ML-DSA-87, ECDSA P-384, P-256 and P-521, Ed25519, RSA-PSS with SHA-384, SHA-512 and SHA-256, then RSA PKCS#1 v1.5 in the same hash order. Two policies naming the same schemes in different orders build the same provider. It refuses:
 - an empty `versions`, `kx_groups` or `signature_schemes` list, or a cipher-suite list left empty once suites of unlisted versions are dropped, with `CryptoError::PolicyEmpty(family)`;
-- a signature scheme listed twice, with `CryptoError::PolicyDuplicate(alg)`, naming the scheme; the client and server builders, `load_private_key` and both verifier builders refuse it the same way;
+- a duplicate entry in any list, with `CryptoError::PolicyDuplicate(alg)`, naming the first one found, checking versions, suites, groups, then schemes; this is checked before availability, so a duplicated entry the module lacks is refused as a duplicate; the client and server builders, `load_private_key` and both verifier builders refuse it the same way;
 - an algorithm the backend's module does not have, with `CryptoError::Unavailable(alg)`.
 
 `tls::assert_provider_matches(&provider, &policy)` refuses a provider whose suites, groups or schemes differ from the policy's, or whose suites or groups are in a different order, or whose key provider is not the policy's, with `CryptoError::PolicyDrift`.
