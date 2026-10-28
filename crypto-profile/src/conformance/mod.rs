@@ -727,11 +727,14 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_linkage_matches_the_binary() {
+            let lib = test_support::FIPS_LIBRARY;
+            assert!(
+                lib.starts_with("aws_lc_fips_") && lib.ends_with("_crypto"),
+                "{lib}"
+            );
             if cfg!(target_os = "linux") {
                 let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
-                let shared = maps
-                    .lines()
-                    .any(|l| l.contains("libaws_lc_fips_0_14_2_crypto.so"));
+                let shared = maps.lines().any(|l| l.contains(&format!("lib{lib}.so")));
                 assert_eq!(shared, MODULE.linkage == Linkage::Dynamic, "{MODULE:?}");
             } else if cfg!(target_os = "macos") {
                 let exe = std::env::current_exe().unwrap();
@@ -740,8 +743,8 @@ macro_rules! conformance_tests {
                     .arg(&exe)
                     .output()
                     .unwrap();
-                let shared = String::from_utf8_lossy(&out.stdout)
-                    .contains("libaws_lc_fips_0_14_2_crypto.dylib");
+                let shared =
+                    String::from_utf8_lossy(&out.stdout).contains(&format!("lib{lib}.dylib"));
                 assert_eq!(shared, MODULE.linkage == Linkage::Dynamic, "{MODULE:?}");
             } else {
                 panic!("no linkage check for this target");
