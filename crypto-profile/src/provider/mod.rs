@@ -8,3 +8,4 @@ pub(crate) mod kx;
 pub(crate) mod sign;
 pub(crate) mod tls12;
 pub(crate) mod tls13;
+pub(crate) mod verify;

@@ -54,13 +54,8 @@ fn rustls_version(v: V) -> &'static rustls::SupportedProtocolVersion {
     }
 }
 
-#[expect(clippy::disallowed_methods)]
 fn base_provider() -> CryptoProvider {
-    CryptoProvider {
-        secure_random: &crate::provider::assembly::RNG,
-        key_provider: &crate::provider::assembly::KEYS,
-        ..rustls::crypto::aws_lc_rs::default_provider()
-    }
+    crate::provider::assembly::full()
 }
 
 type SchemeMapping = (

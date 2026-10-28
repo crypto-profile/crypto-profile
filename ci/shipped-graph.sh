@@ -1,0 +1,25 @@
+#!/usr/bin/env bash
+set -euo pipefail
+tree() { cargo tree -p crypto-profile-awslc4 --locked --target all $features "$@"; }
+err="$(mktemp)"
+trap 'rm -f "$err"' EXIT
+for features in "" "--all-features"; do
+  rustls="$(tree --edges normal,features --invert rustls)"
+  webpki="$(tree --edges normal,features --invert rustls-webpki)"
+  grep -q '^rustls v0\.23\.46' <<<"$rustls" || { echo "rustls is not in the shipped graph; the check read nothing"; exit 1; }
+  grep -q '^rustls-webpki v0\.103\.16' <<<"$webpki" || { echo "rustls-webpki is not in the shipped graph; the check read nothing"; exit 1; }
+  if grep -E 'rustls feature "(aws_lc_rs|aws-lc-rs|custom-provider|fips|ring|prefer-post-quantum)"' <<<"$rustls"; then
+    echo "a stock rustls provider, or custom-provider, reaches the shipped graph ($features)"; exit 1
+  fi
+  if grep -E 'rustls-webpki feature "(aws-lc-rs|aws-lc-rs-fips|aws-lc-rs-unstable|ring)"' <<<"$webpki"; then
+    echo "rustls-webpki's own verifiers reach the shipped graph ($features)"; exit 1
+  fi
+  if ring="$(tree --edges normal --invert ring 2>"$err")"; then :; else
+    grep -q 'did not match any packages' "$err" || { cat "$err"; echo "the ring probe failed"; exit 1; }
+    ring=""
+  fi
+  if [ -n "$ring" ]; then
+    printf '%s\n' "$ring"; echo "ring reaches the shipped graph ($features)"; exit 1
+  fi
+done
+cargo clippy -p crypto-profile-awslc4 --lib --all-features --locked -- -D warnings

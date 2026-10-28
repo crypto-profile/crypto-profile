@@ -2,7 +2,6 @@
 use crate::signature::KeyPair;
 use crate::tls::{Policy, client_builder, server_builder, server_cert_verifier_builder};
 use crate::{CipherSuite, KxGroup, Resolved, SignatureAlgorithm, TlsSignatureScheme, TlsVersion};
-use rustls::client::WebPkiServerVerifier;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::sign::SingleCertAndKey;
@@ -26,10 +25,10 @@ pub struct Negotiated {
     pub scheme: TlsSignatureScheme,
 }
 
-/// A WebPKI server verifier that records the scheme of the handshake signature it checks.
+/// A server verifier that records the scheme of the handshake signature it checks.
 #[derive(Debug)]
 struct SchemeRecorder {
-    inner: Arc<WebPkiServerVerifier>,
+    inner: Arc<dyn ServerCertVerifier>,
     seen: Arc<Mutex<Option<SignatureScheme>>>,
 }
 
@@ -173,74 +172,123 @@ pub fn handshake_certified(
     )
 }
 
+/// A CA and a `localhost` leaf it issued.
+pub struct Pki {
+    /// A store holding the CA alone.
+    pub roots: rustls::RootCertStore,
+    /// The CA's certificate.
+    pub ca: CertificateDer<'static>,
+    /// The leaf, then the CA.
+    pub chain: Vec<CertificateDer<'static>>,
+    /// The leaf's key.
+    pub key: KeyPair,
+}
+
+fn e(x: impl std::fmt::Display) -> String {
+    x.to_string()
+}
+
+/// A fresh CA whose key is `ca` and a `localhost` leaf whose key is `key`.
+pub fn pki(ca: SignatureAlgorithm, key: SignatureAlgorithm) -> Result<Pki, String> {
+    let ca_key = KeyPair::generate(ca).map_err(e)?;
+    let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let ca_cert = ca_params.self_signed(&ca_key).map_err(e)?;
+    let issuer = rcgen::Issuer::new(ca_params, &ca_key);
+    let leaf_key = KeyPair::generate(key).map_err(e)?;
+    let leaf = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+        .map_err(e)?
+        .signed_by(&leaf_key, &issuer)
+        .map_err(e)?;
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca_cert.der().clone()).map_err(e)?;
+    Ok(Pki {
+        roots,
+        ca: ca_cert.der().clone(),
+        chain: vec![leaf.der().clone(), ca_cert.der().clone()],
+        key: leaf_key,
+    })
+}
+
+/// `inner`, recording the scheme of each handshake signature it checks into the returned cell.
+pub fn recording(
+    inner: Arc<dyn ServerCertVerifier>,
+) -> (
+    Arc<dyn ServerCertVerifier>,
+    Arc<Mutex<Option<SignatureScheme>>>,
+) {
+    let seen = Arc::new(Mutex::new(None));
+    let recorder = SchemeRecorder {
+        inner,
+        seen: Arc::clone(&seen),
+    };
+    (Arc::new(recorder), seen)
+}
+
+/// An in-memory handshake; the wire codepoints of the version, suite, group and the server's
+/// handshake-signature scheme recorded in `seen`.
+pub fn drive(
+    client: rustls::ClientConfig,
+    server: rustls::ServerConfig,
+    seen: &Mutex<Option<SignatureScheme>>,
+) -> Result<[u16; 4], String> {
+    let name = rustls::pki_types::ServerName::try_from("localhost").map_err(e)?;
+    let mut c = rustls::ClientConnection::new(Arc::new(client), name).map_err(e)?;
+    let mut s = rustls::ServerConnection::new(Arc::new(server)).map_err(e)?;
+    pump(&mut c, &mut s)?;
+    let version = u16::from_be_bytes(c.protocol_version().ok_or("no version")?.to_array());
+    let suite = u16::from_be_bytes(
+        c.negotiated_cipher_suite()
+            .ok_or("no suite")?
+            .suite()
+            .to_array(),
+    );
+    let group = u16::from_be_bytes(
+        c.negotiated_key_exchange_group()
+            .ok_or("no group")?
+            .name()
+            .to_array(),
+    );
+    let scheme = seen
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .map(|s| u16::from_be_bytes(s.to_array()))
+        .ok_or("no handshake signature")?;
+    Ok([version, suite, group, scheme])
+}
+
 fn run(
     client: &Policy,
     ca: SignatureAlgorithm,
     key: SignatureAlgorithm,
     serve: impl FnOnce(Vec<CertificateDer<'static>>, &KeyPair) -> Result<rustls::ServerConfig, String>,
 ) -> Result<Negotiated, String> {
-    let e = |x: &dyn std::fmt::Display| x.to_string();
-    let ca_key = KeyPair::generate(ca).map_err(|x| e(&x))?;
-    let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(|x| e(&x))?;
-    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-    let ca_cert = ca_params.self_signed(&ca_key).map_err(|x| e(&x))?;
-    let issuer = rcgen::Issuer::new(ca_params, &ca_key);
-    let leaf_key = KeyPair::generate(key).map_err(|x| e(&x))?;
-    let leaf = rcgen::CertificateParams::new(vec!["localhost".to_string()])
-        .map_err(|x| e(&x))?
-        .signed_by(&leaf_key, &issuer)
-        .map_err(|x| e(&x))?;
-    let chain = vec![leaf.der().clone(), ca_cert.der().clone()];
-    let server_cfg = serve(chain, &leaf_key)?;
-    let mut roots = rustls::RootCertStore::empty();
-    roots.add(ca_cert.der().clone()).map_err(|x| e(&x))?;
-    let seen = Arc::new(Mutex::new(None));
-    let recorder = SchemeRecorder {
-        inner: server_cert_verifier_builder(Arc::new(roots), client)
-            .map_err(|x| e(&x))?
+    let p = pki(ca, key)?;
+    let server_cfg = serve(p.chain.clone(), &p.key)?;
+    let (verifier, seen) = recording(
+        server_cert_verifier_builder(Arc::new(p.roots), client)
+            .map_err(e)?
             .build()
-            .map_err(|x| e(&x))?,
-        seen: Arc::clone(&seen),
-    };
-    let client_cfg = client_builder(client)
-        .map_err(|x| e(&x))?
-        .dangerous()
-        .with_custom_certificate_verifier(Arc::new(recorder))
-        .with_no_client_auth();
-    let name = rustls::pki_types::ServerName::try_from("localhost").map_err(|x| e(&x))?;
-    let mut c = rustls::ClientConnection::new(Arc::new(client_cfg), name).map_err(|x| e(&x))?;
-    let mut s = rustls::ServerConnection::new(Arc::new(server_cfg)).map_err(|x| e(&x))?;
-    pump(&mut c, &mut s)?;
-    let version = match c.protocol_version() {
-        Some(rustls::ProtocolVersion::TLSv1_2) => TlsVersion::Tls12,
-        Some(rustls::ProtocolVersion::TLSv1_3) => TlsVersion::Tls13,
-        other => return Err(format!("unexpected version {other:?}")),
-    };
-    let suite_cp = u16::from_be_bytes(
-        c.negotiated_cipher_suite()
-            .ok_or("no suite")?
-            .suite()
-            .to_array(),
+            .map_err(e)?,
     );
+    let client_cfg = client_builder(client)
+        .map_err(e)?
+        .dangerous()
+        .with_custom_certificate_verifier(verifier)
+        .with_no_client_auth();
+    let [version_cp, suite_cp, group_cp, scheme_cp] = drive(client_cfg, server_cfg, &seen)?;
+    let version = TlsVersion::ALL
+        .into_iter()
+        .find(|x| x.iana() == version_cp)
+        .ok_or(format!("unexpected version {version_cp:#06x}"))?;
     let suite = CipherSuite::ALL
         .into_iter()
         .find(|x| x.iana() == suite_cp)
         .ok_or(format!("unknown suite {suite_cp:#06x}"))?;
-    let group_cp = u16::from_be_bytes(
-        c.negotiated_key_exchange_group()
-            .ok_or("no group")?
-            .name()
-            .to_array(),
-    );
     let kx = KxGroup::ALL
         .into_iter()
         .find(|x| x.iana() == group_cp)
         .ok_or(format!("unknown group {group_cp:#06x}"))?;
-    let scheme_cp = seen
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .map(|s| u16::from_be_bytes(s.to_array()))
-        .ok_or("no handshake signature")?;
     let scheme = TlsSignatureScheme::ALL
         .into_iter()
         .find(|x| x.iana() == scheme_cp)

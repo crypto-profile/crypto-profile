@@ -1,7 +1,10 @@
-use rustls::crypto::{GetRandomFailed, KeyProvider, SecureRandom, SupportedKxGroup};
-use rustls::pki_types::PrivateKeyDer;
+use rustls::crypto::{
+    CryptoProvider, GetRandomFailed, KeyProvider, SecureRandom, SupportedKxGroup,
+    WebPkiSupportedAlgorithms,
+};
+use rustls::pki_types::{PrivateKeyDer, SignatureVerificationAlgorithm};
 use rustls::sign::SigningKey;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 pub(crate) fn fips() -> bool {
     aws_lc_rs::try_fips_mode().is_ok()
@@ -71,6 +74,41 @@ pub(crate) fn suite(c: crypto_profile::CipherSuite) -> rustls::SupportedCipherSu
         C::Tls12EcdheRsaChacha20Poly1305Sha256 => {
             super::tls12::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
         }
+    }
+}
+
+type Mapping = (
+    rustls::SignatureScheme,
+    &'static [&'static dyn SignatureVerificationAlgorithm],
+);
+
+pub(crate) fn verification() -> WebPkiSupportedAlgorithms {
+    static TABLE: OnceLock<(
+        Vec<&'static dyn SignatureVerificationAlgorithm>,
+        Vec<Mapping>,
+    )> = OnceLock::new();
+    let (all, mapping) = TABLE.get_or_init(|| {
+        (
+            [super::verify::COMMON_ALL, super::backend::PQDSA_ALL].concat(),
+            [super::verify::COMMON_MAPPING, super::backend::PQDSA_MAPPING].concat(),
+        )
+    });
+    WebPkiSupportedAlgorithms { all, mapping }
+}
+
+pub(crate) fn full() -> CryptoProvider {
+    CryptoProvider {
+        cipher_suites: crypto_profile::CipherSuite::ALL
+            .into_iter()
+            .map(suite)
+            .collect(),
+        kx_groups: crypto_profile::KxGroup::ALL
+            .into_iter()
+            .map(group)
+            .collect(),
+        signature_verification_algorithms: verification(),
+        secure_random: &RNG,
+        key_provider: &KEYS,
     }
 }
 
@@ -151,5 +189,66 @@ mod tests {
                 .is_err()
         );
         assert!(KEYS.fips());
+    }
+
+    fn ids(algs: &[&dyn SignatureVerificationAlgorithm]) -> Vec<(AlgId, AlgId)> {
+        algs.iter()
+            .map(|a| (a.public_key_alg_id(), a.signature_alg_id()))
+            .collect()
+    }
+
+    type AlgId = rustls::pki_types::AlgorithmIdentifier;
+
+    #[test]
+    fn verification_is_the_common_tables_then_the_backends() {
+        let v = verification();
+        assert_eq!(
+            ids(v.all),
+            [
+                ids(super::super::verify::COMMON_ALL),
+                ids(super::super::backend::PQDSA_ALL)
+            ]
+            .concat()
+        );
+        let mapped = |m: &[Mapping]| {
+            m.iter()
+                .map(|(s, algs)| (*s, ids(algs)))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            mapped(v.mapping),
+            [
+                mapped(super::super::verify::COMMON_MAPPING),
+                mapped(super::super::backend::PQDSA_MAPPING)
+            ]
+            .concat()
+        );
+    }
+
+    #[test]
+    fn the_full_provider_carries_every_suite_and_group_in_order() {
+        use crypto_profile::CipherSuite as C;
+        let p = full();
+        assert_eq!(
+            p.cipher_suites
+                .iter()
+                .map(|s| u16::from_be_bytes(s.suite().to_array()))
+                .collect::<Vec<_>>(),
+            C::ALL.map(|c| u16::from_be_bytes(suite(c).suite().to_array()))
+        );
+        assert_eq!(
+            p.kx_groups
+                .iter()
+                .map(|g| u16::from_be_bytes(g.name().to_array()))
+                .collect::<Vec<_>>(),
+            K::ALL.map(|k| u16::from_be_bytes(group(k).name().to_array()))
+        );
+        assert_eq!(
+            ids(p.signature_verification_algorithms.all),
+            ids(verification().all)
+        );
+        assert!(std::ptr::addr_eq(p.secure_random, &RNG));
+        assert!(std::ptr::addr_eq(p.key_provider, &KEYS));
+        assert!(!p.fips());
     }
 }

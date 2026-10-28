@@ -1,11 +1,36 @@
 // Ported from rustls 0.23.46 (src/crypto/aws_lc_rs/sign.rs lines 322-448), Copyright (c) 2016
 // Joseph Birr-Pixton, used under the MIT license. See LICENSE-THIRD-PARTY.
+use crate::provider::verify::Verifier;
 use aws_lc_rs::signature::{self, KeyPair as _, PqdsaKeyPair, PqdsaSigningAlgorithm};
-use rustls::pki_types::{AlgorithmIdentifier, PrivatePkcs8KeyDer, SubjectPublicKeyInfoDer, alg_id};
+use rustls::pki_types::{
+    AlgorithmIdentifier, PrivatePkcs8KeyDer, SignatureVerificationAlgorithm,
+    SubjectPublicKeyInfoDer, alg_id,
+};
 use rustls::sign::{Signer, SigningKey, public_key_to_spki};
 use rustls::{Error, SignatureAlgorithm, SignatureScheme};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
+
+static ML_DSA_44: &dyn SignatureVerificationAlgorithm = &Verifier {
+    public_key_alg_id: alg_id::ML_DSA_44,
+    signature_alg_id: alg_id::ML_DSA_44,
+    verification_alg: &signature::ML_DSA_44,
+};
+static ML_DSA_65: &dyn SignatureVerificationAlgorithm = &Verifier {
+    public_key_alg_id: alg_id::ML_DSA_65,
+    signature_alg_id: alg_id::ML_DSA_65,
+    verification_alg: &signature::ML_DSA_65,
+};
+static ML_DSA_87: &dyn SignatureVerificationAlgorithm = &Verifier {
+    public_key_alg_id: alg_id::ML_DSA_87,
+    signature_alg_id: alg_id::ML_DSA_87,
+    verification_alg: &signature::ML_DSA_87,
+};
+
+pub(crate) static PQDSA_ALL: &[&dyn SignatureVerificationAlgorithm] =
+    &[ML_DSA_44, ML_DSA_65, ML_DSA_87];
+pub(crate) static PQDSA_MAPPING: &[(SignatureScheme, &[&dyn SignatureVerificationAlgorithm])] =
+    &[(SignatureScheme::ML_DSA_87, &[ML_DSA_87])];
 
 pub(crate) fn load_pqdsa(pkcs8: &PrivatePkcs8KeyDer<'_>) -> Option<Arc<dyn SigningKey>> {
     PqdsaSigningKey::from_pkcs8(pkcs8).map(|k| Arc::new(k) as Arc<dyn SigningKey>)
@@ -214,5 +239,40 @@ mod tests {
         .unwrap();
         assert!(load_pqdsa(&PrivatePkcs8KeyDer::from(k.pkcs8_der().to_vec())).is_none());
         assert!(load_pqdsa(&PrivatePkcs8KeyDer::from(b"x".to_vec())).is_none());
+    }
+
+    #[test]
+    fn the_ml_dsa_verifiers_carry_their_identifiers_and_only_ml_dsa_87_is_mapped() {
+        let ids =
+            |a: &dyn SignatureVerificationAlgorithm| (a.public_key_alg_id(), a.signature_alg_id());
+        assert_eq!(
+            PQDSA_ALL.iter().map(|a| ids(*a)).collect::<Vec<_>>(),
+            [
+                (alg_id::ML_DSA_44, alg_id::ML_DSA_44),
+                (alg_id::ML_DSA_65, alg_id::ML_DSA_65),
+                (alg_id::ML_DSA_87, alg_id::ML_DSA_87),
+            ]
+        );
+        assert_eq!(PQDSA_MAPPING.len(), 1);
+        let (scheme, algs) = PQDSA_MAPPING[0];
+        assert_eq!(scheme, SignatureScheme::ML_DSA_87);
+        assert_eq!(
+            algs.iter().map(|a| ids(*a)).collect::<Vec<_>>(),
+            [(alg_id::ML_DSA_87, alg_id::ML_DSA_87)]
+        );
+    }
+
+    #[test]
+    fn an_ml_dsa_87_signature_verifies_and_a_flipped_one_does_not() {
+        let k = crate::signature::KeyPair::generate(crypto_profile::SignatureAlgorithm::MlDsa87)
+            .unwrap();
+        let pk = k.public_key();
+        let sig = k.sign(b"m").unwrap();
+        assert!(ML_DSA_87.verify_signature(&pk, b"m", &sig).is_ok());
+        let mut flipped = sig.clone();
+        if let Some(b) = flipped.last_mut() {
+            *b ^= 1;
+        }
+        assert!(ML_DSA_87.verify_signature(&pk, b"m", &flipped).is_err());
     }
 }
