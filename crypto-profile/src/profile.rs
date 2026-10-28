@@ -268,6 +268,8 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 /// - RSA PKCS#1 v1.5 schemes excluded: RFC 8446 §4.2.3.
 /// - Keys ML-DSA-87 (ISM-1991, p. 9), ECDSA P-384, P-256, P-521 (ISM-1763, p. 8), RSA 3072 and
 ///   4096 (ISM-1765, p. 10); RSA 2048 excluded: ISM-1765, p. 10.
+/// - ECDSA P-521 with SHA-384: ISM-1763, p. 8; SHA-2 output of at least 256 bits, ISM-1767,
+///   p. 11.
 pub const PREFERRED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384, C::Tls13Aes128GcmSha256],
@@ -303,7 +305,8 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
 /// - ML-KEM-1024: Annex B ¶1 table, p. B-1.
 /// - ML-DSA-87 scheme and key: Annex B ¶1 table, p. B-1.
 /// - TLS_AES_256_GCM_SHA384: Annex B ¶1 table, p. B-1.
-/// - TLS 1.3 only: RFC 8422, RFC 7919.
+/// - TLS 1.3 only: ML-KEM-1024 is the set's only key establishment (Annex B ¶1 table, p. B-1);
+///   TLS 1.2 key exchange is ECDHE or FFDHE (RFC 8422, RFC 7919).
 pub const CNSA2: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384],
@@ -322,7 +325,7 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
 /// - TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384, TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384: §6.
 /// - secp384r1: §5.1, §7.
 /// - ecdsa_secp384r1_sha384: §6.2, §7.1. rsa_pss_rsae_sha384: §6.2, §7.1. rsa_pkcs1_sha384:
-///   §6.2, §7.1.
+///   §6.2; TLS 1.2 only, §7.1.
 /// - Keys ECDSA P-384 with SHA-384 (§5.1); RSA 3072 and 4096 (§5.2).
 /// - Not implemented by the stack: TLS_RSA_WITH_AES_256_GCM_SHA384 and
 ///   TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 (§6), ffdhe3072 and ffdhe4096 (§5.3, §7).
@@ -390,6 +393,7 @@ pub const BSI: ProfileSpec = ProfileSpec {
 /// - X25519 on its own excluded: IG C.K Resolution 5 (p. 160).
 /// - ECDSA P-256, P-384, P-521 schemes and keys: SP 800-140C list §6.2.3.1; SP 800-186 Table 2
 ///   (p. 7); SP 800-131A r2 Table 2 (p. 9).
+/// - ECDSA P-521 with SHA-384: FIPS 186-5 §6.4 (p. 23).
 /// - Ed25519 scheme and key: SP 800-140C list §6.2.3.1; IG C.A (p. 136); IG C.K Additional
 ///   Comment 8 (p. 161).
 /// - RSA-PSS and RSA PKCS#1 v1.5 with SHA-256, 384, 512: FIPS 186-5 §5.4; IG C.F (pp. 142-143);
