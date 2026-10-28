@@ -593,6 +593,21 @@ mod tests {
     use crate::capability::{Linkage, Module, ModuleLine};
     use crate::error::{CryptoError, Family};
 
+    #[test]
+    fn every_profile_lists_its_schemes_in_the_canonical_order() {
+        assert_eq!(
+            Profile::Unrestricted.spec().signature_schemes.len(),
+            TlsSignatureScheme::ALL.len()
+        );
+        for p in Profile::ALL {
+            let s = p.spec().signature_schemes;
+            assert!(
+                s.windows(2).all(|w| w[0].preference() < w[1].preference()),
+                "{p}"
+            );
+        }
+    }
+
     const M3S: Module = Module {
         line: ModuleLine::AwsLcFips3,
         linkage: Linkage::Static,

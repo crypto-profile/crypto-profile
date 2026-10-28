@@ -23,8 +23,8 @@ pub struct Policy {
     pub kx_groups: Vec<K>,
     /// Handshake signature schemes: those this side accepts from its peer, and those a key loaded
     /// through this policy's provider signs with. Certificate-chain signature algorithms are not
-    /// restricted. A provider carries them in the crate's fixed preference order, the order every
-    /// profile lists them in, whatever order they are given in.
+    /// restricted. A provider carries them in [`TlsSignatureScheme::preference`](T::preference) order,
+    /// the order every profile lists them in, whatever order they are given in.
     pub signature_schemes: Vec<T>,
 }
 
@@ -154,22 +154,6 @@ impl KeyProvider for PolicyKeyProvider {
     }
 }
 
-const fn preference(t: T) -> u32 {
-    match t {
-        T::MlDsa87 => 0,
-        T::EcdsaNistp384Sha384 => 1,
-        T::EcdsaNistp256Sha256 => 2,
-        T::EcdsaNistp521Sha512 => 3,
-        T::Ed25519 => 4,
-        T::RsaPssSha384 => 5,
-        T::RsaPssSha512 => 6,
-        T::RsaPssSha256 => 7,
-        T::RsaPkcs1Sha384 => 8,
-        T::RsaPkcs1Sha512 => 9,
-        T::RsaPkcs1Sha256 => 10,
-    }
-}
-
 struct SchemeSet {
     bits: u16,
     ordered: Vec<T>,
@@ -178,14 +162,14 @@ struct SchemeSet {
 fn scheme_set(schemes: &[T]) -> Result<SchemeSet, CryptoError> {
     let mut bits = 0u16;
     for t in schemes {
-        let bit = 1 << preference(*t);
+        let bit = 1u16 << t.preference();
         if bits & bit != 0 {
             return Err(CryptoError::PolicyDuplicate(Algorithm::Scheme(*t)));
         }
         bits |= bit;
     }
     let mut ordered = schemes.to_vec();
-    ordered.sort_by_key(|t| preference(*t));
+    ordered.sort_by_key(|t| t.preference());
     Ok(SchemeSet { bits, ordered })
 }
 
@@ -333,7 +317,7 @@ pub fn install_default(p: &Policy) -> Result<(), CryptoError> {
 }
 
 /// Refuses a provider that does not carry exactly `p`'s suites and groups in order and its
-/// schemes in the fixed preference order, or whose key provider is not the one
+/// schemes in [`TlsSignatureScheme::preference`](T::preference) order, or whose key provider is not the one
 /// `crypto_provider(p)` carries.
 pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<(), CryptoError> {
     let want = crypto_provider(p)?;
@@ -1009,18 +993,6 @@ mod tests {
         assert_eq!(client_cert_verifier_builder(roots, &dup).err(), want);
         let der = rustls::pki_types::PrivateKeyDer::Pkcs8(b"not a key".to_vec().into());
         assert_eq!(load_private_key(&dup, der).err(), want);
-    }
-
-    #[test]
-    fn every_profile_lists_its_schemes_in_the_canonical_order() {
-        assert_eq!(
-            crate::Profile::Unrestricted.spec().signature_schemes.len(),
-            T::ALL.len()
-        );
-        for p in crate::Profile::ALL {
-            let s = p.spec().signature_schemes;
-            assert_eq!(scheme_set(s).unwrap().ordered, s, "{p}");
-        }
     }
 
     #[test]

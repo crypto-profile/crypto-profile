@@ -1,4 +1,9 @@
 //! Shared conformance data and helpers for `crypto-profile` backends.
+use crate::{Algorithm, CryptoError, Module, SignatureAlgorithm, TlsSignatureScheme, capability};
+
+#[doc(hidden)]
+pub mod golden;
+mod profile_tests;
 
 #[doc(hidden)]
 pub use hex as __hex;
@@ -115,9 +120,124 @@ pub fn __cavp_short(file: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
     out
 }
 
+/// The handshake schemes a test peer offers on `module`: every scheme the module has.
+#[doc(hidden)]
+pub fn __peer_schemes(module: Module) -> Vec<TlsSignatureScheme> {
+    TlsSignatureScheme::ALL
+        .into_iter()
+        .filter(|t| capability(module, Algorithm::Scheme(*t)).available)
+        .collect()
+}
+
+/// What a handshake whose server key is a fresh `key` gives when the client lists no scheme for
+/// it: `no_scheme`, or, on a module without `key`, the refusal to generate that key.
+#[doc(hidden)]
+pub fn __unlisted_key(
+    module: Module,
+    key: SignatureAlgorithm,
+    no_scheme: &str,
+) -> Result<u16, String> {
+    let a = Algorithm::Signature(key);
+    if capability(module, a).available {
+        Err(no_scheme.to_string())
+    } else {
+        Err(CryptoError::Unavailable(a).to_string())
+    }
+}
+
+/// Whether `name` can be a shared library's name without its `lib` prefix and extension: not
+/// empty, and no path separator or control character.
+#[doc(hidden)]
+pub fn __library_basename(name: &str) -> bool {
+    !name.is_empty()
+        && !name
+            .chars()
+            .any(|c| c == '/' || c == '\\' || c.is_control())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Linkage, ModuleLine, Options};
+
+    const M3S: Module = Module {
+        line: ModuleLine::AwsLcFips3,
+        linkage: Linkage::Static,
+    };
+    const M3D: Module = Module {
+        line: ModuleLine::AwsLcFips3,
+        linkage: Linkage::Dynamic,
+    };
+    const M4S: Module = Module {
+        line: ModuleLine::AwsLcFips4,
+        linkage: Linkage::Static,
+    };
+    const M4D: Module = Module {
+        line: ModuleLine::AwsLcFips4,
+        linkage: Linkage::Dynamic,
+    };
+
+    #[test]
+    fn the_profile_suite_hands_a_3x_module_only_what_it_has() {
+        let ml_dsa = SignatureAlgorithm::MlDsa87;
+        for m in [M3S, M3D] {
+            assert!(
+                __peer_schemes(m)
+                    .iter()
+                    .all(|t| capability(m, Algorithm::Scheme(*t)).available),
+                "{m:?}"
+            );
+            let missing: Vec<Algorithm> = Algorithm::all()
+                .into_iter()
+                .filter(|a| !capability(m, *a).available)
+                .collect();
+            assert_eq!(
+                missing,
+                [
+                    Algorithm::Signature(ml_dsa),
+                    Algorithm::Scheme(TlsSignatureScheme::MlDsa87)
+                ],
+                "{m:?}"
+            );
+            for g in golden::GOLDEN {
+                let o = Options {
+                    pq_key_exchange_required: g.pq,
+                };
+                if g.schemes.contains(&0x0906) || g.keys.contains(&"ml-dsa-87") {
+                    assert!(golden::expected(m, g.profile, o).is_err(), "{m:?} {o}");
+                }
+            }
+            assert_eq!(
+                __unlisted_key(m, ml_dsa, "no scheme"),
+                Err("Signature(MlDsa87) is not available on this backend's module".to_string())
+            );
+            assert_eq!(
+                __unlisted_key(m, SignatureAlgorithm::Ed25519, "no scheme"),
+                Err("no scheme".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn the_profile_suite_helpers_change_nothing_on_4x() {
+        for m in [M4S, M4D] {
+            assert_eq!(__peer_schemes(m), TlsSignatureScheme::ALL);
+            assert_eq!(
+                __unlisted_key(m, SignatureAlgorithm::MlDsa87, "no scheme"),
+                Err("no scheme".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn a_library_name_is_a_bare_basename() {
+        for ok in ["aws_lc_fips_0_14_2_crypto", "crypto"] {
+            assert!(__library_basename(ok), "{ok}");
+        }
+        for bad in ["", "a/crypto", "a\\crypto", "crypto\n", "cry\0pto"] {
+            assert!(!__library_basename(bad), "{bad:?}");
+        }
+    }
 
     #[test]
     fn cavp_short_honours_len() {
@@ -727,11 +847,17 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_linkage_matches_the_binary() {
+            let lib = test_support::FIPS_LIBRARY;
+            assert!($crate::conformance::__library_basename(lib), "{lib:?}");
+            let named = |path: Option<&str>, file: &str| {
+                path.and_then(|p| p.rsplit('/').next()) == Some(file)
+            };
             if cfg!(target_os = "linux") {
                 let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+                let file = format!("lib{lib}.so");
                 let shared = maps
                     .lines()
-                    .any(|l| l.contains("libaws_lc_fips_0_14_2_crypto.so"));
+                    .any(|l| named(l.split_whitespace().nth(5), &file));
                 assert_eq!(shared, MODULE.linkage == Linkage::Dynamic, "{MODULE:?}");
             } else if cfg!(target_os = "macos") {
                 let exe = std::env::current_exe().unwrap();
@@ -740,12 +866,18 @@ macro_rules! conformance_tests {
                     .arg(&exe)
                     .output()
                     .unwrap();
+                let file = format!("lib{lib}.dylib");
                 let shared = String::from_utf8_lossy(&out.stdout)
-                    .contains("libaws_lc_fips_0_14_2_crypto.dylib");
+                    .lines()
+                    .any(|l| named(l.split_whitespace().next(), &file));
                 assert_eq!(shared, MODULE.linkage == Linkage::Dynamic, "{MODULE:?}");
             } else {
                 panic!("no linkage check for this target");
             }
+        }
+
+        mod conformance_profiles {
+            $crate::__conformance_profile_tests!($b);
         }
     };
 }

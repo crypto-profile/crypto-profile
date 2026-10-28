@@ -9,6 +9,10 @@ use rustls::sign::SingleCertAndKey;
 use rustls::{DigitallySignedStruct, DistinguishedName, SignatureScheme};
 use std::sync::{Arc, Mutex};
 
+/// The FIPS module's crypto library name, from aws-lc-rs's link metadata; a dynamic build loads
+/// `lib{FIPS_LIBRARY}.so` (Linux) or `lib{FIPS_LIBRARY}.dylib` (macOS).
+pub const FIPS_LIBRARY: &str = env!("CRYPTO_PROFILE_FIPS_LIBRARY");
+
 /// What a completed handshake negotiated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Negotiated {
