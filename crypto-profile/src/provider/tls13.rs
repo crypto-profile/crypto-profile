@@ -438,6 +438,8 @@ pub(crate) mod tests {
         let fips: Vec<bool> = all.iter().map(|s| s.fips()).collect();
         assert_eq!(fips, [true, true, false]);
         assert!(all.iter().all(|s| suite(s).hkdf_provider.fips()));
+        let aead_fips: Vec<bool> = all.iter().map(|s| suite(s).aead_alg.fips()).collect();
+        assert_eq!(aead_fips, [true, true, false]);
         assert!(all.iter().all(|s| suite(s).quic.is_some()));
         let hashes: Vec<usize> = all
             .iter()
