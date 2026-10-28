@@ -57,8 +57,9 @@ impl Resolved {
     /// The certificate chain and key for this side of a connection, for
     /// `rustls::sign::SingleCertAndKey` or a resolver of the caller's. Refuses a key the profile
     /// does not admit, and a chain whose end-entity certificate does not carry the key. The key
-    /// signs only with a scheme in `tls.signature_schemes`; a handshake whose peer offers none of
-    /// them fails.
+    /// signs only with a scheme in `tls.signature_schemes`. When the peer offers none of them, a
+    /// server handshake fails; a client sends an empty Certificate, which fails only if the server
+    /// requires client authentication.
     pub fn certified_key(
         &self,
         chain: Vec<CertificateDer<'static>>,
