@@ -4,8 +4,8 @@ use crate::{
     Algorithm, CipherSuite as C, CryptoError, Family, KxGroup as K, TlsError,
     TlsSignatureScheme as T, TlsVersion as V, ensure,
 };
-use rustls::crypto::aws_lc_rs::{cipher_suite, kx_group};
-use rustls::crypto::{CryptoProvider, KeyProvider, SupportedKxGroup, WebPkiSupportedAlgorithms};
+use rustls::crypto::aws_lc_rs::cipher_suite;
+use rustls::crypto::{CryptoProvider, KeyProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{PrivateKeyDer, SubjectPublicKeyInfoDer};
 use rustls::sign::{Signer, SigningKey};
 use std::collections::HashMap;
@@ -46,16 +46,7 @@ pub(crate) fn rustls_suite(c: C) -> rustls::SupportedCipherSuite {
     }
 }
 
-pub(crate) fn rustls_group(k: K) -> &'static dyn SupportedKxGroup {
-    match k {
-        K::MlKem1024 => kx_group::MLKEM1024,
-        K::X25519MlKem768 => kx_group::X25519MLKEM768,
-        K::Secp256r1MlKem768 => kx_group::SECP256R1MLKEM768,
-        K::Secp384r1 => kx_group::SECP384R1,
-        K::Secp256r1 => kx_group::SECP256R1,
-        K::X25519 => kx_group::X25519,
-    }
-}
+pub(crate) use crate::provider::assembly::group as rustls_group;
 
 fn rustls_scheme(t: T) -> rustls::SignatureScheme {
     use rustls::SignatureScheme as R;
@@ -410,6 +401,30 @@ mod tests {
 
     fn cp(bytes: [u8; 2]) -> u16 {
         u16::from_be_bytes(bytes)
+    }
+
+    #[test]
+    fn a_hybrid_offer_completes_on_its_classical_component() {
+        let client = policy(
+            &[V::Tls13],
+            &[C::Tls13Aes256GcmSha384],
+            &[K::Secp384r1MlKem1024, K::Secp384r1],
+            &T::ALL,
+        );
+        let n = handshake(&client, &one13(K::Secp384r1), S::EcdsaP384Sha384).unwrap();
+        assert_eq!(n.kx.iana(), 0x0018);
+    }
+
+    #[test]
+    fn a_retry_into_secp384r1mlkem1024_completes() {
+        let client = policy(
+            &[V::Tls13],
+            &[C::Tls13Aes256GcmSha384],
+            &[K::Secp384r1, K::Secp384r1MlKem1024],
+            &T::ALL,
+        );
+        let n = handshake(&client, &one13(K::Secp384r1MlKem1024), S::EcdsaP384Sha384).unwrap();
+        assert_eq!(n.kx.iana(), 0x11ED);
     }
 
     #[test]

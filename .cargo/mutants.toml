@@ -11,4 +11,10 @@ exclude_re = [
   "^crypto-profile-awslc4/src/fips\\.rs:[0-9]+:[0-9]+: replace assert_fips_module -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
   # Every 4.x cell is available, so ensure's Ok(()) mutant is equivalent on this backend. The refusal branch is ensure_available, tested in core (ensure_available_refuses_ml_dsa_on_3x), and round 3's -awslc3 conformance run exercises it for real.
   "^crypto-profile-awslc4/src/lib\\.rs:[0-9]+:[0-9]+: replace ensure -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
+  # Every test process runs in FIPS mode, so fips() is true either way (decision 0003); the false mutant is caught by the_module_is_in_fips_mode_on_this_build.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/assembly\\.rs:[0-9]+:[0-9]+: replace fips -> bool with true$",
+  # MlKem::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by fips_follows_rustls_classification.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/kx\\.rs:[0-9]+:[0-9]+: replace <impl SupportedKxGroup for MlKem>::fips -> bool with true$",
+  # Every hybrid's first group is FIPS in every test process, so Hybrid::fips is true either way (decision 0003); false is caught by fips_follows_rustls_classification.
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/kx\\.rs:[0-9]+:[0-9]+: replace <impl SupportedKxGroup for Hybrid>::fips -> bool with true$",
 ]

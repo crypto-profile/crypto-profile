@@ -22,17 +22,19 @@ CI runs these on every pull request. While the repository is private, CI runs fo
 | Gate | Command |
 |---|---|
 | Formatting | `cargo fmt --all --check` |
+| Formatting, provider source | `rustfmt --check --edition 2024 crypto-profile/src/provider/mod.rs` |
 | Lints | `cargo clippy --workspace --all-targets --all-features -- -D warnings` |
+| Lints, provider source | `RUSTFLAGS="--cfg crypto_profile_provider_direct" cargo clippy --workspace --all-targets --all-features -- -D warnings` |
 | Supply chain | `cargo deny --locked check` |
 | Tests, static | `cargo test --workspace --all-features --locked` |
 | Tests, dynamic | `AWS_LC_FIPS_SYS_STATIC=0 cargo test --workspace --all-features --locked` |
-| Coverage | `cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support\|conformance)'` |
+| Coverage | `RUSTFLAGS="--cfg crypto_profile_provider_direct" cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support\|conformance)'` |
 | Mutation | `cargo mutants --workspace` |
 | Docs | `cargo doc --workspace --all-features --no-deps`, with no warnings |
 
 `--all-features` matters: the conformance suite needs the backend's `test-support` feature and is skipped without it.
 
-`clippy.toml` refuses rustls's stock-provider entry points (`disallowed-methods`). Code that has to call one, as `crypto-profile-awslc4/src/tls.rs` does to build a provider from a policy, carries `#[expect(clippy::disallowed_methods)]` on that function and nowhere wider.
+`clippy.toml` refuses rustls's stock-provider entry points (`disallowed-methods`). Code that has to call one, as `crypto-profile-awslc4/src/tls.rs` does to build a provider from a policy, carries `#[expect(clippy::disallowed_methods)]` on that function and nowhere wider. The provider's source is linted only in the direct build ("Lints, provider source"); inside the macro expansion clippy sees nothing ([decision 0005](docs/decisions/0005-provider-source.md)).
 
 ## 3. The quality bar
 
@@ -40,6 +42,8 @@ One bar for all shipped code ([decision 0003](docs/decisions/0003-quality-bar.md
 
 - at least **95% line coverage**;
 - **0 missed mutants** from `cargo mutants`.
+
+Use cargo-mutants 27.1.0 and cargo-llvm-cov 0.8.7, the versions CI pins.
 
 The test infrastructure (`crypto-profile-awslc4/src/test_support.rs` and the conformance scaffolding under `crypto-profile/src/conformance/`) is not shipped behaviour and is excluded from both. Nothing else is excluded by file.
 
@@ -104,6 +108,8 @@ The suite checks the backend against the known answers, walks every capability c
 - `digest::digest`;
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
 - `sealbox::PrivateKey::from_pkcs8_der` and `sealbox::open`.
+
+A backend instantiates the provider with `crypto_profile::provider!()` and carries the direct-mode module exactly as `crypto-profile-awslc4/src/lib.rs` does. A new provider file is listed in `crypto-profile/src/provider/mod.rs`, which is the only module list ([decision 0005](docs/decisions/0005-provider-source.md)).
 
 The linkage test looks for the shared library `test_support::FIPS_LIBRARY` names: the backend's build script takes it from aws-lc-rs's link metadata (`DEP_AWS_LC_RS_*_SYS_LIBCRYPTO`) and fails the build if it is missing, empty, or contains a path separator or control character. An unprefixed build reports `crypto`, which is accepted.
 
@@ -181,3 +187,5 @@ Disclosure does not lower the bar. The gates, the oracle rules and the hard rule
 ## 11. Licensing
 
 crypto-profile is licensed under MIT OR Apache-2.0. Contributions are accepted under the same terms (inbound equals outbound): unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
+
+The provider ports code from rustls (MIT) and rustls-webpki (ISC); their notices are in [`crypto-profile/LICENSE-THIRD-PARTY`](crypto-profile/LICENSE-THIRD-PARTY), and each published package carries an identical copy. A file that ports third-party code names its source, version and licence in a header, and its licence text is in each package's `LICENSE-THIRD-PARTY`; the copies stay identical.

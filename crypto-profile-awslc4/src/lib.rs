@@ -18,6 +18,12 @@ pub mod signature;
 pub mod test_support;
 pub mod tls;
 
+#[cfg(not(crypto_profile_provider_direct))]
+crypto_profile::provider!();
+#[cfg(crypto_profile_provider_direct)]
+#[path = "../../crypto-profile/src/provider/mod.rs"]
+mod provider;
+
 mod profiles;
 pub use profiles::{Resolved, assert_module_approves, resolve};
 

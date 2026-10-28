@@ -1,6 +1,7 @@
 //! Reports how aws-lc-rs linked the FIPS module, as the `crypto_profile_static` cfg, and the
 //! module's library name, as `CRYPTO_PROFILE_FIPS_LIBRARY`.
 fn main() {
+    println!("cargo::rustc-check-cfg=cfg(crypto_profile_provider_direct)");
     println!("cargo::rustc-check-cfg=cfg(crypto_profile_static)");
     println!("cargo:rerun-if-env-changed=AWS_LC_FIPS_SYS_STATIC");
     if let Ok(target) = std::env::var("TARGET") {

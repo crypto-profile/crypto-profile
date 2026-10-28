@@ -249,8 +249,8 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
   - A7855 (SHA_AVX2) and A7856 (SHA_AVX) are x86 variants, tested on Intel Ice Lake and AMD Genoa. Every capability the A7855 cells cite appears, with the same parameters, on the arm64 certificates A7871 (SHA_CE) and A7872 (NEON). The ECDSA and RSA SigVer (FIPS186-5) capabilities the A7856 cells cite appear with the same parameters on A7872; A7871's FIPS186-5 SigVer capabilities list SHA3 hashes only.
   - A7864 (GENERIC_C) lists Intel Ice Lake, AMD Genoa and AWS Graviton4 for each capability its cells cite.
   - A7873 (NARROW_MULTIPLIER) is an arm64 variant, tested on AWS Graviton4 only.
-- **The 4.x dynamic build:** 22 cells are `AlgorithmTested`: the three RSA keys on A7873; the ML-DSA-87 and Ed25519 keys and schemes, ML-KEM-1024 and SHA-256, SHA-384 and SHA-512 on A7855; the three ECDSA and six RSA handshake schemes on A7856; secp384r1 and secp256r1 on A7864. 18 are `Unverified`, by reason:
-  - X25519 and the two hybrid groups: CAVP has no algorithm for them;
+- **The 4.x dynamic build:** 22 cells are `AlgorithmTested`: the three RSA keys on A7873; the ML-DSA-87 and Ed25519 keys and schemes, ML-KEM-1024 and SHA-256, SHA-384 and SHA-512 on A7855; the three ECDSA and six RSA handshake schemes on A7856; secp384r1 and secp256r1 on A7864. 19 are `Unverified`, by reason:
+  - X25519 and the three hybrid groups: CAVP has no algorithm for them;
   - the nine cipher suites: no ChaCha20 certificate exists, and no single certificate shows every operation the AES-GCM suites need;
   - TLS 1.2 and TLS 1.3: no certificate shows a TLS 1.2 KDF with extended master secret or a TLS 1.3 KDF;
   - the four ECDSA keys: no single certificate shows every operation they need.
