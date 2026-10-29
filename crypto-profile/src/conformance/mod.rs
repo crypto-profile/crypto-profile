@@ -201,6 +201,7 @@ mod tests {
             );
             for g in golden::GOLDEN {
                 let o = Options {
+                    peer_certificates_match_profile: false,
                     pq_key_exchange_required: g.pq,
                 };
                 if let Ok(row) = golden::expected(m, g.profile, o) {
@@ -419,6 +420,7 @@ macro_rules! conformance_tests {
             t: &[TlsSignatureScheme],
         ) -> Policy {
             Policy {
+                peer_certificate_rule: None,
                 versions: v.to_vec(),
                 cipher_suites: c.to_vec(),
                 kx_groups: k.to_vec(),

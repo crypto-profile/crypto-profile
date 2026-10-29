@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 
 /// What a TLS configuration may use: versions, suites and groups in preference order, and a set
 /// of signature schemes. No list may name an entry twice.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub struct Policy {
     /// Protocol versions.
     pub versions: Vec<V>,
@@ -25,6 +25,8 @@ pub struct Policy {
     /// restricted. A provider carries them in [`TlsSignatureScheme::preference`](T::preference) order,
     /// the order every profile lists them in, whatever order they are given in.
     pub signature_schemes: Vec<T>,
+    /// Canonical peer-certificate restrictions; hand-written policies default to none.
+    pub peer_certificate_rule: Option<crypto_profile::PeerCertificateRuleId>,
 }
 
 pub(crate) use crate::provider::assembly::group as rustls_group;
@@ -376,6 +378,7 @@ mod tests {
 
     fn policy(versions: &[V], suites: &[C], kx: &[K], schemes: &[T]) -> Policy {
         Policy {
+            peer_certificate_rule: None,
             versions: versions.to_vec(),
             cipher_suites: suites.to_vec(),
             kx_groups: kx.to_vec(),

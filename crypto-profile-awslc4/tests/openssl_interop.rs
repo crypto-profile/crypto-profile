@@ -60,6 +60,7 @@ fn openssl() -> Result<String, String> {
 
 fn policy() -> Policy {
     Policy {
+        peer_certificate_rule: None,
         versions: vec![TlsVersion::Tls13],
         cipher_suites: vec![CipherSuite::Tls13Aes256GcmSha384],
         kx_groups: vec![KxGroup::Secp384r1MlKem1024],

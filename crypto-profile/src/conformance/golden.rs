@@ -346,6 +346,7 @@ mod tests {
         linkage: Linkage::Dynamic,
     };
     const PQ: Options = Options {
+        peer_certificates_match_profile: false,
         pq_key_exchange_required: true,
     };
 
@@ -379,6 +380,7 @@ mod tests {
             for p in Profile::ALL {
                 for pq in [false, true] {
                     let o = Options {
+                        peer_certificates_match_profile: false,
                         pq_key_exchange_required: pq,
                     };
                     let got: Result<Lists, CryptoError> = select(p, o, m).map(|s| {

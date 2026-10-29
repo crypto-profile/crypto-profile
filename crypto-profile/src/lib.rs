@@ -4,6 +4,11 @@
 
 pub mod algorithm;
 mod error;
+pub mod peer_certificate;
+pub use peer_certificate::{
+    CertificateSignature, MlDsaParameterSet, PeerCertificateRule, PeerCertificateRuleId,
+    PeerCertificateViolation, PeerCurve, PeerKey, PeerKeyRule, RsaSizeRule, peer_certificate_rule,
+};
 
 pub use algorithm::{
     Algorithm, CipherSuite, HashAlgorithm, KxGroup, ParseAlgorithmError, SignatureAlgorithm,

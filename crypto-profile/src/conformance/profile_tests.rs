@@ -16,6 +16,7 @@ macro_rules! __conformance_profile_tests {
         use $crate::conformance::{__peer_schemes, __unlisted_key};
 
         const PQ: Options = Options {
+            peer_certificates_match_profile: false,
             pq_key_exchange_required: true,
         };
         const NO_GROUP: &str = "peer is incompatible: NoKxGroupsInCommon";
@@ -30,6 +31,7 @@ macro_rules! __conformance_profile_tests {
 
         fn peer(v: V, c: C, k: &[K]) -> Policy {
             Policy {
+                peer_certificate_rule: None,
                 versions: vec![v],
                 cipher_suites: vec![c],
                 kx_groups: k.to_vec(),
@@ -106,6 +108,7 @@ macro_rules! __conformance_profile_tests {
                     .excluded
                     .to_vec(),
                 tls: Policy {
+                    peer_certificate_rule: None,
                     versions: s
                         .versions
                         .iter()
@@ -157,6 +160,7 @@ macro_rules! __conformance_profile_tests {
             for p in Profile::ALL {
                 for pq in [false, true] {
                     let options = Options {
+                        peer_certificates_match_profile: false,
                         pq_key_exchange_required: pq,
                     };
                     let got = resolve(p, options);
@@ -216,6 +220,7 @@ macro_rules! __conformance_profile_tests {
                             MODULE,
                             g.profile,
                             Options {
+                                peer_certificates_match_profile: false,
                                 pq_key_exchange_required: g.pq,
                             },
                         )

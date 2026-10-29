@@ -1,6 +1,7 @@
 //! The crate's refusals.
 use crate::algorithm::{Algorithm, SignatureAlgorithm};
 use crate::capability::Approval;
+use crate::peer_certificate::PeerCertificateViolation;
 use crate::profile::{Options, Profile};
 use std::fmt;
 
@@ -44,6 +45,43 @@ pub enum TlsError {
     DefaultProviderInstalled,
     /// The certificate chain is empty, or its end-entity certificate does not carry the key.
     KeyMismatch,
+    /// A peer certificate failed its profile's certificate rule.
+    PeerCertificate {
+        /// The governing profile.
+        profile: Profile,
+        /// The bounded refusal descriptor.
+        violation: PeerCertificateViolation,
+    },
+}
+
+impl fmt::Display for TlsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProtocolVersions => f.write_str("the provider refused the protocol versions"),
+            Self::PrivateKey => f.write_str("the private key was refused"),
+            Self::DefaultProviderInstalled => {
+                f.write_str("a process-default provider is already installed")
+            }
+            Self::KeyMismatch => {
+                f.write_str("the certificate chain is empty or does not carry the key")
+            }
+            Self::PeerCertificate { profile, violation } => {
+                write!(f, "the {profile} peer certificate was refused: {violation}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TlsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PeerCertificate { violation, .. } => Some(violation),
+            Self::ProtocolVersions
+            | Self::PrivateKey
+            | Self::DefaultProviderInstalled
+            | Self::KeyMismatch => None,
+        }
+    }
 }
 
 /// A refusal from one of the crate's operations. It never carries key or plaintext material.
@@ -233,6 +271,7 @@ mod tests {
     fn profile_display_texts_are_pinned() {
         let pq = Options {
             pq_key_exchange_required: true,
+            peer_certificates_match_profile: false,
         };
         let table: [(CryptoError, &str); 5] = [
             (
