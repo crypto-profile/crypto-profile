@@ -3,14 +3,13 @@
 //! with the option) specify the refusal `resolve` gives; their lists are never compared with a
 //! resolved profile.
 use crate::{
-    Algorithm, CipherSuite, CryptoError, Family, KxGroup, Module, Options, Profile,
-    SignatureAlgorithm, TlsSignatureScheme, TlsVersion, capability,
+    Algorithm, CryptoError, Family, Module, ModuleLine, Options, Profile, SignatureAlgorithm,
+    TlsSignatureScheme,
 };
-use std::str::FromStr;
 
 /// One profile's lists, with or without the option.
 #[doc(hidden)]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Golden {
     /// The profile.
     pub profile: Profile,
@@ -26,6 +25,8 @@ pub struct Golden {
     pub schemes: &'static [u16],
     /// Key algorithms.
     pub keys: &'static [&'static str],
+    /// Entries excluded by the module line, in family and preference order.
+    pub excluded: &'static [Algorithm],
 }
 
 /// Every handshake scheme, in canonical order.
@@ -73,6 +74,7 @@ pub const PREFERRED_KEYS: &[&str] = &[
 #[doc(hidden)]
 pub const GOLDEN: &[Golden] = &[
     Golden {
+        excluded: &[],
         profile: Profile::Unrestricted,
         pq: false,
         versions: &[0x0304, 0x0303],
@@ -84,6 +86,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: ALL_KEYS,
     },
     Golden {
+        excluded: &[],
         profile: Profile::Unrestricted,
         pq: true,
         versions: &[0x0304],
@@ -93,6 +96,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: ALL_KEYS,
     },
     Golden {
+        excluded: &[],
         profile: Profile::Preferred,
         pq: false,
         versions: &[0x0304],
@@ -102,6 +106,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: PREFERRED_KEYS,
     },
     Golden {
+        excluded: &[],
         profile: Profile::Preferred,
         pq: true,
         versions: &[0x0304],
@@ -111,6 +116,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: PREFERRED_KEYS,
     },
     Golden {
+        excluded: &[],
         profile: Profile::Cnsa2,
         pq: false,
         versions: &[0x0304],
@@ -120,6 +126,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: &["ml-dsa-87"],
     },
     Golden {
+        excluded: &[],
         profile: Profile::Cnsa2,
         pq: true,
         versions: &[0x0304],
@@ -129,6 +136,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: &["ml-dsa-87"],
     },
     Golden {
+        excluded: &[],
         profile: Profile::Cnsa1,
         pq: false,
         versions: &[0x0304, 0x0303],
@@ -138,6 +146,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: &["ecdsa-p384-sha384", "rsa3072-sha384", "rsa4096-sha384"],
     },
     Golden {
+        excluded: &[],
         profile: Profile::Bsi,
         pq: false,
         versions: &[0x0304, 0x0303],
@@ -151,6 +160,7 @@ pub const GOLDEN: &[Golden] = &[
         ],
     },
     Golden {
+        excluded: &[],
         profile: Profile::Fips1403,
         pq: false,
         versions: &[0x0304, 0x0303],
@@ -160,6 +170,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: ALL_KEYS,
     },
     Golden {
+        excluded: &[],
         profile: Profile::Fips1403,
         pq: true,
         versions: &[0x0304],
@@ -169,6 +180,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: ALL_KEYS,
     },
     Golden {
+        excluded: &[],
         profile: Profile::Fips1402,
         pq: false,
         versions: &[0x0304, 0x0303],
@@ -188,6 +200,7 @@ pub const GOLDEN: &[Golden] = &[
         ],
     },
     Golden {
+        excluded: &[],
         profile: Profile::Cnsa1,
         pq: true,
         versions: &[0x0304],
@@ -197,6 +210,7 @@ pub const GOLDEN: &[Golden] = &[
         keys: &["ecdsa-p384-sha384", "rsa3072-sha384", "rsa4096-sha384"],
     },
     Golden {
+        excluded: &[],
         profile: Profile::Bsi,
         pq: true,
         versions: &[0x0304],
@@ -210,6 +224,7 @@ pub const GOLDEN: &[Golden] = &[
         ],
     },
     Golden {
+        excluded: &[],
         profile: Profile::Fips1402,
         pq: true,
         versions: &[0x0304],
@@ -228,57 +243,64 @@ pub const GOLDEN: &[Golden] = &[
     },
 ];
 
-fn by_iana<X: Copy>(all: &[X], iana: fn(X) -> u16, cp: u16) -> X {
-    all.iter()
-        .copied()
-        .find(|x| iana(*x) == cp)
-        .unwrap_or_else(|| panic!("no algorithm has the codepoint {cp:#06x}"))
-}
-
-/// The golden row for `profile` with `options`, or the refusal `resolve` must give on `module`:
-/// [`CryptoError::Unavailable`] for the first entry `module` lacks, walking versions, suites,
-/// groups, schemes and keys in that order, then [`CryptoError::EmptyProfile`] for the first empty
-/// family in the same order (`docs/profiles.md`, "Nothing is dropped").
+/// The independent per-line golden row, or the first empty-family refusal.
 #[doc(hidden)]
-pub fn expected(
-    module: Module,
-    profile: Profile,
-    options: Options,
-) -> Result<&'static Golden, CryptoError> {
-    let g = GOLDEN
+pub fn expected(module: Module, profile: Profile, options: Options) -> Result<Golden, CryptoError> {
+    let mut g = GOLDEN
         .iter()
         .find(|g| g.profile == profile && g.pq == options.pq_key_exchange_required)
-        .unwrap_or_else(|| panic!("no golden row for {profile} {options}"));
-    let named = g
-        .versions
-        .iter()
-        .map(|cp| Algorithm::Protocol(by_iana(&TlsVersion::ALL, TlsVersion::iana, *cp)))
-        .chain(
-            g.suites
-                .iter()
-                .map(|cp| Algorithm::Cipher(by_iana(&CipherSuite::ALL, CipherSuite::iana, *cp))),
-        )
-        .chain(
-            g.groups
-                .iter()
-                .map(|cp| Algorithm::Kx(by_iana(&KxGroup::ALL, KxGroup::iana, *cp))),
-        )
-        .chain(g.schemes.iter().map(|cp| {
-            Algorithm::Scheme(by_iana(
-                &TlsSignatureScheme::ALL,
-                TlsSignatureScheme::iana,
-                *cp,
-            ))
-        }))
-        .chain(g.keys.iter().map(|k| {
-            Algorithm::Signature(
-                SignatureAlgorithm::from_str(k)
-                    .unwrap_or_else(|_| panic!("no key algorithm is named {k}")),
-            )
-        }));
-    for a in named {
-        if !capability(module, a).available {
-            return Err(CryptoError::Unavailable(a));
+        .unwrap_or_else(|| panic!("no golden row for {profile} {options}"))
+        .clone();
+    match module.line {
+        ModuleLine::AwsLcFips4 => {}
+        ModuleLine::AwsLcFips3 => {
+            match profile {
+                Profile::Unrestricted | Profile::Fips1403 => {
+                    g.schemes = if options.pq_key_exchange_required {
+                        &[0x0503, 0x0403, 0x0603, 0x0807, 0x0805, 0x0806, 0x0804]
+                    } else {
+                        &[
+                            0x0503, 0x0403, 0x0603, 0x0807, 0x0805, 0x0806, 0x0804, 0x0501, 0x0601,
+                            0x0401,
+                        ]
+                    };
+                    g.keys = &[
+                        "ecdsa-p384-sha384",
+                        "ecdsa-p256-sha256",
+                        "ecdsa-p521-sha512",
+                        "ecdsa-p521-sha384",
+                        "ed25519",
+                        "rsa3072-sha384",
+                        "rsa4096-sha384",
+                        "rsa2048-sha384",
+                    ];
+                }
+                Profile::Preferred => {
+                    g.schemes = &[0x0503, 0x0403, 0x0603, 0x0805, 0x0806, 0x0804];
+                    g.keys = &[
+                        "ecdsa-p384-sha384",
+                        "ecdsa-p256-sha256",
+                        "ecdsa-p521-sha512",
+                        "ecdsa-p521-sha384",
+                        "rsa3072-sha384",
+                        "rsa4096-sha384",
+                    ];
+                }
+                Profile::Cnsa2 => {
+                    g.schemes = &[];
+                    g.keys = &[];
+                }
+                Profile::Cnsa1 | Profile::Bsi | Profile::Fips1402 => {}
+            }
+            match profile {
+                Profile::Unrestricted | Profile::Preferred | Profile::Fips1403 | Profile::Cnsa2 => {
+                    g.excluded = &[
+                        Algorithm::Scheme(TlsSignatureScheme::MlDsa87),
+                        Algorithm::Signature(SignatureAlgorithm::MlDsa87),
+                    ];
+                }
+                Profile::Cnsa1 | Profile::Bsi | Profile::Fips1402 => {}
+            }
         }
     }
     for (empty, category) in [
@@ -327,7 +349,14 @@ mod tests {
         pq_key_exchange_required: true,
     };
 
-    type Lists = (Vec<u16>, Vec<u16>, Vec<u16>, Vec<u16>, Vec<&'static str>);
+    type Lists = (
+        Vec<u16>,
+        Vec<u16>,
+        Vec<u16>,
+        Vec<u16>,
+        Vec<&'static str>,
+        Vec<Algorithm>,
+    );
 
     #[test]
     fn every_profile_and_option_has_exactly_one_golden_row() {
@@ -346,6 +375,7 @@ mod tests {
     #[test]
     fn select_agrees_with_the_golden_rows_on_every_module() {
         for m in [M3S, M3D, M4S, M4D] {
+            let mut successes = 0;
             for p in Profile::ALL {
                 for pq in [false, true] {
                     let o = Options {
@@ -358,6 +388,7 @@ mod tests {
                             s.kx_groups.iter().map(|x| x.iana()).collect(),
                             s.signature_schemes.iter().map(|x| x.iana()).collect(),
                             s.key_algorithms.iter().map(|x| x.as_str()).collect(),
+                            s.excluded,
                         )
                     });
                     let want: Result<Lists, CryptoError> = expected(m, p, o).map(|g| {
@@ -367,22 +398,41 @@ mod tests {
                             g.groups.to_vec(),
                             g.schemes.to_vec(),
                             g.keys.to_vec(),
+                            g.excluded.to_vec(),
                         )
                     });
                     assert_eq!(got, want, "{m:?} {p} {o}");
+                    successes += usize::from(got.is_ok());
                 }
             }
+            assert_eq!(
+                successes,
+                match m.line {
+                    ModuleLine::AwsLcFips3 => 9,
+                    ModuleLine::AwsLcFips4 => 11,
+                }
+            );
         }
     }
 
     #[test]
     fn expected_records_the_3x_refusals() {
         let d = Options::default();
-        let ml_dsa = Err(CryptoError::Unavailable(Algorithm::Scheme(
-            TlsSignatureScheme::MlDsa87,
-        )));
-        assert_eq!(expected(M3S, Profile::Cnsa2, d).map(|_| ()), ml_dsa);
-        assert_eq!(expected(M3S, Profile::Preferred, PQ).map(|_| ()), ml_dsa);
+        assert_eq!(
+            expected(M3S, Profile::Cnsa2, d).map(|_| ()),
+            Err(CryptoError::EmptyProfile {
+                profile: Profile::Cnsa2,
+                options: d,
+                category: Family::SignatureScheme,
+            })
+        );
+        assert_eq!(
+            expected(M3S, Profile::Preferred, PQ).unwrap().excluded,
+            &[
+                Algorithm::Scheme(TlsSignatureScheme::MlDsa87),
+                Algorithm::Signature(SignatureAlgorithm::MlDsa87)
+            ]
+        );
         assert!(expected(M3S, Profile::Cnsa1, d).is_ok());
         assert_eq!(
             expected(M3S, Profile::Fips1402, PQ).map(|_| ()),

@@ -96,7 +96,7 @@ A backend is a crate named for its module line. It must:
   crypto_profile::conformance_tests!(your_crate);
   ```
 
-The suite checks the backend against the known answers, walks every capability cell for its `MODULE`, and checks that the test binary's linkage matches `MODULE`. It checks each profile against the golden rows, and on a module that lacks an algorithm it asserts the `Unavailable` refusal rather than skipping the profile. The peers it builds offer only the module's algorithms, so a profile that resolves is still checked in full.
+The suite checks the backend against the known answers, walks every capability cell for its `MODULE`, and checks that the test binary's linkage matches `MODULE`. It checks each profile against the golden rows, and checks the exact `excluded` entries for the module line and the `EmptyProfile` refusals. The peers it builds offer only the module's algorithms, so a profile that resolves is still checked in full.
 
 `conformance_tests!` expands to `use your_crate::*;` and names these paths in your crate, so it compiles only if each exists with the shape `crypto-profile-awslc4` gives it (`crypto-profile/src/conformance/mod.rs`, `conformance_tests`):
 
@@ -105,7 +105,7 @@ The suite checks the backend against the known answers, walks every capability c
 - `test_support::FIPS_LIBRARY: &str`, the FIPS module's crypto library name, under the same feature;
 - `test_support::{Negotiated, handshake_certified, handshake_with_ca}`, with `Negotiated`'s five public fields (`version`, `suite`, `kx`, `scheme`, and `kind`, the client's `rustls::HandshakeKind`), and the `rcgen` re-export, under the same feature;
 - the `rustls` re-export, from which the suite names `rustls::RootCertStore` and `rustls::server::ResolvesServerCertUsingSni` and reads a config's `require_ems`;
-- `resolve`, and `Resolved` with its public fields, `admit_key` and `certified_key`, implementing `PartialEq` and `Debug`. `Resolved`'s four-field struct-literal shape (`profile`, `options`, `tls`, `keys`) is part of the contract, because the suite's `open_peer` builds one by literal;
+- `resolve`, and `Resolved` with its public fields, `admit_key` and `certified_key`, implementing `PartialEq` and `Debug`. `Resolved`'s five-field struct-literal shape (`profile`, `options`, `tls`, `keys`, `excluded`) is part of the contract, because the suite's `open_peer` builds one by literal;
 - `tls::Policy`, with the four public list fields, implementing `Clone`, `PartialEq` and `Debug`, `tls::crypto_provider`, `tls::client_builder` and `tls::server_builder`;
 - `fips::assert_fips_client_config` and `fips::assert_fips_server_config`;
 - `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`, with `KeyPair` implementing `rcgen::SigningKey`;
@@ -135,7 +135,7 @@ Section 9 lists what a policy or profile does not restrict. A change that widens
 - **Comments only where the code cannot be read without one:** one to three lines giving the mechanism or the invariant. Reasoning and history go in the commit message or a decision record.
 - **No `unsafe`.** Every crate sets `unsafe_code = "forbid"` through the workspace lints.
 - **No `aws_lc_rs` re-export.** The backend re-exports `rustls`, and `rcgen` only under `test-support`.
-- **Typed refusals.** Only `Approved` is approved: `AlgorithmTested`, `NotApproved` and `Unverified` never are, and an algorithm a backend lacks is refused with `CryptoError::Unavailable`, never dropped silently.
+- **Typed refusals.** Only `Approved` is approved: `AlgorithmTested`, `NotApproved` and `Unverified` never are. Direct operations on an algorithm a backend lacks are refused with `CryptoError::Unavailable`. **Amended 2026-10-29:** named profile resolution intersects the published set with line availability after Options, reports every line exclusion in `excluded`, and refuses any empty family with `EmptyProfile`. No silent exclusions and no approval filtering; see [decision 0006](docs/decisions/0006-per-line-profile-resolution.md).
 
 ## 9. Developer Certificate of Origin
 

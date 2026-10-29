@@ -203,8 +203,9 @@ mod tests {
                 let o = Options {
                     pq_key_exchange_required: g.pq,
                 };
-                if g.schemes.contains(&0x0906) || g.keys.contains(&"ml-dsa-87") {
-                    assert!(golden::expected(m, g.profile, o).is_err(), "{m:?} {o}");
+                if let Ok(row) = golden::expected(m, g.profile, o) {
+                    assert!(!row.schemes.contains(&0x0906));
+                    assert!(!row.keys.contains(&"ml-dsa-87"));
                 }
             }
             assert_eq!(

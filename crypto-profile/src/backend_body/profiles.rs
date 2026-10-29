@@ -20,11 +20,13 @@ pub struct Resolved {
     pub tls: Policy,
     /// The key algorithms the profile admits, in preference order.
     pub keys: Vec<SignatureAlgorithm>,
+    /// Entries unavailable on the module line after Options, in family and preference order.
+    pub excluded: Vec<Algorithm>,
 }
 
 /// Resolves `profile`, narrowed by `options`, against this backend's module. Refuses with
-/// `CryptoError::Unavailable` naming the first algorithm the module lacks (never dropping it),
-/// and with `CryptoError::EmptyProfile` when a family comes out empty.
+/// `CryptoError::EmptyProfile` when a family comes out empty. Entries the module line lacks
+/// are recorded in `Resolved::excluded`; approval is checked separately.
 pub fn resolve(profile: Profile, options: Options) -> Result<Resolved, CryptoError> {
     let s = crypto_profile::profile::select(profile, options, crate::MODULE)?;
     Ok(Resolved {
@@ -37,6 +39,7 @@ pub fn resolve(profile: Profile, options: Options) -> Result<Resolved, CryptoErr
             signature_schemes: s.signature_schemes,
         },
         keys: s.key_algorithms,
+        excluded: s.excluded,
     })
 }
 
@@ -192,6 +195,7 @@ mod tests {
             }
         );
         assert_eq!(r.keys, vec![S::MlDsa87]);
+        assert!(r.excluded.is_empty());
         assert_eq!(
             resolve(Profile::Bsi, PQ),
             Err(CryptoError::EmptyProfile {
@@ -337,6 +341,7 @@ mod tests {
                 signature_schemes: vec![],
             },
             keys: vec![],
+            excluded: vec![],
         }
     }
 

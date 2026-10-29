@@ -8,7 +8,7 @@ Named cryptographic profiles for Rust: a policy layer and a [rustls](https://git
 
 One reviewed place for an application's cryptographic choices:
 
-- **Profiles.** Named, inspectable algorithm sets an application selects at start-up and that fail closed when the build can't satisfy them. See [Profiles](#profiles).
+- **Profiles.** Named, inspectable algorithm sets an application selects at start-up that report unavailable module-line entries in `Resolved::excluded` and refuse any empty family. See [Profiles](#profiles).
 - **A rustls provider** whose key-exchange groups, cipher suites and signature schemes follow a `tls::Policy`, and `fips::assert_fips_module`, which an application calls at start-up to refuse to run unless the loaded module reports FIPS mode.
 - **The functions applications need beside TLS,** each implemented once:
   - hashing;
@@ -54,6 +54,8 @@ A profile is an algorithm set, not a validation claim.
 - `bsi`: BSI TR-02102-2 and TR-02102-1, version 2026-01.
 - `fips1403`: what FIPS 140-3 approves under the published texts.
 - `fips1402`: what FIPS 140-2 approved, for peers whose boundary is 140-2.
+
+Resolution intersects the published profile set with module-line availability after Options, preserving preference order and reporting every line exclusion. This changes neither the governing text nor the module approval claim. See [per-line resolution](docs/decisions/0006-per-line-profile-resolution.md).
 
 The option "post-quantum key exchange required" (`Options { pq_key_exchange_required: true }`) keeps only ML-KEM and hybrid key exchange on any profile, and so TLS 1.3 only. Whether the running module is validated for a resolved profile is a separate call, `assert_module_approves`, which fails closed.
 

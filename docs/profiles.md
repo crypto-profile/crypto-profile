@@ -54,10 +54,10 @@ fn report_approval(r: &Resolved) -> Result<(), CryptoError> {
 
 ### Notes
 
-- **What to log.** `Resolved` carries the `profile` and `options` it was resolved with, beside the `tls` policy and the admitted `keys`. Logging the first two records exactly what a process runs.
-- **`Resolved`'s fields are public.** They are what `resolve` produced. A caller who changes them owns the result: `profile` and `options` then no longer describe `tls` and `keys`.
+- **What to log.** `Resolved` carries the `profile` and `options` it was resolved with, beside the `tls` policy and the admitted `keys`. Log these alongside `excluded`, which records the module-line entries omitted after Options.
+- **`Resolved`'s fields are public.** They are what `resolve` produced. A caller who changes them owns the result: `profile`, `options` and `excluded` then no longer describe `tls` and `keys`. Struct literals must supply all five fields, including `excluded: Vec<Algorithm>`.
 - **Names are matched exactly.** `Profile::from_str` accepts `unrestricted`, `preferred`, `cnsa2`, `cnsa1`, `bsi`, `fips1403` and `fips1402`, and nothing else: no trimming and no case folding, so `"fips1403\n"`, `" bsi"` and `"FIPS1403"` are refused with `ParseProfileError` naming the input.
-- **Nothing is dropped.** `resolve` never drops an algorithm the module lacks. It refuses with `CryptoError::Unavailable`, naming the first such entry, checked in the order versions, suites, groups, schemes, keys, each list in preference order. On the 4.x backend every inventory entry is available, so no profile is refused for that reason today. A family left empty by the option is refused with `CryptoError::EmptyProfile`, naming the profile, the options and the family.
+- **No silent exclusions (amended 2026-10-29).** Resolution intersects the published set with module-line availability after Options. `Resolved::excluded` records each unavailable entry in versions, suites, groups, schemes, keys order, preserving preference order. Options-only removals are not line exclusions. Scheme and key ML-DSA are separate tagged entries. Approval never filters this set. Any family left empty is refused with `CryptoError::EmptyProfile` in the same family order. Direct operations still refuse unavailable algorithms with `CryptoError::Unavailable`. See [decision 0006](decisions/0006-per-line-profile-resolution.md).
 - **Profiles mix per connection.** Each `Resolved` carries its own `tls::Policy`, so one process can run a `preferred` server and a `fips1402` client side by side. `tls::Policy` stays public and hand-writable; a profile is the main way in, not the only one.
 - **rustls's FIPS classification.** `fips::assert_fips_client_config` and `fips::assert_fips_server_config` pass for a client and a server configuration built from every profile except `unrestricted`, which carries X25519 on its own and ChaCha20-Poly1305 (test `rustls_classifies_every_profile_but_unrestricted_as_fips`, which checks both sides). A FIPS-classified profile that enables TLS 1.2 requires Extended Master Secret from its peer.
 
@@ -76,6 +76,18 @@ fn report_approval(r: &Resolved) -> Result<(), CryptoError> {
 | `cnsa2` | unchanged |
 | `cnsa1`, `bsi`, `fips1402` | refused: `EmptyProfile`, key-exchange groups |
 | `fips1403` | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; TLS 1.3 and its two suites; eight schemes; all nine keys |
+
+### Contents by module line
+
+The tables below describe the published sets and the complete 4.x results. On 3.x, apply these differences after Options; all other entries and their order stay identical. This is resolution of the published set against availability, without changing its governing text or claiming approval. Backend execution on 3.x is added separately.
+
+| Profile | 4.x | 3.x |
+|---|---|---|
+| `unrestricted`, `preferred`, `fips1403` | Full lists; `excluded` empty | Omit only ML-DSA-87 from schemes and keys; `excluded = [Algorithm::Scheme(TlsSignatureScheme::MlDsa87), Algorithm::Signature(SignatureAlgorithm::MlDsa87)]` |
+| `cnsa2` | Full lists; `excluded` empty | Refused: `EmptyProfile`, signature schemes, with either Options value |
+| `cnsa1`, `bsi`, `fips1402` | Full lists; `excluded` empty | Same lists and empty `excluded` |
+
+The three existing post-quantum-option refusals remain on both lines. Across the fourteen profile/Options cases, eleven resolve on 4.x and nine on 3.x.
 
 ## 3. The profiles
 
