@@ -1,3 +1,5 @@
+// Error mapping adapted from rustls 0.23.46, Copyright (c) 2016 Joseph Birr-Pixton,
+// MIT license. See LICENSE-THIRD-PARTY.
 //! TLS configuration from a [`Policy`]: which versions, cipher suites, key-exchange groups and
 //! handshake signature schemes a provider carries, in preference order.
 use crate::{
@@ -268,6 +270,11 @@ fn versions(p: &Policy) -> Vec<&'static rustls::SupportedProtocolVersion> {
 pub fn client_builder(
     p: &Policy,
 ) -> Result<rustls::ConfigBuilder<rustls::ClientConfig, rustls::WantsVerifier>, CryptoError> {
+    if p.peer_certificate_rule.is_some() {
+        return Err(CryptoError::Tls(TlsError::StrictBuilderRequired {
+            entry_point: "strict_client_builder",
+        }));
+    }
     rustls::ClientConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
         .with_protocol_versions(&versions(p))
         .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))
@@ -278,6 +285,11 @@ pub fn client_builder(
 pub fn server_builder(
     p: &Policy,
 ) -> Result<rustls::ConfigBuilder<rustls::ServerConfig, rustls::WantsVerifier>, CryptoError> {
+    if p.peer_certificate_rule.is_some() {
+        return Err(CryptoError::Tls(TlsError::StrictBuilderRequired {
+            entry_point: "strict_server_builder",
+        }));
+    }
     rustls::ServerConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
         .with_protocol_versions(&versions(p))
         .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))
@@ -334,28 +346,677 @@ pub fn load_private_key(
         .map_err(|_| CryptoError::Tls(TlsError::PrivateKey))
 }
 
-/// A WebPKI client-certificate verifier builder over `roots` on `p`.
-#[expect(clippy::disallowed_methods)]
+use crate::{PeerCertificateRuleId, PeerVerifierIdentity};
+use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
+use rustls::pki_types::{CertificateDer, CertificateRevocationListDer, ServerName, UnixTime};
+use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
+
+#[derive(Debug, Clone)]
+struct VerifierConfig {
+    roots: Arc<rustls::RootCertStore>,
+    crls: Vec<CertificateRevocationListDer<'static>>,
+    depth: webpki::RevocationCheckDepth,
+    unknown: webpki::UnknownStatusPolicy,
+    expiration: webpki::ExpirationPolicy,
+    algorithms: WebPkiSupportedAlgorithms,
+    identity: PeerVerifierIdentity,
+}
+
+impl VerifierConfig {
+    fn new(roots: Arc<rustls::RootCertStore>, p: &Policy) -> Result<Self, CryptoError> {
+        let provider = crypto_provider(p)?;
+        Ok(Self {
+            roots,
+            crls: Vec::new(),
+            depth: webpki::RevocationCheckDepth::Chain,
+            unknown: webpki::UnknownStatusPolicy::Deny,
+            expiration: webpki::ExpirationPolicy::Ignore,
+            algorithms: provider.signature_verification_algorithms,
+            identity: identity(p)?,
+        })
+    }
+
+    fn build(self) -> Result<ProfileVerifier, rustls::server::VerifierBuilderError> {
+        use rustls::server::VerifierBuilderError;
+        if self.roots.is_empty() {
+            return Err(VerifierBuilderError::NoRootAnchors);
+        }
+        let crls = self
+            .crls
+            .iter()
+            .map(|der| {
+                webpki::OwnedCertRevocationList::from_der(der.as_ref())
+                    .map(Into::into)
+                    .map_err(|e| VerifierBuilderError::InvalidCrl(crl_error(e)))
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ProfileVerifier { config: self, crls })
+    }
+}
+
+#[derive(Debug)]
+struct ProfileVerifier {
+    config: VerifierConfig,
+    crls: Vec<webpki::CertRevocationList<'static>>,
+}
+
+fn identity(p: &Policy) -> Result<PeerVerifierIdentity, CryptoError> {
+    Ok(PeerVerifierIdentity::Owned {
+        rule: p.peer_certificate_rule,
+        handshake_schemes: scheme_set(&p.signature_schemes)?.bits,
+    })
+}
+
+fn compatible(p: &Policy, actual: PeerVerifierIdentity) -> Result<(), CryptoError> {
+    let expected = identity(p)?;
+    if p.peer_certificate_rule.is_none() || expected != actual {
+        return Err(CryptoError::Tls(TlsError::IncompatiblePeerVerifier {
+            expected,
+            actual,
+        }));
+    }
+    Ok(())
+}
+
+fn rule_profile(rule: PeerCertificateRuleId) -> crate::Profile {
+    use crate::Profile as P;
+    match rule {
+        PeerCertificateRuleId::Unrestricted => P::Unrestricted,
+        PeerCertificateRuleId::Preferred => P::Preferred,
+        PeerCertificateRuleId::Cnsa2 => P::Cnsa2,
+        PeerCertificateRuleId::Cnsa1 => P::Cnsa1,
+        PeerCertificateRuleId::Bsi => P::Bsi,
+        PeerCertificateRuleId::Fips1403 => P::Fips1403,
+        PeerCertificateRuleId::Fips1402 => P::Fips1402,
+    }
+}
+
+fn certificate_error(error: impl std::error::Error + Send + Sync + 'static) -> rustls::Error {
+    rustls::Error::InvalidCertificate(rustls::CertificateError::Other(rustls::OtherError(
+        Arc::new(error),
+    )))
+}
+
+impl ProfileVerifier {
+    fn verify(
+        &self,
+        leaf: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+        usage: webpki::KeyUsage,
+        name: Option<&ServerName<'_>>,
+    ) -> Result<(), rustls::Error> {
+        let cert = webpki::EndEntityCert::try_from(leaf).map_err(pki_error)?;
+        let crls: Vec<_> = self.crls.iter().collect();
+        let revocation = webpki::RevocationOptionsBuilder::new(&crls)
+            .ok()
+            .map(|builder| {
+                builder
+                    .with_depth(self.config.depth)
+                    .with_status_policy(self.config.unknown)
+                    .with_expiration_policy(self.config.expiration)
+                    .build()
+            });
+        let _path = cert
+            .verify_for_usage(
+                self.config.algorithms.all,
+                &self.config.roots.roots,
+                intermediates,
+                now,
+                usage,
+                revocation,
+                None,
+            )
+            .map_err(pki_error)?;
+        if let Some(name) = name {
+            cert.verify_is_valid_for_subject_name(name)
+                .map_err(pki_error)?;
+        }
+        match self.config.identity {
+            PeerVerifierIdentity::Owned {
+                rule: Some(rule), ..
+            } => {
+                super::peer_certificates::check_leaf(rule_profile(rule), leaf)
+                    .map_err(certificate_error)?;
+            }
+            PeerVerifierIdentity::Owned { rule: None, .. } | PeerVerifierIdentity::Opaque => {}
+        }
+        Ok(())
+    }
+}
+
+/// An owned server-certificate verifier bound to its rule and handshake schemes.
+#[derive(Debug)]
+pub struct ServerVerifierHandle {
+    verifier: ProfileServerVerifier,
+}
+
+#[derive(Debug)]
+struct ProfileServerVerifier(ProfileVerifier);
+
+impl ServerCertVerifier for ServerVerifierHandle {
+    fn verify_server_cert(
+        &self,
+        leaf: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        name: &ServerName<'_>,
+        ocsp: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        self.verifier
+            .verify_server_cert(leaf, intermediates, name, ocsp, now)
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.verifier.verify_tls12_signature(message, cert, dss)
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.verifier.verify_tls13_signature(message, cert, dss)
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.verifier.supported_verify_schemes()
+    }
+}
+
+impl ServerCertVerifier for ProfileServerVerifier {
+    fn verify_server_cert(
+        &self,
+        leaf: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        name: &ServerName<'_>,
+        _ocsp: &[u8],
+        now: UnixTime,
+    ) -> Result<ServerCertVerified, rustls::Error> {
+        self.0.verify(
+            leaf,
+            intermediates,
+            now,
+            webpki::KeyUsage::server_auth(),
+            Some(name),
+        )?;
+        Ok(ServerCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.0.config.algorithms)
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.0.config.algorithms)
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.0.config.algorithms.supported_schemes()
+    }
+}
+
+/// An owned client-certificate verifier bound to its rule and handshake schemes.
+#[derive(Debug)]
+pub struct ClientVerifierHandle {
+    verifier: ProfileClientVerifier,
+}
+
+#[derive(Debug)]
+struct ProfileClientVerifier {
+    common: ProfileVerifier,
+    hints: Vec<rustls::DistinguishedName>,
+    mandatory: bool,
+}
+
+impl ClientVerifierHandle {
+    /// The canonical handshake signature schemes this verifier accepts.
+    pub fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.verifier.supported_verify_schemes()
+    }
+}
+
+impl ClientCertVerifier for ClientVerifierHandle {
+    fn client_auth_mandatory(&self) -> bool {
+        self.verifier.client_auth_mandatory()
+    }
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        self.verifier.root_hint_subjects()
+    }
+    fn verify_client_cert(
+        &self,
+        leaf: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        self.verifier.verify_client_cert(leaf, intermediates, now)
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.verifier.verify_tls12_signature(message, cert, dss)
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        self.verifier.verify_tls13_signature(message, cert, dss)
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.verifier.supported_verify_schemes()
+    }
+}
+
+impl ClientCertVerifier for ProfileClientVerifier {
+    fn client_auth_mandatory(&self) -> bool {
+        self.mandatory
+    }
+    fn root_hint_subjects(&self) -> &[rustls::DistinguishedName] {
+        &self.hints
+    }
+    fn verify_client_cert(
+        &self,
+        leaf: &CertificateDer<'_>,
+        intermediates: &[CertificateDer<'_>],
+        now: UnixTime,
+    ) -> Result<ClientCertVerified, rustls::Error> {
+        self.common.verify(
+            leaf,
+            intermediates,
+            now,
+            webpki::KeyUsage::client_auth(),
+            None,
+        )?;
+        Ok(ClientCertVerified::assertion())
+    }
+    fn verify_tls12_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls12_signature(message, cert, dss, &self.common.config.algorithms)
+    }
+    fn verify_tls13_signature(
+        &self,
+        message: &[u8],
+        cert: &CertificateDer<'_>,
+        dss: &rustls::DigitallySignedStruct,
+    ) -> Result<HandshakeSignatureValid, rustls::Error> {
+        rustls::crypto::verify_tls13_signature(message, cert, dss, &self.common.config.algorithms)
+    }
+    fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
+        self.common.config.algorithms.supported_schemes()
+    }
+}
+
+/// A server-certificate verifier builder preserving baseline revocation configuration.
+#[derive(Debug, Clone)]
+pub struct ServerVerifierBuilder {
+    config: VerifierConfig,
+}
+
+impl ServerVerifierBuilder {
+    /// Appends certificate revocation lists.
+    pub fn with_crls(
+        mut self,
+        crls: impl IntoIterator<Item = CertificateRevocationListDer<'static>>,
+    ) -> Self {
+        self.config.crls.extend(crls);
+        self
+    }
+    /// Checks only the leaf's revocation status.
+    pub fn only_check_end_entity_revocation(mut self) -> Self {
+        self.config.depth = webpki::RevocationCheckDepth::EndEntity;
+        self
+    }
+    /// Allows unknown revocation status.
+    pub fn allow_unknown_revocation_status(mut self) -> Self {
+        self.config.unknown = webpki::UnknownStatusPolicy::Allow;
+        self
+    }
+    /// Enforces CRL expiration.
+    pub fn enforce_revocation_expiration(mut self) -> Self {
+        self.config.expiration = webpki::ExpirationPolicy::Enforce;
+        self
+    }
+    /// Builds an owned verifier, refusing empty roots or invalid CRLs.
+    pub fn build(self) -> Result<Arc<ServerVerifierHandle>, rustls::server::VerifierBuilderError> {
+        Ok(Arc::new(ServerVerifierHandle {
+            verifier: ProfileServerVerifier(self.config.build()?),
+        }))
+    }
+}
+
+/// A client-certificate verifier builder preserving hints, authentication and revocation modes.
+#[derive(Debug, Clone)]
+pub struct ClientVerifierBuilder {
+    config: VerifierConfig,
+    hints: Vec<rustls::DistinguishedName>,
+    mandatory: bool,
+}
+
+impl ClientVerifierBuilder {
+    /// Appends certificate revocation lists.
+    pub fn with_crls(
+        mut self,
+        crls: impl IntoIterator<Item = CertificateRevocationListDer<'static>>,
+    ) -> Self {
+        self.config.crls.extend(crls);
+        self
+    }
+    /// Checks only the leaf's revocation status.
+    pub fn only_check_end_entity_revocation(mut self) -> Self {
+        self.config.depth = webpki::RevocationCheckDepth::EndEntity;
+        self
+    }
+    /// Allows unknown revocation status.
+    pub fn allow_unknown_revocation_status(mut self) -> Self {
+        self.config.unknown = webpki::UnknownStatusPolicy::Allow;
+        self
+    }
+    /// Enforces CRL expiration.
+    pub fn enforce_revocation_expiration(mut self) -> Self {
+        self.config.expiration = webpki::ExpirationPolicy::Enforce;
+        self
+    }
+    /// Clears the advertised CA subjects.
+    pub fn clear_root_hint_subjects(mut self) -> Self {
+        self.hints.clear();
+        self
+    }
+    /// Appends advertised CA subjects.
+    pub fn add_root_hint_subjects(
+        mut self,
+        hints: impl IntoIterator<Item = rustls::DistinguishedName>,
+    ) -> Self {
+        self.hints.extend(hints);
+        self
+    }
+    /// Offers client authentication but permits clients without a certificate.
+    pub fn allow_unauthenticated(mut self) -> Self {
+        self.mandatory = false;
+        self
+    }
+    /// Builds an owned verifier, refusing empty roots or invalid CRLs.
+    pub fn build(self) -> Result<Arc<ClientVerifierHandle>, rustls::server::VerifierBuilderError> {
+        Ok(Arc::new(ClientVerifierHandle {
+            verifier: ProfileClientVerifier {
+                common: self.config.build()?,
+                hints: self.hints,
+                mandatory: self.mandatory,
+            },
+        }))
+    }
+}
+
+/// Builds a client-certificate verifier with `p`'s canonical identity.
 pub fn client_cert_verifier_builder(
     roots: Arc<rustls::RootCertStore>,
     p: &Policy,
-) -> Result<rustls::server::ClientCertVerifierBuilder, CryptoError> {
-    Ok(rustls::server::WebPkiClientVerifier::builder_with_provider(
-        roots,
-        Arc::new(crypto_provider(p)?),
-    ))
+) -> Result<ClientVerifierBuilder, CryptoError> {
+    Ok(ClientVerifierBuilder {
+        hints: roots.subjects(),
+        config: VerifierConfig::new(roots, p)?,
+        mandatory: true,
+    })
 }
 
-/// A WebPKI server-certificate verifier builder over `roots` on `p`.
-#[expect(clippy::disallowed_methods)]
+/// Builds a server-certificate verifier with `p`'s canonical identity.
 pub fn server_cert_verifier_builder(
     roots: Arc<rustls::RootCertStore>,
     p: &Policy,
-) -> Result<rustls::client::ServerCertVerifierBuilder, CryptoError> {
-    Ok(rustls::client::WebPkiServerVerifier::builder_with_provider(
-        roots,
-        Arc::new(crypto_provider(p)?),
-    ))
+) -> Result<ServerVerifierBuilder, CryptoError> {
+    Ok(ServerVerifierBuilder {
+        config: VerifierConfig::new(roots, p)?,
+    })
+}
+
+/// Input to strict client completion. Opaque verifiers are rejection-only.
+#[derive(Debug)]
+pub enum ServerVerifierInput {
+    /// A crate-owned verifier.
+    Owned(Arc<ServerVerifierHandle>),
+    /// A verifier without an established policy identity.
+    Opaque(Arc<dyn ServerCertVerifier>),
+}
+impl From<Arc<ServerVerifierHandle>> for ServerVerifierInput {
+    fn from(value: Arc<ServerVerifierHandle>) -> Self {
+        Self::Owned(value)
+    }
+}
+impl From<Arc<dyn ServerCertVerifier>> for ServerVerifierInput {
+    fn from(value: Arc<dyn ServerCertVerifier>) -> Self {
+        Self::Opaque(value)
+    }
+}
+impl From<Arc<rustls::client::WebPkiServerVerifier>> for ServerVerifierInput {
+    fn from(value: Arc<rustls::client::WebPkiServerVerifier>) -> Self {
+        Self::Opaque(value)
+    }
+}
+
+/// Input to strict server completion. Opaque verifiers are rejection-only.
+#[derive(Debug)]
+pub enum ClientVerifierInput {
+    /// A crate-owned verifier.
+    Owned(Arc<ClientVerifierHandle>),
+    /// A verifier without an established policy identity.
+    Opaque(Arc<dyn ClientCertVerifier>),
+}
+impl From<Arc<ClientVerifierHandle>> for ClientVerifierInput {
+    fn from(value: Arc<ClientVerifierHandle>) -> Self {
+        Self::Owned(value)
+    }
+}
+impl From<Arc<dyn ClientCertVerifier>> for ClientVerifierInput {
+    fn from(value: Arc<dyn ClientCertVerifier>) -> Self {
+        Self::Opaque(value)
+    }
+}
+
+/// Completes a client builder with an owned verifier matching both rule and scheme set.
+///
+/// Direct-rustls bypass: callers configuring rustls directly bypass crate enforcement.
+#[expect(clippy::disallowed_methods)]
+pub fn strict_client_builder(
+    p: &Policy,
+    verifier: impl Into<ServerVerifierInput>,
+) -> Result<rustls::ConfigBuilder<rustls::ClientConfig, rustls::client::WantsClientCert>, CryptoError>
+{
+    let verifier = match verifier.into() {
+        ServerVerifierInput::Owned(handle) => {
+            compatible(p, handle.verifier.0.config.identity)?;
+            handle
+        }
+        ServerVerifierInput::Opaque(_) => {
+            return Err(CryptoError::Tls(TlsError::IncompatiblePeerVerifier {
+                expected: identity(p)?,
+                actual: PeerVerifierIdentity::Opaque,
+            }));
+        }
+    };
+    Ok(
+        rustls::ClientConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
+            .with_protocol_versions(&versions(p))
+            .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))?
+            .dangerous()
+            .with_custom_certificate_verifier(verifier),
+    )
+}
+
+/// Completes a server builder with an owned verifier matching both rule and scheme set.
+///
+/// Direct-rustls bypass: callers configuring rustls directly bypass crate enforcement.
+#[expect(clippy::disallowed_methods)]
+pub fn strict_server_builder(
+    p: &Policy,
+    verifier: impl Into<ClientVerifierInput>,
+) -> Result<rustls::ConfigBuilder<rustls::ServerConfig, rustls::server::WantsServerCert>, CryptoError>
+{
+    let verifier = match verifier.into() {
+        ClientVerifierInput::Owned(handle) => {
+            compatible(p, handle.verifier.common.config.identity)?;
+            handle
+        }
+        ClientVerifierInput::Opaque(_) => {
+            return Err(CryptoError::Tls(TlsError::IncompatiblePeerVerifier {
+                expected: identity(p)?,
+                actual: PeerVerifierIdentity::Opaque,
+            }));
+        }
+    };
+    Ok(
+        rustls::ServerConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
+            .with_protocol_versions(&versions(p))
+            .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))?
+            .with_client_cert_verifier(verifier),
+    )
+}
+
+fn crl_error(e: webpki::Error) -> rustls::CertRevocationListError {
+    use rustls::{CertRevocationListError, OtherError};
+    use webpki::Error::*;
+    match e {
+        InvalidCrlSignatureForPublicKey => CertRevocationListError::BadSignature,
+        #[allow(deprecated)]
+        UnsupportedCrlSignatureAlgorithm | UnsupportedCrlSignatureAlgorithmForPublicKey => {
+            CertRevocationListError::UnsupportedSignatureAlgorithm
+        }
+        UnsupportedCrlSignatureAlgorithmContext(cx) => {
+            CertRevocationListError::UnsupportedSignatureAlgorithmContext {
+                signature_algorithm_id: cx.signature_algorithm_id,
+                supported_algorithms: cx.supported_algorithms,
+            }
+        }
+        UnsupportedSignatureAlgorithmForPublicKeyContext(cx) => {
+            CertRevocationListError::UnsupportedSignatureAlgorithmForPublicKeyContext {
+                signature_algorithm_id: cx.signature_algorithm_id,
+                public_key_algorithm_id: cx.public_key_algorithm_id,
+            }
+        }
+        InvalidCrlNumber => CertRevocationListError::InvalidCrlNumber,
+        InvalidSerialNumber => CertRevocationListError::InvalidRevokedCertSerialNumber,
+        IssuerNotCrlSigner => CertRevocationListError::IssuerInvalidForCrl,
+        MalformedExtensions | BadDer | BadDerTime => CertRevocationListError::ParseError,
+        UnsupportedCriticalExtension => CertRevocationListError::UnsupportedCriticalExtension,
+        UnsupportedCrlVersion => CertRevocationListError::UnsupportedCrlVersion,
+        UnsupportedDeltaCrl => CertRevocationListError::UnsupportedDeltaCrl,
+        UnsupportedIndirectCrl => CertRevocationListError::UnsupportedIndirectCrl,
+        UnsupportedRevocationReason => CertRevocationListError::UnsupportedRevocationReason,
+
+        _ => CertRevocationListError::Other(OtherError(Arc::new(e))),
+    }
+}
+
+fn eku(values: impl Iterator<Item = usize>) -> rustls::ExtendedKeyPurpose {
+    let values: Vec<_> = values.collect();
+    match values.as_slice() {
+        [1, 3, 6, 1, 5, 5, 7, 3, 1] => rustls::ExtendedKeyPurpose::ServerAuth,
+        [1, 3, 6, 1, 5, 5, 7, 3, 2] => rustls::ExtendedKeyPurpose::ClientAuth,
+        _ => rustls::ExtendedKeyPurpose::Other(values),
+    }
+}
+
+fn pki_error(error: webpki::Error) -> rustls::Error {
+    use rustls::{CertRevocationListError, CertificateError, OtherError};
+    use webpki::Error::*;
+    use webpki::InvalidNameContext;
+    match error {
+        BadDer | BadDerTime | TrailingData(_) => CertificateError::BadEncoding.into(),
+        CertNotValidYet { time, not_before } => {
+            CertificateError::NotValidYetContext { time, not_before }.into()
+        }
+        CertExpired { time, not_after } => {
+            CertificateError::ExpiredContext { time, not_after }.into()
+        }
+        InvalidCertValidity => CertificateError::Expired.into(),
+        UnknownIssuer => CertificateError::UnknownIssuer.into(),
+        CertNotValidForName(InvalidNameContext {
+            expected,
+            presented,
+        }) => CertificateError::NotValidForNameContext {
+            expected,
+            presented,
+        }
+        .into(),
+        CertRevoked => CertificateError::Revoked.into(),
+        UnknownRevocationStatus => CertificateError::UnknownRevocationStatus.into(),
+        CrlExpired { time, next_update } => {
+            CertificateError::ExpiredRevocationListContext { time, next_update }.into()
+        }
+        IssuerNotCrlSigner => CertRevocationListError::IssuerInvalidForCrl.into(),
+
+        InvalidSignatureForPublicKey => CertificateError::BadSignature.into(),
+        #[allow(deprecated)]
+        UnsupportedSignatureAlgorithm | UnsupportedSignatureAlgorithmForPublicKey => {
+            CertificateError::UnsupportedSignatureAlgorithm.into()
+        }
+        UnsupportedSignatureAlgorithmContext(cx) => {
+            CertificateError::UnsupportedSignatureAlgorithmContext {
+                signature_algorithm_id: cx.signature_algorithm_id,
+                supported_algorithms: cx.supported_algorithms,
+            }
+            .into()
+        }
+        UnsupportedSignatureAlgorithmForPublicKeyContext(cx) => {
+            CertificateError::UnsupportedSignatureAlgorithmForPublicKeyContext {
+                signature_algorithm_id: cx.signature_algorithm_id,
+                public_key_algorithm_id: cx.public_key_algorithm_id,
+            }
+            .into()
+        }
+
+        InvalidCrlSignatureForPublicKey => CertRevocationListError::BadSignature.into(),
+        #[allow(deprecated)]
+        UnsupportedCrlSignatureAlgorithm | UnsupportedCrlSignatureAlgorithmForPublicKey => {
+            CertRevocationListError::UnsupportedSignatureAlgorithm.into()
+        }
+        UnsupportedCrlSignatureAlgorithmContext(cx) => {
+            CertRevocationListError::UnsupportedSignatureAlgorithmContext {
+                signature_algorithm_id: cx.signature_algorithm_id,
+                supported_algorithms: cx.supported_algorithms,
+            }
+            .into()
+        }
+        UnsupportedCrlSignatureAlgorithmForPublicKeyContext(cx) => {
+            CertRevocationListError::UnsupportedSignatureAlgorithmForPublicKeyContext {
+                signature_algorithm_id: cx.signature_algorithm_id,
+                public_key_algorithm_id: cx.public_key_algorithm_id,
+            }
+            .into()
+        }
+
+        #[allow(deprecated)]
+        RequiredEkuNotFound => CertificateError::InvalidPurpose.into(),
+        RequiredEkuNotFoundContext(webpki::RequiredEkuNotFoundContext { required, present }) => {
+            CertificateError::InvalidPurposeContext {
+                required: eku(required.oid_values()),
+                presented: present
+                    .into_iter()
+                    .map(|purpose| eku(purpose.into_iter()))
+                    .collect(),
+            }
+            .into()
+        }
+
+        _ => CertificateError::Other(OtherError(Arc::new(error))).into(),
+    }
 }
 
 #[cfg(test)]
@@ -396,6 +1057,770 @@ mod tests {
 
     fn cp(bytes: [u8; 2]) -> u16 {
         u16::from_be_bytes(bytes)
+    }
+
+    #[test]
+    fn peer_certificates_old_builders_require_strict_completion() {
+        for profile in crate::Profile::ALL {
+            let resolved = crate::resolve(
+                profile,
+                crate::Options {
+                    peer_certificates_match_profile: true,
+                    ..Default::default()
+                },
+            );
+            let Ok(resolved) = resolved else {
+                assert_eq!(profile, crate::Profile::Cnsa2);
+                continue;
+            };
+            assert_eq!(
+                client_builder(&resolved.tls).err(),
+                Some(CryptoError::Tls(TlsError::StrictBuilderRequired {
+                    entry_point: "strict_client_builder"
+                }))
+            );
+            assert_eq!(
+                server_builder(&resolved.tls).err(),
+                Some(CryptoError::Tls(TlsError::StrictBuilderRequired {
+                    entry_point: "strict_server_builder"
+                }))
+            );
+        }
+    }
+
+    #[test]
+    #[allow(deprecated)]
+    fn peer_certificates_baseline_error_categories_are_preserved() {
+        use rustls::pki_types::UnixTime;
+        use rustls::{CertRevocationListError as R, CertificateError as E};
+        use webpki::Error as W;
+        let time = UnixTime::since_unix_epoch(std::time::Duration::from_secs(10));
+        let bound = UnixTime::since_unix_epoch(std::time::Duration::from_secs(20));
+        for (input, expected) in [
+            (W::BadDer, E::BadEncoding),
+            (W::BadDerTime, E::BadEncoding),
+            (
+                W::TrailingData(webpki::DerTypeId::Certificate),
+                E::BadEncoding,
+            ),
+            (
+                W::CertNotValidYet {
+                    time,
+                    not_before: bound,
+                },
+                E::NotValidYetContext {
+                    time,
+                    not_before: bound,
+                },
+            ),
+            (
+                W::CertExpired {
+                    time,
+                    not_after: bound,
+                },
+                E::ExpiredContext {
+                    time,
+                    not_after: bound,
+                },
+            ),
+            (W::InvalidCertValidity, E::Expired),
+            (W::UnknownIssuer, E::UnknownIssuer),
+            (W::CertRevoked, E::Revoked),
+            (W::UnknownRevocationStatus, E::UnknownRevocationStatus),
+            (
+                W::CrlExpired {
+                    time,
+                    next_update: bound,
+                },
+                E::ExpiredRevocationListContext {
+                    time,
+                    next_update: bound,
+                },
+            ),
+            (W::InvalidSignatureForPublicKey, E::BadSignature),
+            (
+                W::UnsupportedSignatureAlgorithm,
+                E::UnsupportedSignatureAlgorithm,
+            ),
+            (
+                W::UnsupportedSignatureAlgorithmForPublicKey,
+                E::UnsupportedSignatureAlgorithm,
+            ),
+            (W::RequiredEkuNotFound, E::InvalidPurpose),
+        ] {
+            assert_eq!(
+                pki_error(input),
+                rustls::Error::InvalidCertificate(expected)
+            );
+        }
+        for (input, expected) in [
+            (W::InvalidCrlSignatureForPublicKey, R::BadSignature),
+            (
+                W::UnsupportedCrlSignatureAlgorithm,
+                R::UnsupportedSignatureAlgorithm,
+            ),
+            (
+                W::UnsupportedCrlSignatureAlgorithmForPublicKey,
+                R::UnsupportedSignatureAlgorithm,
+            ),
+            (W::InvalidCrlNumber, R::InvalidCrlNumber),
+            (W::InvalidSerialNumber, R::InvalidRevokedCertSerialNumber),
+            (W::IssuerNotCrlSigner, R::IssuerInvalidForCrl),
+            (W::MalformedExtensions, R::ParseError),
+            (W::BadDer, R::ParseError),
+            (W::BadDerTime, R::ParseError),
+            (
+                W::UnsupportedCriticalExtension,
+                R::UnsupportedCriticalExtension,
+            ),
+            (W::UnsupportedCrlVersion, R::UnsupportedCrlVersion),
+            (W::UnsupportedDeltaCrl, R::UnsupportedDeltaCrl),
+            (W::UnsupportedIndirectCrl, R::UnsupportedIndirectCrl),
+            (
+                W::UnsupportedRevocationReason,
+                R::UnsupportedRevocationReason,
+            ),
+        ] {
+            assert_eq!(crl_error(input), expected);
+        }
+        for (input, expected) in [
+            (W::InvalidCrlSignatureForPublicKey, R::BadSignature),
+            (
+                W::UnsupportedCrlSignatureAlgorithm,
+                R::UnsupportedSignatureAlgorithm,
+            ),
+            (
+                W::UnsupportedCrlSignatureAlgorithmForPublicKey,
+                R::UnsupportedSignatureAlgorithm,
+            ),
+            (W::IssuerNotCrlSigner, R::IssuerInvalidForCrl),
+        ] {
+            assert_eq!(
+                pki_error(input),
+                rustls::Error::InvalidCertRevocationList(expected)
+            );
+        }
+        let signature_context = webpki::UnsupportedSignatureAlgorithmContext {
+            signature_algorithm_id: vec![1, 2],
+            supported_algorithms: vec![],
+        };
+        let key_context = webpki::UnsupportedSignatureAlgorithmForPublicKeyContext {
+            signature_algorithm_id: vec![3, 4],
+            public_key_algorithm_id: vec![5, 6],
+        };
+        assert_eq!(
+            pki_error(W::UnsupportedSignatureAlgorithmContext(
+                signature_context.clone()
+            )),
+            E::UnsupportedSignatureAlgorithmContext {
+                signature_algorithm_id: vec![1, 2],
+                supported_algorithms: vec![]
+            }
+            .into()
+        );
+        assert_eq!(
+            pki_error(W::UnsupportedSignatureAlgorithmForPublicKeyContext(
+                key_context.clone()
+            )),
+            E::UnsupportedSignatureAlgorithmForPublicKeyContext {
+                signature_algorithm_id: vec![3, 4],
+                public_key_algorithm_id: vec![5, 6]
+            }
+            .into()
+        );
+        let crl_signature_expected = R::UnsupportedSignatureAlgorithmContext {
+            signature_algorithm_id: vec![1, 2],
+            supported_algorithms: vec![],
+        };
+        let crl_key_expected = R::UnsupportedSignatureAlgorithmForPublicKeyContext {
+            signature_algorithm_id: vec![3, 4],
+            public_key_algorithm_id: vec![5, 6],
+        };
+        assert_eq!(
+            crl_error(W::UnsupportedCrlSignatureAlgorithmContext(
+                signature_context.clone()
+            )),
+            crl_signature_expected
+        );
+        assert_eq!(
+            crl_error(W::UnsupportedSignatureAlgorithmForPublicKeyContext(
+                key_context.clone()
+            )),
+            crl_key_expected
+        );
+        assert_eq!(
+            pki_error(W::UnsupportedCrlSignatureAlgorithmContext(
+                signature_context
+            )),
+            rustls::Error::InvalidCertRevocationList(crl_signature_expected)
+        );
+        assert_eq!(
+            pki_error(W::UnsupportedCrlSignatureAlgorithmForPublicKeyContext(
+                key_context
+            )),
+            rustls::Error::InvalidCertRevocationList(crl_key_expected)
+        );
+        let expected_name = rustls::pki_types::ServerName::try_from("localhost").unwrap();
+        assert_eq!(
+            pki_error(W::CertNotValidForName(webpki::InvalidNameContext {
+                expected: expected_name.clone(),
+                presented: vec!["other.invalid".into()]
+            })),
+            E::NotValidForNameContext {
+                expected: expected_name,
+                presented: vec!["other.invalid".into()]
+            }
+            .into()
+        );
+        assert_eq!(
+            pki_error(W::RequiredEkuNotFoundContext(
+                webpki::RequiredEkuNotFoundContext {
+                    required: webpki::KeyUsage::server_auth(),
+                    present: vec![vec![1, 3, 6, 1, 5, 5, 7, 3, 2], vec![1, 2, 3]],
+                }
+            )),
+            E::InvalidPurposeContext {
+                required: rustls::ExtendedKeyPurpose::ServerAuth,
+                presented: vec![
+                    rustls::ExtendedKeyPurpose::ClientAuth,
+                    rustls::ExtendedKeyPurpose::Other(vec![1, 2, 3])
+                ]
+            }
+            .into()
+        );
+        let rustls::Error::InvalidCertificate(E::Other(rustls::OtherError(cause))) =
+            pki_error(W::PathLenConstraintViolated)
+        else {
+            panic!("lost baseline cause");
+        };
+        assert_eq!(
+            cause.downcast_ref::<W>(),
+            Some(&W::PathLenConstraintViolated)
+        );
+        let R::Other(rustls::OtherError(cause)) = crl_error(W::UnknownIssuer) else {
+            panic!("lost CRL cause");
+        };
+        assert_eq!(cause.downcast_ref::<W>(), Some(&W::UnknownIssuer));
+    }
+
+    #[test]
+    fn peer_certificates_revocation_modes_survive_owned_completion() {
+        use rcgen::{CertificateParams, CertificateRevocationListParams, SerialNumber};
+        use rustls::pki_types::{ServerName, UnixTime};
+        use rustls::server::danger::ClientCertVerifier;
+        let ca_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let ca = params.self_signed(&ca_key).unwrap();
+        let issuer = rcgen::Issuer::new(params, &ca_key);
+        let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let mut leaf_params = CertificateParams::new(vec!["localhost".into()]).unwrap();
+        leaf_params.serial_number = Some(SerialNumber::from(42));
+        let leaf = leaf_params.signed_by(&key, &issuer).unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(ca.der().clone()).unwrap();
+        let roots = Arc::new(roots);
+        let strict = Policy {
+            peer_certificate_rule: Some(crate::PeerCertificateRuleId::Cnsa1),
+            ..one13(K::Secp384r1)
+        };
+        let crl = |revoked: bool| {
+            CertificateRevocationListParams {
+                this_update: rcgen::date_time_ymd(2000, 1, 1),
+                next_update: rcgen::date_time_ymd(2001, 1, 1),
+                crl_number: SerialNumber::from(1),
+                issuing_distribution_point: None,
+                revoked_certs: if revoked {
+                    vec![rcgen::RevokedCertParams {
+                        serial_number: SerialNumber::from(42),
+                        revocation_time: rcgen::date_time_ymd(2000, 1, 1),
+                        reason_code: None,
+                        invalidity_date: None,
+                    }]
+                } else {
+                    vec![]
+                },
+                key_identifier_method: rcgen::KeyIdMethod::Sha256,
+            }
+            .signed_by(&issuer)
+            .unwrap()
+            .der()
+            .clone()
+        };
+        let name = ServerName::try_from("localhost").unwrap();
+        for revoked in [false, true] {
+            for enforce_expiration in [false, true] {
+                let mut server = server_cert_verifier_builder(roots.clone(), &strict)
+                    .unwrap()
+                    .with_crls([crl(revoked)])
+                    .only_check_end_entity_revocation();
+                let mut client = client_cert_verifier_builder(roots.clone(), &strict)
+                    .unwrap()
+                    .with_crls([crl(revoked)])
+                    .only_check_end_entity_revocation();
+                if enforce_expiration {
+                    server = server.enforce_revocation_expiration();
+                    client = client.enforce_revocation_expiration();
+                }
+                let server = server.build().unwrap();
+                let client = client.build().unwrap();
+                let results = [
+                    server
+                        .verify_server_cert(leaf.der(), &[], &name, &[], UnixTime::now())
+                        .map(|_| ()),
+                    client
+                        .verify_client_cert(leaf.der(), &[], UnixTime::now())
+                        .map(|_| ()),
+                ];
+                for result in results {
+                    if enforce_expiration {
+                        assert!(matches!(
+                            result,
+                            Err(rustls::Error::InvalidCertificate(
+                                rustls::CertificateError::ExpiredRevocationListContext { .. }
+                            ))
+                        ));
+                    } else if revoked {
+                        assert!(matches!(
+                            result,
+                            Err(rustls::Error::InvalidCertificate(
+                                rustls::CertificateError::Revoked
+                            ))
+                        ));
+                    } else {
+                        result.unwrap();
+                    }
+                }
+                assert!(strict_client_builder(&strict, server).is_ok());
+                assert!(strict_server_builder(&strict, client).is_ok());
+            }
+        }
+        let unrelated = crate::test_support::pki(S::EcdsaP384Sha384, S::EcdsaP384Sha384).unwrap();
+        let mut mixed_roots = roots.as_ref().clone();
+        mixed_roots.add(unrelated.ca.clone()).unwrap();
+        let mixed_roots = Arc::new(mixed_roots);
+        for allow_unknown in [false, true] {
+            let mut server = server_cert_verifier_builder(mixed_roots.clone(), &strict)
+                .unwrap()
+                .with_crls([crl(false)]);
+            let mut client = client_cert_verifier_builder(mixed_roots.clone(), &strict)
+                .unwrap()
+                .with_crls([crl(false)]);
+            if allow_unknown {
+                server = server.allow_unknown_revocation_status();
+                client = client.allow_unknown_revocation_status();
+            }
+            let server = server.build().unwrap();
+            let client = client.build().unwrap();
+            for result in [
+                server
+                    .verify_server_cert(&unrelated.chain[0], &[], &name, &[], UnixTime::now())
+                    .map(|_| ()),
+                client
+                    .verify_client_cert(&unrelated.chain[0], &[], UnixTime::now())
+                    .map(|_| ()),
+            ] {
+                if allow_unknown {
+                    result.unwrap();
+                } else {
+                    assert!(matches!(
+                        result,
+                        Err(rustls::Error::InvalidCertificate(
+                            rustls::CertificateError::UnknownRevocationStatus
+                        ))
+                    ));
+                }
+            }
+        }
+        for roots in [Arc::new(rustls::RootCertStore::empty()), roots] {
+            let server = server_cert_verifier_builder(roots.clone(), &strict)
+                .unwrap()
+                .with_crls([CertificateRevocationListDer::from(vec![0xff])])
+                .build();
+            let client = client_cert_verifier_builder(roots.clone(), &strict)
+                .unwrap()
+                .with_crls([CertificateRevocationListDer::from(vec![0xff])])
+                .build();
+            if roots.is_empty() {
+                assert!(matches!(
+                    server,
+                    Err(rustls::server::VerifierBuilderError::NoRootAnchors)
+                ));
+                assert!(matches!(
+                    client,
+                    Err(rustls::server::VerifierBuilderError::NoRootAnchors)
+                ));
+            } else {
+                assert!(matches!(
+                    server,
+                    Err(rustls::server::VerifierBuilderError::InvalidCrl(_))
+                ));
+                assert!(matches!(
+                    client,
+                    Err(rustls::server::VerifierBuilderError::InvalidCrl(_))
+                ));
+            }
+        }
+    }
+
+    fn peer_certificate_handshake(
+        strict: &Policy,
+        server_checks_client: bool,
+        peer_key: S,
+    ) -> Result<(), (bool, rustls::Error)> {
+        let server_pki = crate::test_support::pki(
+            S::EcdsaP384Sha384,
+            if server_checks_client {
+                S::EcdsaP384Sha384
+            } else {
+                peer_key
+            },
+        )
+        .unwrap();
+        let client_pki = crate::test_support::pki(
+            S::EcdsaP384Sha384,
+            if server_checks_client {
+                peer_key
+            } else {
+                S::EcdsaP384Sha384
+            },
+        )
+        .unwrap();
+        let off = Policy {
+            peer_certificate_rule: None,
+            ..one13(K::Secp384r1)
+        };
+        let off = Policy {
+            versions: strict.versions.clone(),
+            cipher_suites: C::ALL.to_vec(),
+            ..off
+        };
+        let server_roots = Arc::new(server_pki.roots.clone());
+        let client_roots = Arc::new(client_pki.roots.clone());
+        let client_builder = if server_checks_client {
+            client_builder(&off)
+                .unwrap()
+                .with_root_certificates(server_pki.roots.clone())
+        } else {
+            strict_client_builder(
+                strict,
+                server_cert_verifier_builder(server_roots, strict)
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap()
+        };
+        let client_config = client_builder
+            .with_client_auth_cert(
+                client_pki.chain,
+                PrivateKeyDer::Pkcs8(client_pki.key.pkcs8_der().to_vec().into()),
+            )
+            .unwrap();
+        let server_builder = if server_checks_client {
+            strict_server_builder(
+                strict,
+                client_cert_verifier_builder(client_roots, strict)
+                    .unwrap()
+                    .build()
+                    .unwrap(),
+            )
+            .unwrap()
+        } else {
+            server_builder(&off).unwrap().with_no_client_auth()
+        };
+        let server_config = server_builder
+            .with_single_cert(
+                server_pki.chain,
+                PrivateKeyDer::Pkcs8(server_pki.key.pkcs8_der().to_vec().into()),
+            )
+            .unwrap();
+        let mut client = rustls::ClientConnection::new(
+            Arc::new(client_config),
+            rustls::pki_types::ServerName::try_from("localhost").unwrap(),
+        )
+        .unwrap();
+        let mut server = rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
+        while client.is_handshaking() || server.is_handshaking() {
+            let mut flight = Vec::new();
+            client.write_tls(&mut flight).unwrap();
+            let mut bytes = flight.as_slice();
+            while !bytes.is_empty() {
+                assert_ne!(server.read_tls(&mut bytes).unwrap(), 0);
+                server.process_new_packets().map_err(|e| (true, e))?;
+            }
+            let mut flight = Vec::new();
+            server.write_tls(&mut flight).unwrap();
+            let mut bytes = flight.as_slice();
+            while !bytes.is_empty() {
+                assert_ne!(client.read_tls(&mut bytes).unwrap(), 0);
+                client.process_new_packets().map_err(|e| (false, e))?;
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn peer_certificates_strict_completion_enforces_both_handshake_directions() {
+        for version in [V::Tls12, V::Tls13] {
+            for server_checks_client in [false, true] {
+                for key in [S::EcdsaP384Sha384, S::Rsa2048Sha384] {
+                    let mut resolved = crate::resolve(
+                        crate::Profile::Cnsa1,
+                        crate::Options {
+                            peer_certificates_match_profile: true,
+                            ..Default::default()
+                        },
+                    )
+                    .unwrap()
+                    .tls;
+                    resolved.versions = vec![version];
+                    let result = peer_certificate_handshake(&resolved, server_checks_client, key);
+                    if key == S::EcdsaP384Sha384 {
+                        result.unwrap();
+                    } else {
+                        let (detected_at_server, error) = result.unwrap_err();
+                        assert_eq!(detected_at_server, server_checks_client);
+                        let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(
+                            rustls::OtherError(cause),
+                        )) = error
+                        else {
+                            panic!("missing typed handshake cause");
+                        };
+                        assert_eq!(
+                            cause.downcast_ref::<TlsError>(),
+                            Some(&TlsError::PeerCertificate {
+                                profile: crate::Profile::Cnsa1,
+                                violation: crate::PeerCertificateViolation::LeafKey(
+                                    crate::PeerKey::Rsa(2048)
+                                ),
+                            })
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[expect(clippy::disallowed_methods)]
+    fn peer_certificates_owned_verifiers_bind_rules_and_scheme_sets() {
+        use crate::{PeerCertificateRuleId as R, PeerVerifierIdentity as I};
+        let pki = crate::test_support::pki(S::EcdsaP384Sha384, S::EcdsaP384Sha384).unwrap();
+        let roots = Arc::new(pki.roots);
+        let mut strict = one13(K::Secp384r1);
+        strict.peer_certificate_rule = Some(R::Cnsa1);
+        let identity = |p: &Policy| I::Owned {
+            rule: p.peer_certificate_rule,
+            handshake_schemes: scheme_set(&p.signature_schemes).unwrap().bits,
+        };
+        let refuse = |completion: &Policy, built: &Policy| {
+            let expected = Some(CryptoError::Tls(TlsError::IncompatiblePeerVerifier {
+                expected: identity(completion),
+                actual: identity(built),
+            }));
+            let server = server_cert_verifier_builder(roots.clone(), built)
+                .unwrap()
+                .build()
+                .unwrap();
+            let client = client_cert_verifier_builder(roots.clone(), built)
+                .unwrap()
+                .build()
+                .unwrap();
+            assert_eq!(strict_client_builder(completion, server).err(), expected);
+            assert_eq!(strict_server_builder(completion, client).err(), expected);
+        };
+        let off = Policy {
+            peer_certificate_rule: None,
+            ..strict.clone()
+        };
+        let other = Policy {
+            peer_certificate_rule: Some(R::Preferred),
+            ..strict.clone()
+        };
+        let narrow = Policy {
+            signature_schemes: vec![T::RsaPssSha384],
+            ..strict.clone()
+        };
+        refuse(&strict, &off);
+        refuse(&strict, &other);
+        refuse(&strict, &narrow);
+        refuse(&narrow, &strict);
+        refuse(&off, &off);
+        let resolved_off = crate::resolve(crate::Profile::Cnsa1, crate::Options::default())
+            .unwrap()
+            .tls;
+        refuse(&resolved_off, &resolved_off);
+        assert!(client_builder(&off).is_ok());
+        assert!(server_builder(&off).is_ok());
+        assert!(client_builder(&resolved_off).is_ok());
+        assert!(server_builder(&resolved_off).is_ok());
+        refuse(&off, &strict);
+        let mut permuted = strict.clone();
+        permuted.signature_schemes.reverse();
+        let server = server_cert_verifier_builder(roots.clone(), &permuted)
+            .unwrap()
+            .build()
+            .unwrap();
+        let client = client_cert_verifier_builder(roots.clone(), &permuted)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert!(strict_client_builder(&strict, server).is_ok());
+        assert!(strict_server_builder(&strict, client).is_ok());
+        let opaque_server = rustls::client::WebPkiServerVerifier::builder_with_provider(
+            roots.clone(),
+            Arc::new(crypto_provider(&off).unwrap()),
+        )
+        .build()
+        .unwrap();
+        let opaque_client = rustls::server::WebPkiClientVerifier::builder_with_provider(
+            roots,
+            Arc::new(crypto_provider(&off).unwrap()),
+        )
+        .build()
+        .unwrap();
+        let expected = Some(CryptoError::Tls(TlsError::IncompatiblePeerVerifier {
+            expected: identity(&strict),
+            actual: I::Opaque,
+        }));
+        assert_eq!(
+            strict_client_builder(&strict, opaque_server).err(),
+            expected
+        );
+        assert_eq!(
+            strict_server_builder(&strict, opaque_client).err(),
+            expected
+        );
+    }
+
+    #[test]
+    fn peer_certificates_owned_adapters_preserve_baseline_and_typed_leaf_causes() {
+        use crate::{
+            PeerCertificateRuleId as R, PeerCertificateViolation as E, PeerCurve, PeerKey,
+        };
+        use rustls::pki_types::{ServerName, UnixTime};
+        use rustls::server::danger::ClientCertVerifier;
+        let now = UnixTime::now();
+        for (key, expected_key) in [
+            (S::EcdsaP256Sha256, Some(PeerKey::Ec(PeerCurve::P256))),
+            (S::Rsa2048Sha384, Some(PeerKey::Rsa(2048))),
+            (S::EcdsaP384Sha384, None),
+        ] {
+            let pki = crate::test_support::pki(S::EcdsaP384Sha384, key).unwrap();
+            let roots = Arc::new(pki.roots.clone());
+            let strict = Policy {
+                peer_certificate_rule: Some(R::Cnsa1),
+                ..one13(K::Secp384r1)
+            };
+            let server = server_cert_verifier_builder(roots.clone(), &strict)
+                .unwrap()
+                .build()
+                .unwrap();
+            let client = client_cert_verifier_builder(roots.clone(), &strict)
+                .unwrap()
+                .build()
+                .unwrap();
+            let name = ServerName::try_from("localhost").unwrap();
+            let server_result =
+                server.verify_server_cert(&pki.chain[0], &pki.chain[1..], &name, &[], now);
+            let client_result = client.verify_client_cert(&pki.chain[0], &pki.chain[1..], now);
+            let cause = |error| {
+                let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(
+                    rustls::OtherError(cause),
+                )) = error
+                else {
+                    panic!("missing typed certificate cause");
+                };
+                *cause.downcast_ref::<TlsError>().unwrap()
+            };
+            if let Some(key) = expected_key {
+                let expected = TlsError::PeerCertificate {
+                    profile: crate::Profile::Cnsa1,
+                    violation: E::LeafKey(key),
+                };
+                assert_eq!(cause(server_result.unwrap_err()), expected);
+                assert_eq!(cause(client_result.unwrap_err()), expected);
+            } else {
+                assert!(server_result.is_ok());
+                assert!(client_result.is_ok());
+            }
+            let off = Policy {
+                peer_certificate_rule: None,
+                ..strict.clone()
+            };
+            let baseline = server_cert_verifier_builder(roots.clone(), &off)
+                .unwrap()
+                .build()
+                .unwrap();
+            assert!(
+                baseline
+                    .verify_server_cert(&pki.chain[0], &pki.chain[1..], &name, &[], now)
+                    .is_ok()
+            );
+            use rustls::internal::msgs::codec::{Codec, Reader};
+            let invalid_signature =
+                rustls::DigitallySignedStruct::read(&mut Reader::init(&[0x05, 0x03, 0, 1, 0]))
+                    .unwrap();
+            for result in [
+                server.verify_tls12_signature(b"message", &pki.chain[0], &invalid_signature),
+                server.verify_tls13_signature(b"message", &pki.chain[0], &invalid_signature),
+                client.verify_tls12_signature(b"message", &pki.chain[0], &invalid_signature),
+                client.verify_tls13_signature(b"message", &pki.chain[0], &invalid_signature),
+            ] {
+                assert!(result.is_err());
+            }
+            assert!(!server.requires_raw_public_keys());
+            assert!(!client.requires_raw_public_keys());
+            assert!(server.root_hint_subjects().is_none());
+            assert_eq!(
+                client
+                    .root_hint_subjects()
+                    .iter()
+                    .map(|x| x.as_ref())
+                    .collect::<Vec<_>>(),
+                roots
+                    .subjects()
+                    .iter()
+                    .map(|x| x.as_ref())
+                    .collect::<Vec<_>>()
+            );
+            assert!(client.offer_client_auth());
+            assert!(client.client_auth_mandatory());
+            let optional = client_cert_verifier_builder(roots.clone(), &strict)
+                .unwrap()
+                .clear_root_hint_subjects()
+                .allow_unauthenticated()
+                .build()
+                .unwrap();
+            assert!(optional.offer_client_auth());
+            assert!(!optional.client_auth_mandatory());
+            assert!(optional.root_hint_subjects().is_empty());
+            let hint = rustls::DistinguishedName::from(vec![0x30, 0]);
+            let advertised = client_cert_verifier_builder(roots.clone(), &strict)
+                .unwrap()
+                .clear_root_hint_subjects()
+                .add_root_hint_subjects([hint.clone()])
+                .build()
+                .unwrap();
+            assert_eq!(
+                advertised
+                    .root_hint_subjects()
+                    .iter()
+                    .map(|x| x.as_ref())
+                    .collect::<Vec<_>>(),
+                vec![hint.as_ref()]
+            );
+            assert!(strict_server_builder(&strict, optional).is_ok());
+
+            let wrong_name = ServerName::try_from("elsewhere.invalid").unwrap();
+            assert!(matches!(
+                server.verify_server_cert(&pki.chain[0], &pki.chain[1..], &wrong_name, &[], now),
+                Err(rustls::Error::InvalidCertificate(
+                    rustls::CertificateError::NotValidForNameContext { .. }
+                ))
+            ));
+        }
     }
 
     #[test]

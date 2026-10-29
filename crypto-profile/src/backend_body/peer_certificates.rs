@@ -207,10 +207,6 @@ fn leaf_key(cert: &CertificateDer<'_>) -> Result<PeerKey, PeerCertificateViolati
 ///
 /// RSA admission also respects the verifier's 8192-bit implementation ceiling.
 /// Baseline certificate validation remains the caller's responsibility.
-#[allow(
-    dead_code,
-    reason = "Strict peer verifier integration is a separate task."
-)]
 pub fn check_leaf(profile: Profile, cert: &CertificateDer<'_>) -> Result<(), TlsError> {
     let check = || {
         let key = leaf_key(cert)?;
@@ -499,16 +495,23 @@ mod tests {
 
     #[test]
     fn certificate_spki_is_not_the_outer_signature() {
-        for algorithm in [
-            crate::SignatureAlgorithm::EcdsaP256Sha256,
-            crate::SignatureAlgorithm::EcdsaP384Sha384,
-            crate::SignatureAlgorithm::Ed25519,
+        for (algorithm, expected) in [
+            (
+                crate::SignatureAlgorithm::EcdsaP256Sha256,
+                PeerKey::Ec(PeerCurve::P256),
+            ),
+            (
+                crate::SignatureAlgorithm::EcdsaP384Sha384,
+                PeerKey::Ec(PeerCurve::P384),
+            ),
+            (crate::SignatureAlgorithm::Ed25519, PeerKey::Ed25519),
         ] {
             let pki = super::super::test_support::pki(
                 crate::SignatureAlgorithm::EcdsaP384Sha384,
                 algorithm,
             )
             .unwrap();
+            assert_eq!(leaf_key(&pki.chain[0]), Ok(expected));
             assert_eq!(check_leaf(Profile::Unrestricted, &pki.chain[0]), Ok(()));
         }
     }
