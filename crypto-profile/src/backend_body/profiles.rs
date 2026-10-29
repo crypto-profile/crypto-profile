@@ -33,6 +33,9 @@ pub fn resolve(profile: Profile, options: Options) -> Result<Resolved, CryptoErr
         profile,
         options,
         tls: Policy {
+            peer_certificate_rule: options
+                .peer_certificates_match_profile
+                .then(|| crypto_profile::peer_certificate_rule(profile).id),
             versions: s.versions,
             cipher_suites: s.cipher_suites,
             kx_groups: s.kx_groups,
@@ -155,6 +158,7 @@ mod tests {
     };
 
     const PQ: Options = Options {
+        peer_certificates_match_profile: false,
         pq_key_exchange_required: true,
     };
 
@@ -207,6 +211,7 @@ mod tests {
         assert_eq!(
             r.tls,
             Policy {
+                peer_certificate_rule: None,
                 versions: vec![V::Tls13],
                 cipher_suites: vec![C::Tls13Aes256GcmSha384],
                 kx_groups: vec![K::MlKem1024],
@@ -421,6 +426,7 @@ mod tests {
             profile: Profile::Unrestricted,
             options: Options::default(),
             tls: Policy {
+                peer_certificate_rule: None,
                 versions: vec![],
                 cipher_suites: vec![],
                 kx_groups: vec![],
@@ -553,6 +559,62 @@ mod tests {
                 Ok(())
             };
             assert_eq!(resolve(p, PQ).map(|_| ()), want, "{p}");
+        }
+    }
+}
+
+#[cfg(test)]
+mod peer_certificate_tests {
+    use super::*;
+
+    #[test]
+    fn peer_certificate_resolution_is_canonical_and_default_off() {
+        assert_eq!(Policy::default().peer_certificate_rule, None);
+        for profile in Profile::ALL {
+            for pq in [false, true] {
+                let off = Options {
+                    pq_key_exchange_required: pq,
+                    peer_certificates_match_profile: false,
+                };
+                let on = Options {
+                    peer_certificates_match_profile: true,
+                    ..off
+                };
+                match (resolve(profile, off), resolve(profile, on)) {
+                    (Ok(off), Ok(mut on)) => {
+                        assert_eq!(off.tls.peer_certificate_rule, None);
+                        assert_eq!(
+                            on.tls.peer_certificate_rule,
+                            Some(crypto_profile::peer_certificate_rule(profile).id)
+                        );
+                        on.tls.peer_certificate_rule = None;
+                        assert_eq!(off.tls, on.tls);
+                        assert_eq!(off.keys, on.keys);
+                        assert_eq!(off.excluded, on.excluded);
+                    }
+                    (
+                        Err(CryptoError::EmptyProfile {
+                            profile: p,
+                            options: o,
+                            category: c,
+                        }),
+                        Err(CryptoError::EmptyProfile {
+                            profile: ep,
+                            options: eo,
+                            category: ec,
+                        }),
+                    ) => {
+                        assert_eq!((p, o, c), (ep, off, ec));
+                        assert_eq!(eo, on);
+                        if profile == Profile::Cnsa2
+                            && crate::MODULE.line == crate::ModuleLine::AwsLcFips3
+                        {
+                            assert_eq!(c, Family::SignatureScheme);
+                        }
+                    }
+                    (off, on) => panic!("{off:?} != {on:?}"),
+                }
+            }
         }
     }
 }

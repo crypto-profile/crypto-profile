@@ -8,6 +8,7 @@ use crypto_profile_awslc4::{
 #[test]
 fn installs_once_then_refuses() {
     let p = Policy {
+        peer_certificate_rule: None,
         versions: vec![TlsVersion::Tls13],
         cipher_suites: vec![CipherSuite::Tls13Aes256GcmSha384],
         kx_groups: vec![KxGroup::Secp384r1],

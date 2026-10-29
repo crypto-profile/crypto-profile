@@ -1,6 +1,7 @@
 //! The crate's refusals.
 use crate::algorithm::{Algorithm, SignatureAlgorithm};
 use crate::capability::Approval;
+use crate::peer_certificate::PeerCertificateViolation;
 use crate::profile::{Options, Profile};
 use std::fmt;
 
@@ -32,6 +33,20 @@ pub enum CsrError {
     Signing,
 }
 
+/// Bounded identity of a peer verifier, independent of certificates and trust anchors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerVerifierIdentity {
+    /// An owned verifier or completion policy.
+    Owned {
+        /// The certificate rule, absent for default-off policies.
+        rule: Option<crate::PeerCertificateRuleId>,
+        /// Canonical handshake-scheme mask, with bit positions from scheme preference order.
+        handshake_schemes: u16,
+    },
+    /// A verifier whose policy identity cannot be established.
+    Opaque,
+}
+
 /// Why a TLS configuration step was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -44,6 +59,66 @@ pub enum TlsError {
     DefaultProviderInstalled,
     /// The certificate chain is empty, or its end-entity certificate does not carry the key.
     KeyMismatch,
+    /// A rule-bearing policy requires a completion builder that installs its owned verifier.
+    StrictBuilderRequired {
+        /// The applicable strict completion entry point in `tls`.
+        entry_point: &'static str,
+    },
+    /// The completion policy and verifier have incompatible identities.
+    IncompatiblePeerVerifier {
+        /// The completion policy's identity.
+        expected: PeerVerifierIdentity,
+        /// The supplied verifier's identity.
+        actual: PeerVerifierIdentity,
+    },
+    /// A peer certificate failed its profile's certificate rule.
+    PeerCertificate {
+        /// The governing profile.
+        profile: Profile,
+        /// The bounded refusal descriptor.
+        violation: PeerCertificateViolation,
+    },
+}
+
+impl fmt::Display for TlsError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ProtocolVersions => f.write_str("the provider refused the protocol versions"),
+            Self::PrivateKey => f.write_str("the private key was refused"),
+            Self::DefaultProviderInstalled => {
+                f.write_str("a process-default provider is already installed")
+            }
+            Self::KeyMismatch => {
+                f.write_str("the certificate chain is empty or does not carry the key")
+            }
+            Self::IncompatiblePeerVerifier { expected, actual } => {
+                write!(
+                    f,
+                    "the peer verifier {actual:?} is incompatible with {expected:?}"
+                )
+            }
+            Self::StrictBuilderRequired { entry_point } => {
+                write!(f, "the peer certificate rule requires tls::{entry_point}")
+            }
+            Self::PeerCertificate { profile, violation } => {
+                write!(f, "the {profile} peer certificate was refused: {violation}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TlsError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::PeerCertificate { violation, .. } => Some(violation),
+            Self::IncompatiblePeerVerifier { .. }
+            | Self::StrictBuilderRequired { .. }
+            | Self::ProtocolVersions
+            | Self::PrivateKey
+            | Self::DefaultProviderInstalled
+            | Self::KeyMismatch => None,
+        }
+    }
 }
 
 /// A refusal from one of the crate's operations. It never carries key or plaintext material.
@@ -233,6 +308,7 @@ mod tests {
     fn profile_display_texts_are_pinned() {
         let pq = Options {
             pq_key_exchange_required: true,
+            peer_certificates_match_profile: false,
         };
         let table: [(CryptoError, &str); 5] = [
             (

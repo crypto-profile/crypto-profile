@@ -60,6 +60,7 @@ fn openssl() -> Result<String, String> {
 
 fn policy() -> Policy {
     Policy {
+        peer_certificate_rule: None,
         versions: vec![TlsVersion::Tls13],
         cipher_suites: vec![CipherSuite::Tls13Aes256GcmSha384],
         kx_groups: vec![KxGroup::Secp384r1MlKem1024],
@@ -241,5 +242,302 @@ fn openssl_s_client_negotiates_secp384r1mlkem1024_with_our_server() -> Result<()
     assert_eq!(served, Some(GROUP), "{transcript}");
     assert!(out.status.success(), "{transcript}");
     assert!(transcript.contains("SecP384r1MLKEM1024"), "{transcript}");
+    Ok(())
+}
+
+#[test]
+#[ignore = "needs OpenSSL 3.5 or later: ci/openssl-interop.sh"]
+fn peer_certificate_cnsa1_p256_tls12_sha384() -> Result<(), String> {
+    use crypto_profile_awslc4::test_support::peer_certificate_pki;
+    use crypto_profile_awslc4::tls::{server_cert_verifier_builder, strict_client_builder};
+    use crypto_profile_awslc4::{
+        Options, PeerCertificateViolation, PeerCurve, PeerKey, Profile, TlsError, resolve,
+    };
+    let bin = openssl()?;
+    let p = peer_certificate_pki(
+        SignatureAlgorithm::EcdsaP384Sha384,
+        None,
+        SignatureAlgorithm::EcdsaP256Sha256,
+    )?;
+    let scratch =
+        Scratch(std::env::temp_dir().join(format!("crypto-profile-p256-{}", std::process::id())));
+    std::fs::create_dir_all(&scratch.0).map_err(e)?;
+    let leaf = scratch.0.join("leaf.pem");
+    let key = scratch.0.join("key.pem");
+    std::fs::write(
+        &leaf,
+        pem::encode(&pem::Pem::new("CERTIFICATE", p.chain[0].to_vec())),
+    )
+    .map_err(e)?;
+    std::fs::write(
+        &key,
+        pem::encode(&pem::Pem::new("PRIVATE KEY", p.key.secret_der().to_vec())),
+    )
+    .map_err(e)?;
+    for strict in [false, true] {
+        let mut policy = resolve(
+            Profile::Cnsa1,
+            Options {
+                peer_certificates_match_profile: strict,
+                ..Options::default()
+            },
+        )
+        .map_err(e)?
+        .tls;
+        policy.versions = vec![TlsVersion::Tls12];
+        policy.cipher_suites = vec![CipherSuite::Tls12EcdheEcdsaAes256GcmSha384];
+        policy.kx_groups = vec![KxGroup::Secp384r1, KxGroup::Secp256r1];
+        policy.signature_schemes = vec![TlsSignatureScheme::EcdsaNistp384Sha384];
+        let verifier = server_cert_verifier_builder(Arc::new(p.roots.clone()), &policy)
+            .map_err(e)?
+            .build()
+            .map_err(e)?;
+        let builder = if strict {
+            strict_client_builder(&policy, verifier).map_err(e)?
+        } else {
+            client_builder(&policy)
+                .map_err(e)?
+                .dangerous()
+                .with_custom_certificate_verifier(verifier)
+        };
+        let cfg = builder.with_no_client_auth();
+        let port = TcpListener::bind("127.0.0.1:0")
+            .and_then(|l| l.local_addr())
+            .map_err(e)?
+            .port();
+        let mut server = Reap(
+            Command::new(&bin)
+                .args([
+                    "s_server",
+                    "-accept",
+                    &format!("127.0.0.1:{port}"),
+                    "-naccept",
+                    "1",
+                    "-tls1_2",
+                    "-sigalgs",
+                    "ECDSA+SHA384",
+                    "-groups",
+                    "P-384:P-256",
+                ])
+                .arg("-cert")
+                .arg(&leaf)
+                .arg("-key")
+                .arg(&key)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .map_err(e)?,
+        );
+        let stdout = server.0.stdout.take().ok_or("no s_server stdout")?;
+        let (ready, listening) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                match line {
+                    Ok(l) if l.starts_with("ACCEPT") => {
+                        let _ = ready.send(());
+                    }
+                    Ok(_) => {}
+                    Err(_) => return,
+                }
+            }
+        });
+        listening.recv_timeout(LIMIT).map_err(e)?;
+        let mut conn =
+            rustls::ClientConnection::new(Arc::new(cfg), "localhost".try_into().map_err(e)?)
+                .map_err(e)?;
+        let mut sock = TcpStream::connect(("127.0.0.1", port)).map_err(e)?;
+        timed(&sock)?;
+        let result = (|| {
+            while conn.is_handshaking() {
+                conn.complete_io(&mut sock)?;
+            }
+            Ok::<_, std::io::Error>(())
+        })();
+        if strict {
+            let error = result.expect_err("strict P-256 leaf accepted");
+            let cause = error
+                .get_ref()
+                .and_then(|cause| cause.downcast_ref::<rustls::Error>())
+                .expect("rustls error");
+            let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(
+                rustls::OtherError(cause),
+            )) = cause
+            else {
+                panic!("missing typed refusal: {cause:?}");
+            };
+            assert_eq!(
+                cause.downcast_ref::<TlsError>(),
+                Some(&TlsError::PeerCertificate {
+                    profile: Profile::Cnsa1,
+                    violation: PeerCertificateViolation::LeafKey(PeerKey::Ec(PeerCurve::P256))
+                })
+            );
+        } else {
+            result.map_err(e)?;
+            assert_eq!(
+                conn.protocol_version(),
+                Some(rustls::ProtocolVersion::TLSv1_2)
+            );
+        }
+        drop(sock);
+        drop(server);
+        reader.join().map_err(|_| "peer output reader panicked")?;
+    }
+    Ok(())
+}
+
+#[test]
+#[ignore = "needs OpenSSL 3.5 or later: ci/openssl-interop.sh"]
+fn peer_certificate_cnsa1_p256_client_tls12_sha384() -> Result<(), String> {
+    use crypto_profile_awslc4::test_support::{peer_certificate_pki, pki};
+    use crypto_profile_awslc4::tls::{
+        client_cert_verifier_builder, server_builder, strict_server_builder,
+    };
+    use crypto_profile_awslc4::{Options, Profile, resolve};
+    use crypto_profile_awslc4::{PeerCertificateViolation, PeerCurve, PeerKey, TlsError};
+    let bin = openssl()?;
+    let p = peer_certificate_pki(
+        SignatureAlgorithm::EcdsaP384Sha384,
+        None,
+        SignatureAlgorithm::EcdsaP256Sha256,
+    )?;
+    let (scratch, leaf, key) = {
+        let dir = Scratch(
+            std::env::temp_dir().join(format!("crypto-profile-p256-client-{}", std::process::id())),
+        );
+        std::fs::create_dir_all(&dir.0).map_err(e)?;
+        let leaf = dir.0.join("leaf.pem");
+        let key = dir.0.join("key.pem");
+        std::fs::write(
+            &leaf,
+            pem::encode(&pem::Pem::new("CERTIFICATE", p.chain[0].to_vec())),
+        )
+        .map_err(e)?;
+        std::fs::write(
+            &key,
+            pem::encode(&pem::Pem::new("PRIVATE KEY", p.key.secret_der().to_vec())),
+        )
+        .map_err(e)?;
+        (dir, leaf, key)
+    };
+    let server_pki = pki(
+        SignatureAlgorithm::EcdsaP384Sha384,
+        SignatureAlgorithm::EcdsaP384Sha384,
+    )?;
+    let ca = scratch.0.join("server-ca.pem");
+    std::fs::write(
+        &ca,
+        pem::encode(&pem::Pem::new("CERTIFICATE", server_pki.ca.to_vec())),
+    )
+    .map_err(e)?;
+    for strict in [false, true] {
+        let mut policy = resolve(
+            Profile::Cnsa1,
+            Options {
+                peer_certificates_match_profile: strict,
+                ..Options::default()
+            },
+        )
+        .map_err(e)?
+        .tls;
+        policy.versions = vec![TlsVersion::Tls12];
+        policy.cipher_suites = vec![CipherSuite::Tls12EcdheEcdsaAes256GcmSha384];
+        policy.kx_groups = vec![KxGroup::Secp384r1];
+        policy.signature_schemes = vec![TlsSignatureScheme::EcdsaNistp384Sha384];
+        let verifier = client_cert_verifier_builder(Arc::new(p.roots.clone()), &policy)
+            .map_err(e)?
+            .build()
+            .map_err(e)?;
+        let builder = if strict {
+            strict_server_builder(&policy, verifier).map_err(e)?
+        } else {
+            server_builder(&policy)
+                .map_err(e)?
+                .with_client_cert_verifier(verifier)
+        };
+        let server_cfg = builder
+            .with_single_cert(
+                server_pki.chain.clone(),
+                rustls::pki_types::PrivateKeyDer::Pkcs8(server_pki.key.pkcs8_der().to_vec().into()),
+            )
+            .map_err(e)?;
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(e)?;
+        let port = listener.local_addr().map_err(e)?.port();
+        let server = std::thread::spawn(move || -> Result<(), std::io::Error> {
+            let mut sock = accept_within(&listener).map_err(std::io::Error::other)?;
+            let mut conn = rustls::ServerConnection::new(Arc::new(server_cfg))
+                .map_err(std::io::Error::other)?;
+            while conn.is_handshaking() {
+                conn.complete_io(&mut sock)?;
+            }
+            conn.send_close_notify();
+            conn.write_tls(&mut sock)?;
+            Ok(())
+        });
+        let out = Command::new(&bin)
+            .args([
+                "s_client",
+                "-connect",
+                &format!("127.0.0.1:{port}"),
+                "-tls1_2",
+                "-sigalgs",
+                "ECDSA+SHA384",
+                "-groups",
+                "P-384",
+                "-cert",
+            ])
+            .arg(&leaf)
+            .arg("-key")
+            .arg(&key)
+            .arg("-CAfile")
+            .arg(&ca)
+            .args(["-verify_return_error", "-trace", "-brief", "-quiet"])
+            .stdin(Stdio::null())
+            .output()
+            .map_err(e)?;
+        let transcript = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let server_result = server.join().map_err(|_| "server thread panicked")?;
+        if strict {
+            let error = server_result.expect_err("strict P-256 client leaf accepted");
+            let cause = error
+                .get_ref()
+                .and_then(|source| source.downcast_ref::<rustls::Error>())
+                .expect("rustls certificate error");
+            let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(
+                rustls::OtherError(cause),
+            )) = cause
+            else {
+                panic!("missing typed refusal: {cause:?}");
+            };
+            assert_eq!(
+                cause.downcast_ref::<TlsError>(),
+                Some(&TlsError::PeerCertificate {
+                    profile: Profile::Cnsa1,
+                    violation: PeerCertificateViolation::LeafKey(PeerKey::Ec(PeerCurve::P256))
+                })
+            );
+            assert!(
+                !out.status.success(),
+                "strict OpenSSL client unexpectedly succeeded: {transcript}"
+            );
+        } else {
+            server_result.map_err(e)?;
+            assert!(out.status.success(), "OpenSSL client failed: {transcript}");
+            assert!(
+                transcript.contains("CertificateVerify, Length="),
+                "missing CertificateVerify: {transcript}"
+            );
+            assert!(
+                transcript.contains("ecdsa_secp384r1_sha384 (0x0503)"),
+                "wrong CertificateVerify scheme: {transcript}"
+            );
+        }
+    }
+    drop(scratch);
     Ok(())
 }

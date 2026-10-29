@@ -188,6 +188,7 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
             {
                 if ![
                     "signature",
+                    "peer_certificates",
                     "csr",
                     "aead",
                     "digest",

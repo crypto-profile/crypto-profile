@@ -307,3 +307,427 @@ fn run(
         kind,
     })
 }
+
+/// A configurable certification path and private key used by the shared conformance suite.
+pub struct PeerCertificatePki {
+    opposite: Option<Box<PeerCertificatePki>>,
+    /// Trust anchors for this path.
+    pub roots: rustls::RootCertStore,
+    /// Leaf followed by supplied intermediates.
+    pub chain: Vec<CertificateDer<'static>>,
+    /// Private key corresponding to the leaf.
+    pub key: rustls::pki_types::PrivateKeyDer<'static>,
+    /// Baseline revocation information for the path.
+    pub crls: Vec<rustls::pki_types::CertificateRevocationListDer<'static>>,
+}
+
+/// Generates a path with independently selected root, optional intermediate and leaf keys.
+pub fn peer_certificate_pki(
+    root: SignatureAlgorithm,
+    intermediate: Option<SignatureAlgorithm>,
+    leaf: SignatureAlgorithm,
+) -> Result<PeerCertificatePki, String> {
+    peer_pki(root, intermediate, leaf, None)
+}
+
+fn peer_pki(
+    root: SignatureAlgorithm,
+    intermediate: Option<SignatureAlgorithm>,
+    leaf: SignatureAlgorithm,
+    fixture: Option<PeerCertificateFixture>,
+) -> Result<PeerCertificatePki, String> {
+    let root_key = KeyPair::generate(root).map_err(e)?;
+    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
+    params
+        .distinguished_name
+        .push(rcgen::DnType::CommonName, "conformance root");
+    params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    let sha256 = PeerSha256(&root_key);
+    let root_cert = if matches!(fixture, Some(PeerCertificateFixture::RootSha256)) {
+        params.self_signed(&sha256).map_err(e)?
+    } else {
+        params.self_signed(&root_key).map_err(e)?
+    };
+    let issuer = rcgen::Issuer::new(params.clone(), &root_key);
+    let intermediate_key = intermediate.map(KeyPair::generate).transpose().map_err(e)?;
+    let mut chain = Vec::new();
+    let intermediate_params = intermediate_key
+        .as_ref()
+        .map(|_| {
+            let mut p = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
+            p.distinguished_name
+                .push(rcgen::DnType::CommonName, "conformance intermediate");
+            p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+            Ok::<_, String>(p)
+        })
+        .transpose()?;
+    let intermediate_issuer = intermediate_params
+        .as_ref()
+        .zip(intermediate_key.as_ref())
+        .map(|(p, k)| rcgen::Issuer::new(p.clone(), k));
+    let leaf_key = KeyPair::generate(leaf).map_err(e)?;
+    let name = if matches!(fixture, Some(PeerCertificateFixture::WrongName)) {
+        "other.invalid"
+    } else {
+        "localhost"
+    };
+    let mut leaf_params = rcgen::CertificateParams::new(vec![name.into()]).map_err(e)?;
+    leaf_params.serial_number = Some(rcgen::SerialNumber::from(42));
+    if matches!(fixture, Some(PeerCertificateFixture::Expired)) {
+        leaf_params.not_before = rcgen::date_time_ymd(2000, 1, 1);
+        leaf_params.not_after = rcgen::date_time_ymd(2001, 1, 1);
+    }
+    let leaf_cert = leaf_params
+        .signed_by(&leaf_key, intermediate_issuer.as_ref().unwrap_or(&issuer))
+        .map_err(e)?;
+    let mut der = leaf_cert.der().to_vec();
+    if matches!(fixture, Some(PeerCertificateFixture::Tampered)) {
+        let last = der.len() - 1;
+        der[last] ^= 1;
+    }
+    chain.push(CertificateDer::from(der));
+    if let Some((p, k)) = intermediate_params.zip(intermediate_key.as_ref()) {
+        chain.push(p.signed_by(k, &issuer).map_err(e)?.der().clone());
+    }
+    let mut roots = rustls::RootCertStore::empty();
+    if matches!(fixture, Some(PeerCertificateFixture::Untrusted)) {
+        roots = pki(
+            SignatureAlgorithm::EcdsaP384Sha384,
+            SignatureAlgorithm::EcdsaP384Sha384,
+        )?
+        .roots;
+    } else {
+        roots.add(root_cert.der().clone()).map_err(e)?;
+    }
+    let mut crls = Vec::new();
+    if matches!(
+        fixture,
+        Some(PeerCertificateFixture::Sha256Crl | PeerCertificateFixture::RevokedSha256Crl)
+    ) {
+        let crl_issuer = rcgen::Issuer::new(params, &sha256);
+        crls.push(
+            rcgen::CertificateRevocationListParams {
+                this_update: rcgen::date_time_ymd(2020, 1, 1),
+                next_update: rcgen::date_time_ymd(2040, 1, 1),
+                crl_number: rcgen::SerialNumber::from(1),
+                issuing_distribution_point: None,
+                revoked_certs: if matches!(fixture, Some(PeerCertificateFixture::RevokedSha256Crl))
+                {
+                    vec![rcgen::RevokedCertParams {
+                        serial_number: rcgen::SerialNumber::from(42),
+                        revocation_time: rcgen::date_time_ymd(2020, 1, 1),
+                        reason_code: None,
+                        invalidity_date: None,
+                    }]
+                } else {
+                    vec![]
+                },
+                key_identifier_method: rcgen::KeyIdMethod::Sha256,
+            }
+            .signed_by(&crl_issuer)
+            .map_err(e)?
+            .der()
+            .clone(),
+        );
+    }
+    Ok(PeerCertificatePki {
+        opposite: None,
+        roots,
+        chain,
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into()),
+        crls,
+    })
+}
+
+/// Special paths for baseline and strict certificate-validation regressions.
+#[derive(Clone, Copy)]
+pub enum PeerCertificateFixture {
+    /// A compliant root key with a SHA-256 self-signature.
+    RootSha256,
+    /// An unrevoked SHA-384 path with a SHA-256 CRL.
+    Sha256Crl,
+    /// A revoked SHA-384 path with a SHA-256 CRL.
+    RevokedSha256Crl,
+    /// A separately generated 8192-bit RSA leaf.
+    Rsa8192Leaf,
+    /// A selected noncompliant path with a compliant alternative.
+    SelectedBadPath,
+    /// A selected compliant path with an unused noncompliant alternative.
+    SelectedGoodPath,
+    /// A leaf naming a different server.
+    WrongName,
+    /// An expired leaf.
+    Expired,
+    /// A path outside the configured trust anchors.
+    Untrusted,
+    /// A leaf with a corrupted signature.
+    Tampered,
+}
+
+/// Generates a named regression path with a 3072-bit RSA root and P-384 leaf.
+pub fn peer_certificate_fixture(
+    fixture: PeerCertificateFixture,
+) -> Result<PeerCertificatePki, String> {
+    if matches!(
+        fixture,
+        PeerCertificateFixture::SelectedBadPath | PeerCertificateFixture::SelectedGoodPath
+    ) {
+        return peer_selected_path(matches!(fixture, PeerCertificateFixture::SelectedBadPath));
+    }
+    if matches!(fixture, PeerCertificateFixture::Rsa8192Leaf) {
+        let mut p = peer_certificate_pki(
+            SignatureAlgorithm::Rsa3072Sha384,
+            None,
+            SignatureAlgorithm::Rsa3072Sha384,
+        )?;
+        let issuer_key = KeyPair::generate(SignatureAlgorithm::Rsa3072Sha384).map_err(e)?;
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let root = params.self_signed(&issuer_key).map_err(e)?;
+        let issuer = rcgen::Issuer::new(params, &issuer_key);
+        let der = rustls::pki_types::PrivatePkcs8KeyDer::from(
+            include_bytes!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../crypto-profile/testdata/rsa8192.pkcs8.der"
+            ))
+            .to_vec(),
+        );
+        let key = rcgen::KeyPair::from_pkcs8_der_and_sign_algo(&der, &rcgen::PKCS_RSA_SHA384)
+            .map_err(e)?;
+        let leaf = rcgen::CertificateParams::new(vec!["localhost".into()])
+            .map_err(e)?
+            .signed_by(&key, &issuer)
+            .map_err(e)?;
+        p.roots = rustls::RootCertStore::empty();
+        p.roots.add(root.der().clone()).map_err(e)?;
+        p.chain = vec![leaf.der().clone()];
+        p.key = rustls::pki_types::PrivateKeyDer::Pkcs8(der);
+        return Ok(p);
+    }
+    let mut pki = peer_pki(
+        SignatureAlgorithm::Rsa3072Sha384,
+        None,
+        SignatureAlgorithm::EcdsaP384Sha384,
+        Some(fixture),
+    )?;
+    if matches!(
+        fixture,
+        PeerCertificateFixture::RevokedSha256Crl
+            | PeerCertificateFixture::WrongName
+            | PeerCertificateFixture::Expired
+            | PeerCertificateFixture::Untrusted
+            | PeerCertificateFixture::Tampered
+    ) {
+        pki.opposite = Some(Box::new(peer_certificate_pki(
+            SignatureAlgorithm::EcdsaP384Sha384,
+            None,
+            SignatureAlgorithm::EcdsaP384Sha384,
+        )?));
+    }
+    Ok(pki)
+}
+
+struct PeerSha256<'a>(&'a KeyPair);
+impl rcgen::PublicKeyData for PeerSha256<'_> {
+    fn der_bytes(&self) -> &[u8] {
+        rcgen::PublicKeyData::der_bytes(self.0)
+    }
+    fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
+        &rcgen::PKCS_RSA_SHA256
+    }
+}
+impl rcgen::SigningKey for PeerSha256<'_> {
+    fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
+        let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.pkcs8_der())
+            .map_err(|_| rcgen::Error::CouldNotParseKeyPair)?;
+        let mut signature = vec![0; key.public_modulus_len()];
+        key.sign(
+            &aws_lc_rs::signature::RSA_PKCS1_SHA256,
+            &aws_lc_rs::rand::SystemRandom::new(),
+            msg,
+            &mut signature,
+        )
+        .map_err(|_| rcgen::Error::RemoteKeyError)?;
+        Ok(signature)
+    }
+}
+
+/// Builds fresh mutual-authentication configurations, restricting only the detecting endpoint.
+/// Each call creates independent session stores; permissive sessions are never reused by strict configurations.
+pub fn peer_certificate_configs(
+    policy: &Policy,
+    server_checks_client: bool,
+    pki: &PeerCertificatePki,
+) -> Result<(rustls::ClientConfig, rustls::ServerConfig), String> {
+    let (mut client, mut server) =
+        peer_certificate_default_session_configs(policy, server_checks_client, pki)?;
+    client.resumption = rustls::client::Resumption::disabled();
+    server.session_storage = Arc::new(rustls::server::NoServerSessionStorage {});
+    server.send_tls13_tickets = 0;
+    Ok((client, server))
+}
+
+/// Builds mutual-authentication configurations with the default session storage and ticketer.
+pub fn peer_certificate_default_session_configs(
+    policy: &Policy,
+    server_checks_client: bool,
+    pki: &PeerCertificatePki,
+) -> Result<(rustls::ClientConfig, rustls::ServerConfig), String> {
+    use crate::tls::{client_cert_verifier_builder, strict_client_builder, strict_server_builder};
+    let mut baseline = policy.clone();
+    baseline.peer_certificate_rule = None;
+    baseline.cipher_suites = CipherSuite::ALL
+        .into_iter()
+        .filter(|s| policy.versions.contains(&s.version()))
+        .collect();
+    let cp = if server_checks_client {
+        &baseline
+    } else {
+        policy
+    };
+    let sp = if server_checks_client {
+        policy
+    } else {
+        &baseline
+    };
+    let opposite = pki.opposite.as_deref().unwrap_or(pki);
+    let (client_pki, server_pki) = if server_checks_client {
+        (pki, opposite)
+    } else {
+        (opposite, pki)
+    };
+    let cv = server_cert_verifier_builder(Arc::new(server_pki.roots.clone()), cp)
+        .map_err(e)?
+        .with_crls(server_pki.crls.clone())
+        .build()
+        .map_err(e)?;
+    let sv = client_cert_verifier_builder(Arc::new(client_pki.roots.clone()), sp)
+        .map_err(e)?
+        .with_crls(client_pki.crls.clone())
+        .build()
+        .map_err(e)?;
+    let cb = if cp.peer_certificate_rule.is_some() {
+        strict_client_builder(cp, cv).map_err(e)?
+    } else {
+        client_builder(cp)
+            .map_err(e)?
+            .dangerous()
+            .with_custom_certificate_verifier(cv)
+    };
+    let sb = if sp.peer_certificate_rule.is_some() {
+        strict_server_builder(sp, sv).map_err(e)?
+    } else {
+        server_builder(sp).map_err(e)?.with_client_cert_verifier(sv)
+    };
+    let certified = |pki: &PeerCertificatePki| -> Result<_, String> {
+        let key = crate::tls::load_private_key(&baseline, pki.key.clone_key()).map_err(e)?;
+        Ok(Arc::new(rustls::sign::CertifiedKey::new(
+            pki.chain.clone(),
+            key,
+        )))
+    };
+    let client =
+        cb.with_client_cert_resolver(Arc::new(SingleCertAndKey::from(certified(client_pki)?)));
+    let server = sb.with_cert_resolver(Arc::new(SingleCertAndKey::from(certified(server_pki)?)));
+    Ok((client, server))
+}
+
+/// Drives mutual authentication and retains the local detecting endpoint's typed error.
+/// The boolean is true for errors detected by the server.
+pub fn drive_typed(
+    client: rustls::ClientConfig,
+    server: rustls::ServerConfig,
+) -> Result<(), (bool, rustls::Error)> {
+    let mut c = rustls::ClientConnection::new(
+        Arc::new(client),
+        ServerName::try_from("localhost")
+            .map_err(|error| (false, rustls::Error::General(error.to_string())))?,
+    )
+    .map_err(|e| (false, e))?;
+    let mut s = rustls::ServerConnection::new(Arc::new(server)).map_err(|e| (true, e))?;
+    for _flight in 0..100 {
+        if !c.is_handshaking() && !s.is_handshaking() {
+            return Ok(());
+        }
+        let mut to_server = Vec::new();
+        c.write_tls(&mut to_server)
+            .map_err(|e| (false, rustls::Error::General(e.to_string())))?;
+        let mut bytes = to_server.as_slice();
+        while !bytes.is_empty() {
+            s.read_tls(&mut bytes)
+                .map_err(|e| (true, rustls::Error::General(e.to_string())))?;
+            s.process_new_packets().map_err(|e| (true, e))?;
+        }
+        let mut to_client = Vec::new();
+        s.write_tls(&mut to_client)
+            .map_err(|e| (true, rustls::Error::General(e.to_string())))?;
+        let mut bytes = to_client.as_slice();
+        while !bytes.is_empty() {
+            c.read_tls(&mut bytes)
+                .map_err(|e| (false, rustls::Error::General(e.to_string())))?;
+            c.process_new_packets().map_err(|e| (false, e))?;
+        }
+        if to_server.is_empty() && to_client.is_empty() {
+            break;
+        }
+    }
+    Err((false, rustls::Error::General("handshake stalled".into())))
+}
+
+fn peer_selected_path(bad_first: bool) -> Result<PeerCertificatePki, String> {
+    let ca_params = |name: &str| {
+        let mut p = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
+        p.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        p.distinguished_name.push(rcgen::DnType::CommonName, name);
+        Ok::<_, String>(p)
+    };
+    let good_key = KeyPair::generate(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
+    let bad_key = KeyPair::generate(SignatureAlgorithm::EcdsaP256Sha256).map_err(e)?;
+    let gp = ca_params("good root")?;
+    let bp = ca_params("bad root")?;
+    let gr = gp.self_signed(&good_key).map_err(e)?;
+    let br = bp.self_signed(&bad_key).map_err(e)?;
+    let gi = rcgen::Issuer::new(gp, &good_key);
+    let bi = rcgen::Issuer::new(bp, &bad_key);
+    let ik = KeyPair::generate(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
+    let ip = ca_params("shared intermediate")?;
+    let good = ip.signed_by(&ik, &gi).map_err(e)?;
+    let bad = ip.signed_by(&ik, &bi).map_err(e)?;
+    let ii = rcgen::Issuer::new(ip, &ik);
+    let key = KeyPair::generate(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
+    let leaf = rcgen::CertificateParams::new(vec!["localhost".into()])
+        .map_err(e)?
+        .signed_by(&key, &ii)
+        .map_err(e)?;
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(gr.der().clone()).map_err(e)?;
+    roots.add(br.der().clone()).map_err(e)?;
+    let chain = if bad_first {
+        vec![leaf.der().clone(), bad.der().clone(), good.der().clone()]
+    } else {
+        vec![leaf.der().clone(), good.der().clone(), bad.der().clone()]
+    };
+    let crls = [&gi, &bi, &ii]
+        .into_iter()
+        .map(|issuer| {
+            rcgen::CertificateRevocationListParams {
+                this_update: rcgen::date_time_ymd(2020, 1, 1),
+                next_update: rcgen::date_time_ymd(2040, 1, 1),
+                crl_number: rcgen::SerialNumber::from(1),
+                issuing_distribution_point: None,
+                revoked_certs: vec![],
+                key_identifier_method: rcgen::KeyIdMethod::Sha256,
+            }
+            .signed_by(issuer)
+            .map(|crl| crl.der().clone())
+            .map_err(e)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(PeerCertificatePki {
+        opposite: None,
+        roots,
+        chain,
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into()),
+        crls,
+    })
+}

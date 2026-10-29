@@ -67,6 +67,7 @@ fn reference(c: &Case) -> CryptoProvider {
 
 fn policy(c: &Case) -> Policy {
     Policy {
+        peer_certificate_rule: None,
         versions: vec![c.version],
         cipher_suites: vec![c.suite],
         kx_groups: vec![c.group],
@@ -392,6 +393,7 @@ fn every_shared_component_classifies_fips_as_the_reference() {
         assert_eq!(ours.kx_groups[0].fips(), c.reference.1.fips(), "{c:?}");
     }
     let mine = crypto_provider(&Policy {
+        peer_certificate_rule: None,
         versions: vec![V::Tls13],
         cipher_suites: vec![C::Tls13Aes256GcmSha384],
         kx_groups: vec![K::Secp384r1MlKem1024],
@@ -439,6 +441,7 @@ fn every_quic_suite_derives_the_keys_of_the_reference() {
         ),
     ] {
         let provider = crypto_provider(&Policy {
+            peer_certificate_rule: None,
             versions: vec![V::Tls13],
             cipher_suites: vec![suite],
             kx_groups: vec![K::Secp384r1],
@@ -484,6 +487,7 @@ fn every_quic_suite_derives_the_keys_of_the_reference() {
 
 fn every_scheme() -> Policy {
     Policy {
+        peer_certificate_rule: None,
         versions: vec![V::Tls13],
         cipher_suites: vec![C::Tls13Aes256GcmSha384],
         kx_groups: vec![K::Secp384r1],

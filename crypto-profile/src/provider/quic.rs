@@ -747,6 +747,7 @@ mod tests {
 
     fn policy(versions: &[V], suite: C) -> Policy {
         Policy {
+            peer_certificate_rule: None,
             versions: versions.to_vec(),
             cipher_suites: vec![suite],
             kx_groups: vec![K::Secp384r1MlKem1024, K::Secp384r1],

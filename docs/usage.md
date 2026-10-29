@@ -112,6 +112,14 @@ Inspect `Resolved::excluded` after `resolve`: it records entries unavailable on 
 
 `Resolved::certified_key(chain, &key)` is the way to install this side's certificate under a profile: it refuses a key the profile does not admit (`KeyNotInProfile`) and a chain whose end-entity certificate does not carry the key (`TlsError::KeyMismatch`), and returns a `rustls::sign::CertifiedKey` whose key signs only with the profile's schemes, for `rustls::sign::SingleCertAndKey` or a resolver of your own.
 
+### Peer certificate rules
+
+Set `Options::peer_certificates_match_profile` to `true` when resolving a profile to check the peer leaf and selected certificate path. It defaults to `false`. `resolve` carries the rule in `tls::Policy`; a hand-written policy defaults to no rule. For a rule-bearing policy, build the crate-owned server verifier with `tls::server_cert_verifier_builder` for a client, or the client verifier with `tls::client_cert_verifier_builder` for a server. Pass its built handle and the same policy to `tls::strict_client_builder` or `tls::strict_server_builder`, respectively. The strict builder installs the verifier.
+
+The old `tls::client_builder` and `tls::server_builder` refuse a rule-bearing policy with `TlsError::StrictBuilderRequired`. A strict builder refuses an opaque or incompatible handle with `TlsError::IncompatiblePeerVerifier`: both its rule and canonical handshake-scheme set must match the policy. A certificate rule refusal carries `TlsError::PeerCertificate` with the profile and violation.
+
+`cnsa1` accepts exactly P-384 or RSA-3072/4096 leaves; `cnsa2` accepts only ML-DSA-87. The other profiles use minimum RSA sizes: 3072 for `preferred`, 3000 for `bsi`, and 2048 for `unrestricted`, `fips1403` and `fips1402`; `fips1403` also requires an even RSA bit length. Their allowed key families and chain rules are in [profiles](profiles.md#9-impact-of-peer-certificate-enforcement).
+
 ## 7. Compatibility limits
 
 These follow from rustls; they apply to any configuration this crate builds.
@@ -144,7 +152,7 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 
 ## 9. What a policy or profile does not restrict
 
-- **Certificate-chain signature algorithms.** The verifiers keep the full list of algorithms for signatures on certificates (`WebPkiSupportedAlgorithms::all`; `crypto-profile/src/provider/verify.rs` and the 4.x arms, `crypto-profile-awslc4/src/provider_arms.rs`), the same list as rustls 0.23.46's built-in provider (tests `the_verification_tables_match_the_reference`, `every_verifier_accepts_and_refuses_as_the_reference`); a `Policy` narrows only the handshake-signature mapping (`crypto-profile/src/backend_body/tls.rs`, `tables`).
+- **Certificate-chain signature algorithms with the option off.** The verifiers keep the full list of algorithms for signatures on certificates (`WebPkiSupportedAlgorithms::all`; `crypto-profile/src/provider/verify.rs` and the 4.x arms, `crypto-profile-awslc4/src/provider_arms.rs`), the same list as rustls 0.23.46's built-in provider (tests `the_verification_tables_match_the_reference`, `every_verifier_accepts_and_refuses_as_the_reference`); a rule-less `Policy` narrows only the handshake-signature mapping; `Options::peer_certificates_match_profile` enables the separate path rule (`crypto-profile/src/backend_body/tls.rs`, `tables`).
 - **A signing key built outside the policy's provider.** A `rustls::sign::SigningKey` that did not come through the provider's key provider, `tls::load_private_key` or `Resolved::certified_key` signs with whatever scheme rustls picks from the peer's offer and the key's type.
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile/src/backend_body/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.

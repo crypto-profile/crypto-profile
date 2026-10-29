@@ -32,6 +32,7 @@ aws-lc-rs = { version = "=1.17.4", features = ["fips", "ring-io"] }
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "tls12"] }
 # Later rcgen requires aws-lc-rs 1.18, crossing the selected FIPS module line.
 rcgen = { version = "=0.14.9", default-features = false, features = ["aws_lc_rs", "fips", "pem"] }
+rustls-webpki = { version = "=0.103.16", default-features = false, features = ["std"] }
 pem = "4"
 zeroize = "1"
 

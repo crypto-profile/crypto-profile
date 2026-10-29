@@ -159,15 +159,25 @@ pub struct Options {
     /// Keep only post-quantum key exchange (pure ML-KEM and hybrid groups), and so remove TLS 1.2,
     /// which has none. Signatures are not narrowed.
     pub pq_key_exchange_required: bool,
+    /// Require peer leaf keys and certification paths to match the profile. Off by default.
+    pub peer_certificates_match_profile: bool,
 }
 
 impl fmt::Display for Options {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(if self.pq_key_exchange_required {
-            "post-quantum key exchange required"
-        } else {
-            "no options"
-        })
+        f.write_str(
+            match (
+                self.pq_key_exchange_required,
+                self.peer_certificates_match_profile,
+            ) {
+                (false, false) => "no options",
+                (true, false) => "post-quantum key exchange required",
+                (false, true) => "peer certificates match profile",
+                (true, true) => {
+                    "post-quantum key exchange required, peer certificates match profile"
+                }
+            },
+        )
     }
 }
 
@@ -625,6 +635,7 @@ mod tests {
         linkage: Linkage::Static,
     };
     const PQ: Options = Options {
+        peer_certificates_match_profile: false,
         pq_key_exchange_required: true,
     };
     const PKCS1: [TlsSignatureScheme; 3] = [
@@ -1036,16 +1047,66 @@ mod tests {
         assert_eq!(
             Options::default(),
             Options {
+                peer_certificates_match_profile: false,
                 pq_key_exchange_required: false
             }
         );
         assert_eq!(Options::default().to_string(), "no options");
         assert_eq!(
             Options {
+                peer_certificates_match_profile: false,
                 pq_key_exchange_required: true
             }
             .to_string(),
             "post-quantum key exchange required"
         );
+    }
+    #[test]
+    fn peer_certificate_options_combinations_preserve_selection() {
+        for (pq, peer, display) in [
+            (false, false, "no options"),
+            (true, false, "post-quantum key exchange required"),
+            (false, true, "peer certificates match profile"),
+            (
+                true,
+                true,
+                "post-quantum key exchange required, peer certificates match profile",
+            ),
+        ] {
+            let options = Options {
+                pq_key_exchange_required: pq,
+                peer_certificates_match_profile: peer,
+            };
+            assert_eq!(options.to_string(), display);
+            for profile in Profile::ALL {
+                for module in [M3S, M4S] {
+                    let baseline = Options {
+                        peer_certificates_match_profile: false,
+                        ..options
+                    };
+                    let actual = select(profile, options, module);
+                    let expected = select(profile, baseline, module);
+                    match (actual, expected) {
+                        (Ok(actual), Ok(expected)) => assert_eq!(actual, expected),
+                        (
+                            Err(CryptoError::EmptyProfile {
+                                profile: p,
+                                options: o,
+                                category: f,
+                            }),
+                            Err(CryptoError::EmptyProfile {
+                                profile: ep,
+                                options: eo,
+                                category: ef,
+                            }),
+                        ) => {
+                            assert_eq!((p, o, f), (ep, options, ef));
+                            assert_eq!(eo, baseline);
+                        }
+                        (actual, expected) => panic!("{actual:?} != {expected:?}"),
+                    }
+                }
+            }
+        }
     }
 }
