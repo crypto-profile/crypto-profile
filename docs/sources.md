@@ -95,3 +95,18 @@ This page lists every document a profile, citation or capability cell depends on
 | CAVP certificate A7873 (NARROW_MULTIPLIER processor variant) | NIST CAVP | FIPS 4.0.0 module line, dynamic build | <https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program/details?product=20675&displayMode=Aggregated> | RSA 2048, 3072 and 4096 keys with SHA2-384 | `eb8fdc4693ba6adcee24ca0e4c5c114547cf15b229bedc7b5207ae6e09a07f1d` |
 | CAVP certificate A7839 (AESNI processor variant) | NIST CAVP | FIPS 4.0.0 module line, dynamic build | <https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program/details?product=20641&displayMode=Aggregated> | Lower end of the range A7839-A7876 named in the capability table and decision 0004 | `ed886dee89bb04c0c9d32e9d6bf912a34732736b74892ba84d5bb506ea35bee9` |
 | CAVP certificate A7876 (SHA3_ASM_N1 processor variant) | NIST CAVP | FIPS 4.0.0 module line, dynamic build | <https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program/details?product=20678&displayMode=Aggregated> | Upper end of the range A7839-A7876 named in the capability table and decision 0004 | `e77f9061128ee3cc69fe898455834b160537abba03b45099cc3e984b9c553952` |
+
+## 3.x backend provenance
+
+The 3.x backend pins aws-lc-rs 1.17.4 and rcgen 0.14.9; its lockfile selects aws-lc-fips-sys 0.13.17, which bundles AWS-LC 3.6.0, a later revision of the AWS-LC FIPS 3.x line. The certificates below cover that line; their certified release is 3.1.0.
+
+| Document | Issuer | Edition | Link | Used by | SHA-256 |
+|---|---|---|---|---|---|
+| AWS-LC FIPS 3.1.0 security policy, static (CMVP #5314) | NIST CMVP | Document version 1.2, 2026-05-20 | <https://csrc.nist.gov/CSRC/media/projects/cryptographic-module-validation-program/documents/security-policies/140sp5314.pdf> | 3.x static capability cells (Table 5); `certificate(MODULE)` | `9e0c9f57f5d319c0c86492e6196aa5625a1b97867843e0e0d9bb423937e6f34e` |
+| AWS-LC FIPS 3.1.0 security policy, dynamic (CMVP #5298) | NIST CMVP | Document version 1.3, 2026-05-14 | <https://csrc.nist.gov/CSRC/media/projects/cryptographic-module-validation-program/documents/security-policies/140sp5298.pdf> | 3.x dynamic capability cells (Table 5); `certificate(MODULE)` | `4e285b543fe4f333ef2ea85f6942753bb9d08403bf3a4933818462f43caf96a0` |
+
+| Crate | Version | Link |
+|---|---|---|
+| aws-lc-rs | 1.17.4 | <https://crates.io/crates/aws-lc-rs/1.17.4> |
+| aws-lc-fips-sys | 0.13.17 | <https://crates.io/crates/aws-lc-fips-sys/0.13.17> |
+| rcgen | 0.14.9 | <https://crates.io/crates/rcgen/0.14.9> |

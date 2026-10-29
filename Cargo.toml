@@ -1,5 +1,6 @@
 [workspace]
 resolver = "3"
+exclude = ["crypto-profile-awslc3"]
 members = ["crypto-profile", "crypto-profile-awslc4"]
 
 [workspace.package]

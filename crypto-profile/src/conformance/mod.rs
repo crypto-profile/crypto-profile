@@ -203,8 +203,9 @@ mod tests {
                 let o = Options {
                     pq_key_exchange_required: g.pq,
                 };
-                if g.schemes.contains(&0x0906) || g.keys.contains(&"ml-dsa-87") {
-                    assert!(golden::expected(m, g.profile, o).is_err(), "{m:?} {o}");
+                if let Ok(row) = golden::expected(m, g.profile, o) {
+                    assert!(!row.schemes.contains(&0x0906));
+                    assert!(!row.keys.contains(&"ml-dsa-87"));
                 }
             }
             assert_eq!(
@@ -486,7 +487,7 @@ macro_rules! conformance_tests {
                     KxGroup::Secp384r1,
                     KxGroup::Secp256r1,
                 ],
-                &TlsSignatureScheme::ALL,
+                &$crate::conformance::__peer_schemes(MODULE),
             )
         }
 
@@ -499,7 +500,7 @@ macro_rules! conformance_tests {
                     CipherSuite::Tls12EcdheRsaAes256GcmSha384,
                 ],
                 &[KxGroup::Secp384r1],
-                &TlsSignatureScheme::ALL,
+                &$crate::conformance::__peer_schemes(MODULE),
             )
         }
 
@@ -714,7 +715,7 @@ macro_rules! conformance_tests {
                             &[TlsVersion::Tls13],
                             &[CipherSuite::Tls13Aes256GcmSha384],
                             &[k],
-                            &TlsSignatureScheme::ALL,
+                            &$crate::conformance::__peer_schemes(MODULE),
                         );
                         if cap.available {
                             let n = handshake(&p, &p, SignatureAlgorithm::EcdsaP384Sha384)
@@ -732,7 +733,7 @@ macro_rules! conformance_tests {
                             &[c.version()],
                             &[c],
                             &[KxGroup::Secp384r1],
-                            &TlsSignatureScheme::ALL,
+                            &$crate::conformance::__peer_schemes(MODULE),
                         );
                         if cap.available {
                             let n = handshake(&p, &p, suite_key(c))
@@ -754,7 +755,7 @@ macro_rules! conformance_tests {
                             &[v],
                             &suites,
                             &[KxGroup::Secp384r1],
-                            &TlsSignatureScheme::ALL,
+                            &$crate::conformance::__peer_schemes(MODULE),
                         );
                         if cap.available {
                             let n = handshake(&p, &p, SignatureAlgorithm::EcdsaP384Sha384)
@@ -769,8 +770,12 @@ macro_rules! conformance_tests {
                     }
                     Algorithm::Scheme(t) => {
                         let (key, v, c) = scheme_setup(t);
-                        let server =
-                            policy(&[v], &[c], &[KxGroup::Secp384r1], &TlsSignatureScheme::ALL);
+                        let server = policy(
+                            &[v],
+                            &[c],
+                            &[KxGroup::Secp384r1],
+                            &$crate::conformance::__peer_schemes(MODULE),
+                        );
                         let client = policy(&[v], &[c], &[KxGroup::Secp384r1], &[t]);
                         if cap.available {
                             let n = handshake(&client, &server, key)
@@ -827,7 +832,7 @@ macro_rules! conformance_tests {
                 &[TlsVersion::Tls12],
                 &[CipherSuite::Tls12EcdheRsaAes256GcmSha384],
                 &[KxGroup::Secp384r1],
-                &TlsSignatureScheme::ALL,
+                &$crate::conformance::__peer_schemes(MODULE),
             );
             let n = handshake(
                 &legacy,
@@ -846,7 +851,26 @@ macro_rules! conformance_tests {
         }
 
         #[test]
+        fn conformance_runtime_release_matches_the_selected_line() {
+            let expected = if MODULE.line == ModuleLine::AwsLcFips3 {
+                "3.6.0"
+            } else {
+                assert_eq!(MODULE.line, ModuleLine::AwsLcFips4);
+                "4.2.0"
+            };
+            assert_eq!(awslc_version(), expected);
+        }
+
+        #[test]
         fn conformance_linkage_matches_the_binary() {
+            if let Ok(intended) = std::env::var("AWS_LC_FIPS_SYS_STATIC") {
+                let expected = match intended.as_str() {
+                    "1" => Linkage::Static,
+                    "0" => Linkage::Dynamic,
+                    other => panic!("invalid intended linkage: {other:?}"),
+                };
+                assert_eq!(MODULE.linkage, expected, "{MODULE:?}");
+            }
             let lib = test_support::FIPS_LIBRARY;
             assert!($crate::conformance::__library_basename(lib), "{lib:?}");
             let named = |path: Option<&str>, file: &str| {

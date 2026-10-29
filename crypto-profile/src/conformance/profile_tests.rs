@@ -101,6 +101,10 @@ macro_rules! __conformance_profile_tests {
             Resolved {
                 profile: Profile::Unrestricted,
                 options: Options::default(),
+                excluded: expected(MODULE, Profile::Unrestricted, Options::default())
+                    .unwrap()
+                    .excluded
+                    .to_vec(),
                 tls: Policy {
                     versions: s
                         .versions
@@ -196,6 +200,7 @@ macro_rules! __conformance_profile_tests {
                                 g.keys,
                                 "{p} {options}"
                             );
+                            assert_eq!(r.excluded, g.excluded, "{p} {options}");
                             compared += 1;
                         }
                     }
@@ -250,10 +255,23 @@ macro_rules! __conformance_profile_tests {
                 for (group, cp) in [(K::MlKem1024, 0x0202), (K::X25519MlKem768, 0x11EC)] {
                     assert_eq!(served(&tls13(&[group]), a, |n| n.kx.iana()), Ok(cp));
                 }
-                for key in [S::Ed25519, S::MlDsa87] {
-                    assert_eq!(a.admit_key(key), Ok(()));
+                assert_eq!(a.admit_key(S::Ed25519), Ok(()));
+                if MODULE.line == ModuleLine::AwsLcFips4 {
+                    assert_eq!(a.admit_key(S::MlDsa87), Ok(()));
+                    assert_eq!(verifies(&a.tls, S::MlDsa87), Ok(0x0906));
+                } else {
+                    assert_eq!(
+                        a.admit_key(S::MlDsa87),
+                        Err(CryptoError::KeyNotInProfile {
+                            profile: Profile::Fips1403,
+                            algorithm: S::MlDsa87,
+                        })
+                    );
+                    assert_eq!(
+                        verifies(&a.tls, S::MlDsa87),
+                        __unlisted_key(MODULE, S::MlDsa87, NO_SCHEME)
+                    );
                 }
-                assert_eq!(verifies(&a.tls, S::MlDsa87), Ok(0x0906));
                 assert_eq!(verifies(&a.tls, S::Ed25519), Ok(0x0807));
             }
             if let Some(b) = &b {
@@ -411,8 +429,22 @@ macro_rules! __conformance_profile_tests {
             if let Some(p) = &p {
                 assert_eq!(served(&tls12(), p, |n| n.version.iana()), err(NO_TLS12));
                 assert_eq!(served(&hybrid, p, |n| n.kx.iana()), Ok(0x11EC));
-                assert_eq!(verifies(&p.tls, S::MlDsa87), Ok(0x0906));
-                assert_eq!(p.admit_key(S::MlDsa87), Ok(()));
+                if MODULE.line == ModuleLine::AwsLcFips4 {
+                    assert_eq!(verifies(&p.tls, S::MlDsa87), Ok(0x0906));
+                    assert_eq!(p.admit_key(S::MlDsa87), Ok(()));
+                } else {
+                    assert_eq!(
+                        verifies(&p.tls, S::MlDsa87),
+                        __unlisted_key(MODULE, S::MlDsa87, NO_SCHEME)
+                    );
+                    assert_eq!(
+                        p.admit_key(S::MlDsa87),
+                        Err(CryptoError::KeyNotInProfile {
+                            profile: Profile::Preferred,
+                            algorithm: S::MlDsa87,
+                        })
+                    );
+                }
             }
         }
 
@@ -507,7 +539,12 @@ macro_rules! __conformance_profile_tests {
                 if let Some(c) = c {
                     assert_eq!(
                         c.join().unwrap().map(cp),
-                        Ok((0x0304, 0x1302, 0x0202, 0x0906))
+                        if MODULE.line == ModuleLine::AwsLcFips4 {
+                            Ok((0x0304, 0x1302, 0x0202, 0x0906))
+                        } else {
+                            Err(CryptoError::Unavailable(Algorithm::Signature(S::MlDsa87))
+                                .to_string())
+                        }
                     );
                 }
             });

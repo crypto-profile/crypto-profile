@@ -88,8 +88,23 @@ mod tests {
     }
 
     #[test]
-    fn the_module_is_4x_and_its_certificate_is_in_review() {
-        assert_eq!(crate::MODULE.line, crypto_profile::ModuleLine::AwsLcFips4);
-        assert_eq!(certificate().status, crypto_profile::CertStatus::InProcess);
+    fn the_module_certificate_matches_its_line() {
+        if crate::MODULE.line == crypto_profile::ModuleLine::AwsLcFips3 {
+            assert_eq!(certificate().status, crypto_profile::CertStatus::Validated);
+            assert_eq!(
+                certificate().number,
+                Some(
+                    if crate::MODULE.linkage == crypto_profile::Linkage::Static {
+                        5314
+                    } else {
+                        5298
+                    }
+                )
+            );
+            assert!(certificate().module_name.contains("3.1.0"));
+        } else {
+            assert_eq!(crate::MODULE.line, crypto_profile::ModuleLine::AwsLcFips4);
+            assert_eq!(certificate().status, crypto_profile::CertStatus::InProcess);
+        }
     }
 }

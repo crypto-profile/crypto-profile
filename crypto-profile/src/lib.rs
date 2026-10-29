@@ -22,3 +22,4 @@ pub use profile::{GoverningText, Options, ParseProfileError, Profile, ProfileSpe
 pub mod conformance;
 pub mod sealbox_wire;
 include!(concat!(env!("OUT_DIR"), "/provider.rs"));
+include!(concat!(env!("OUT_DIR"), "/backend_body.rs"));

@@ -5,7 +5,7 @@ use crate::algorithm::{
     Algorithm, CipherSuite as C, KxGroup as K, SignatureAlgorithm as S, TlsSignatureScheme as T,
     TlsVersion as V,
 };
-use crate::capability::{Module, ensure_available};
+use crate::capability::{Module, capability};
 use crate::error::{CryptoError, Family};
 use std::fmt;
 use std::str::FromStr;
@@ -509,6 +509,8 @@ pub struct Selection {
     pub signature_schemes: Vec<T>,
     /// Key algorithms.
     pub key_algorithms: Vec<S>,
+    /// Entries unavailable on the module line after Options, in family and preference order.
+    pub excluded: Vec<Algorithm>,
 }
 
 const fn is_tls12_only(t: T) -> bool {
@@ -525,16 +527,15 @@ const fn is_tls12_only(t: T) -> bool {
     }
 }
 
-fn keep<X: Copy>(items: &[X], wanted: impl Fn(X) -> bool) -> Vec<X> {
+fn keep<X: Copy>(items: &[X], mut wanted: impl FnMut(X) -> bool) -> Vec<X> {
     items.iter().copied().filter(|x| wanted(*x)).collect()
 }
 
 /// The backend-independent half of a backend's `resolve`: `profile`'s lists, narrowed by
 /// `options`; `pq_key_exchange_required` also removes TLS 1.2, its suites and the RSA PKCS#1 v1.5
-/// handshake schemes. Refuses with [`CryptoError::Unavailable`] the first entry `module`'s backend
-/// does not implement, then refuses a family left empty with [`CryptoError::EmptyProfile`]; both
-/// check versions, suites, groups, schemes and key algorithms in that order, each list in
-/// preference order. Never drops an entry the module lacks.
+/// handshake schemes. Records entries the module line lacks in [`Selection::excluded`], then
+/// refuses a family left empty with [`CryptoError::EmptyProfile`]. Both use versions, suites,
+/// groups, schemes and keys order, preserving preference order. Approval is a separate check.
 pub fn select(
     profile: Profile,
     options: Options,
@@ -555,16 +556,19 @@ fn select_spec(
     let kx_groups = keep(spec.kx_groups, |k| !pq || k.is_post_quantum());
     let signature_schemes = keep(spec.signature_schemes, |t| !(pq && is_tls12_only(t)));
     let key_algorithms = spec.key_algorithms.to_vec();
-    let named = versions
-        .iter()
-        .map(|v| Algorithm::Protocol(*v))
-        .chain(cipher_suites.iter().map(|c| Algorithm::Cipher(*c)))
-        .chain(kx_groups.iter().map(|k| Algorithm::Kx(*k)))
-        .chain(signature_schemes.iter().map(|t| Algorithm::Scheme(*t)))
-        .chain(key_algorithms.iter().map(|s| Algorithm::Signature(*s)));
-    for a in named {
-        ensure_available(module, a)?;
-    }
+    let mut excluded = Vec::new();
+    let mut available = |a| {
+        let on = capability(module, a).available;
+        if !on {
+            excluded.push(a);
+        }
+        on
+    };
+    let versions = keep(&versions, |v| available(Algorithm::Protocol(v)));
+    let cipher_suites = keep(&cipher_suites, |c| available(Algorithm::Cipher(c)));
+    let kx_groups = keep(&kx_groups, |k| available(Algorithm::Kx(k)));
+    let signature_schemes = keep(&signature_schemes, |t| available(Algorithm::Scheme(t)));
+    let key_algorithms = keep(&key_algorithms, |s| available(Algorithm::Signature(s)));
     for (empty, category) in [
         (versions.is_empty(), Family::Version),
         (cipher_suites.is_empty(), Family::CipherSuite),
@@ -586,6 +590,7 @@ fn select_spec(
         kx_groups,
         signature_schemes,
         key_algorithms,
+        excluded,
     })
 }
 
@@ -685,60 +690,78 @@ mod tests {
     }
 
     #[test]
-    fn select_refuses_the_first_algorithm_the_module_lacks() {
-        let ml_dsa_scheme = Err(CryptoError::Unavailable(Algorithm::Scheme(
-            TlsSignatureScheme::MlDsa87,
-        )));
-        for p in [
-            Profile::Unrestricted,
-            Profile::Preferred,
-            Profile::Cnsa2,
-            Profile::Fips1403,
+    fn select_records_line_exclusions_after_options() {
+        for module in [
+            M3S,
+            Module {
+                linkage: Linkage::Dynamic,
+                ..M3S
+            },
         ] {
-            assert_eq!(select(p, Options::default(), M3S), ml_dsa_scheme, "{p}");
-            assert_eq!(select(p, PQ, M3S), ml_dsa_scheme, "{p}");
-        }
-        for p in [Profile::Cnsa1, Profile::Bsi, Profile::Fips1402] {
-            let s = select(p, Options::default(), M3S).unwrap();
-            assert_eq!(
-                s.signature_schemes,
-                p.spec().signature_schemes.to_vec(),
-                "{p}"
-            );
-            assert_eq!(s.key_algorithms, p.spec().key_algorithms.to_vec(), "{p}");
+            for p in [Profile::Unrestricted, Profile::Preferred, Profile::Fips1403] {
+                for options in [Options::default(), PQ] {
+                    let s = select(p, options, module).unwrap();
+                    assert_eq!(
+                        s.excluded,
+                        vec![
+                            Algorithm::Scheme(T::MlDsa87),
+                            Algorithm::Signature(S::MlDsa87),
+                        ]
+                    );
+                    no_duplicates(&s.excluded);
+                    assert!(!s.signature_schemes.contains(&T::MlDsa87));
+                    assert!(!s.key_algorithms.contains(&S::MlDsa87));
+                }
+            }
+            for options in [Options::default(), PQ] {
+                assert_eq!(
+                    select(Profile::Cnsa2, options, module),
+                    Err(CryptoError::EmptyProfile {
+                        profile: Profile::Cnsa2,
+                        options,
+                        category: Family::SignatureScheme,
+                    })
+                );
+            }
+            for p in [Profile::Cnsa1, Profile::Bsi, Profile::Fips1402] {
+                assert!(
+                    select(p, Options::default(), module)
+                        .unwrap()
+                        .excluded
+                        .is_empty()
+                );
+            }
         }
     }
 
     #[test]
-    fn select_checks_keys_and_checks_availability_before_emptiness() {
+    fn select_checks_keys_and_options_precede_line_emptiness() {
         const KEY_ONLY: ProfileSpec = ProfileSpec {
-            signature_schemes: &[TlsSignatureScheme::EcdsaNistp384Sha384],
+            signature_schemes: &[T::EcdsaNistp384Sha384],
             ..CNSA2
         };
         assert_eq!(
             select_spec(Profile::Cnsa2, &KEY_ONLY, Options::default(), M3S),
-            Err(CryptoError::Unavailable(Algorithm::Signature(
-                SignatureAlgorithm::MlDsa87
-            )))
-        );
-        const BSI_WITH_ML_DSA: ProfileSpec = ProfileSpec {
-            signature_schemes: &[TlsSignatureScheme::MlDsa87],
-            ..BSI
-        };
-        assert_eq!(
-            select_spec(Profile::Bsi, &BSI_WITH_ML_DSA, PQ, M3S),
-            Err(CryptoError::Unavailable(Algorithm::Scheme(
-                TlsSignatureScheme::MlDsa87
-            )))
-        );
-        assert_eq!(
-            select_spec(Profile::Bsi, &BSI, PQ, M3S),
             Err(CryptoError::EmptyProfile {
-                profile: Profile::Bsi,
-                options: PQ,
-                category: Family::KxGroup
+                profile: Profile::Cnsa2,
+                options: Options::default(),
+                category: Family::KeyAlgorithm,
             })
         );
+        const BSI_WITH_ML_DSA: ProfileSpec = ProfileSpec {
+            signature_schemes: &[T::MlDsa87],
+            ..BSI
+        };
+        for spec in [&BSI_WITH_ML_DSA, &BSI] {
+            assert_eq!(
+                select_spec(Profile::Bsi, spec, PQ, M3S),
+                Err(CryptoError::EmptyProfile {
+                    profile: Profile::Bsi,
+                    options: PQ,
+                    category: Family::KxGroup,
+                })
+            );
+        }
     }
 
     #[test]
@@ -805,6 +828,7 @@ mod tests {
         for p in Profile::ALL {
             let s = select(p, Options::default(), M4S).unwrap();
             let spec = p.spec();
+            assert!(s.excluded.is_empty());
             assert_eq!(s.versions, spec.versions.to_vec(), "{p}");
             assert_eq!(s.cipher_suites, spec.cipher_suites.to_vec(), "{p}");
             assert_eq!(s.kx_groups, spec.kx_groups.to_vec(), "{p}");

@@ -20,11 +20,13 @@ pub struct Resolved {
     pub tls: Policy,
     /// The key algorithms the profile admits, in preference order.
     pub keys: Vec<SignatureAlgorithm>,
+    /// Entries unavailable on the module line after Options, in family and preference order.
+    pub excluded: Vec<Algorithm>,
 }
 
 /// Resolves `profile`, narrowed by `options`, against this backend's module. Refuses with
-/// `CryptoError::Unavailable` naming the first algorithm the module lacks (never dropping it),
-/// and with `CryptoError::EmptyProfile` when a family comes out empty.
+/// `CryptoError::EmptyProfile` when a family comes out empty. Entries the module line lacks
+/// are recorded in `Resolved::excluded`; approval is checked separately.
 pub fn resolve(profile: Profile, options: Options) -> Result<Resolved, CryptoError> {
     let s = crypto_profile::profile::select(profile, options, crate::MODULE)?;
     Ok(Resolved {
@@ -37,6 +39,7 @@ pub fn resolve(profile: Profile, options: Options) -> Result<Resolved, CryptoErr
             signature_schemes: s.signature_schemes,
         },
         keys: s.key_algorithms,
+        excluded: s.excluded,
     })
 }
 
@@ -164,7 +167,15 @@ mod tests {
                 }
             }
         }
-        assert_eq!(v.len(), 11);
+        assert_eq!(
+            v.len(),
+            if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                9
+            } else {
+                assert_eq!(crate::MODULE.line, crate::ModuleLine::AwsLcFips4);
+                11
+            }
+        );
         v
     }
 
@@ -180,6 +191,17 @@ mod tests {
 
     #[test]
     fn resolve_carries_the_profile_the_options_and_the_policy() {
+        if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+            assert_eq!(
+                resolve(Profile::Cnsa2, PQ),
+                Err(CryptoError::EmptyProfile {
+                    profile: Profile::Cnsa2,
+                    options: PQ,
+                    category: Family::SignatureScheme
+                })
+            );
+            return;
+        }
         let r = resolve(Profile::Cnsa2, PQ).unwrap();
         assert_eq!((r.profile, r.options), (Profile::Cnsa2, PQ));
         assert_eq!(
@@ -192,6 +214,7 @@ mod tests {
             }
         );
         assert_eq!(r.keys, vec![S::MlDsa87]);
+        assert!(r.excluded.is_empty());
         assert_eq!(
             resolve(Profile::Bsi, PQ),
             Err(CryptoError::EmptyProfile {
@@ -232,7 +255,9 @@ mod tests {
             for o in [Options::default(), PQ] {
                 let Ok(r) = resolve(p, o) else { continue };
                 for a in S::ALL {
-                    let want = if admitted.contains(&a) {
+                    let want = if admitted.contains(&a)
+                        && crate::capability(crate::MODULE, Algorithm::Signature(a)).available
+                    {
                         Ok(())
                     } else {
                         Err(CryptoError::KeyNotInProfile {
@@ -314,7 +339,22 @@ mod tests {
             Profile::Cnsa1,
             Profile::Fips1402,
         ] {
-            let r = resolve(p, Options::default()).unwrap();
+            let r = match resolve(p, Options::default()) {
+                Ok(r) => r,
+                Err(e) => {
+                    assert_eq!(crate::MODULE.line, crate::ModuleLine::AwsLcFips3);
+                    assert_eq!(p, Profile::Cnsa2);
+                    assert_eq!(
+                        e,
+                        CryptoError::EmptyProfile {
+                            profile: p,
+                            options: Options::default(),
+                            category: Family::SignatureScheme
+                        }
+                    );
+                    continue;
+                }
+            };
             assert_eq!(
                 assert_module_approves(&r),
                 Err(CryptoError::NotApproved {
@@ -322,6 +362,56 @@ mod tests {
                     approval: Approval::Unverified,
                 }),
                 "{p}"
+            );
+        }
+    }
+
+    #[test]
+    fn three_x_approval_requires_only_table_five_cells() {
+        if crate::MODULE.line == crate::ModuleLine::AwsLcFips4 {
+            return;
+        }
+        for profile in [Profile::Fips1402, Profile::Fips1403] {
+            let mut resolved = resolve(profile, Options::default()).unwrap();
+            assert_eq!(
+                assert_module_approves(&resolved),
+                Err(CryptoError::NotApproved {
+                    algorithm: Algorithm::Protocol(V::Tls13),
+                    approval: Approval::Unverified,
+                })
+            );
+            let excluded = resolved.excluded.clone();
+            resolved.tls.versions.retain(|v| *v == V::Tls12);
+            resolved.tls.cipher_suites.retain(|c| {
+                matches!(
+                    c,
+                    C::Tls12EcdheEcdsaAes128GcmSha256
+                        | C::Tls12EcdheEcdsaAes256GcmSha384
+                        | C::Tls12EcdheRsaAes128GcmSha256
+                        | C::Tls12EcdheRsaAes256GcmSha384
+                )
+            });
+            resolved
+                .tls
+                .kx_groups
+                .retain(|g| matches!(g, K::Secp256r1 | K::Secp384r1));
+            assert!(!resolved.keys.is_empty());
+            assert!(!resolved.tls.signature_schemes.is_empty());
+            assert_eq!(resolved.excluded, excluded);
+            for algorithm in walk(&resolved) {
+                assert!(
+                    matches!(crate::fips::approval(algorithm), Approval::Approved { .. }),
+                    "{algorithm:?}"
+                );
+            }
+            assert_eq!(assert_module_approves(&resolved), Ok(()));
+            resolved.tls.kx_groups.push(K::X25519MlKem768);
+            assert_eq!(
+                assert_module_approves(&resolved),
+                Err(CryptoError::NotApproved {
+                    algorithm: Algorithm::Kx(K::X25519MlKem768),
+                    approval: Approval::Unverified,
+                })
             );
         }
     }
@@ -337,6 +427,7 @@ mod tests {
                 signature_schemes: vec![],
             },
             keys: vec![],
+            excluded: vec![],
         }
     }
 
@@ -432,6 +523,19 @@ mod tests {
     #[test]
     fn no_profile_is_refused_for_want_of_an_algorithm_on_this_module() {
         for p in Profile::ALL {
+            if p == Profile::Cnsa2 && crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                for options in [Options::default(), PQ] {
+                    assert_eq!(
+                        resolve(p, options),
+                        Err(CryptoError::EmptyProfile {
+                            profile: p,
+                            options,
+                            category: Family::SignatureScheme
+                        })
+                    );
+                }
+                continue;
+            }
             assert!(resolve(p, Options::default()).is_ok(), "{p}");
             let empty_with_pq = match p {
                 Profile::Cnsa1 | Profile::Bsi | Profile::Fips1402 => true,
