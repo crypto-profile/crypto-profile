@@ -38,6 +38,8 @@ RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo test --manifest-path cryp
 RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo clippy --manifest-path crypto-profile-awslc4/Cargo.toml --all-targets --all-features --locked -- -D warnings
 ci/provider-build-negative.sh
 ci/backend-links-negative.sh
+ci/module-guard-negative.sh
+ci/build-script-tests.sh
 ci/macro-mutation-smoke.sh
 cargo deny --locked check
 (cd crypto-profile-awslc3 && cargo deny --config ../deny.toml --locked check)
@@ -140,7 +142,7 @@ The suite checks the backend against the known answers, walks every capability c
 
 A backend instantiates the provider with `crypto_profile::provider!(crate::provider_arms)`. Only `crypto-profile-awslc4` also carries the direct-mode `#[path]` module (`crypto-profile-awslc4/src/lib.rs`), so clippy, coverage and cargo-mutants see each provider file once, through that backend ([decision 0005](docs/decisions/0005-provider-source.md)); another backend instantiates the macro only, and its own code, `provider_arms` included, is ordinary code, linted, measured and mutated like the rest of the backend. It supplies a `provider_arms` module with three items: `pub(crate) fn load_pqdsa(pkcs8: &rustls::pki_types::PrivatePkcs8KeyDer<'_>) -> Option<std::sync::Arc<dyn rustls::sign::SigningKey>>`, which loads the ML-DSA keys the backend's module signs with (ML-DSA-44, -65 and -87 on 4.x) and returns `None` on a backend that has none; `pub(crate) static PQDSA_ALL: &[&dyn rustls::pki_types::SignatureVerificationAlgorithm]`, the ML-DSA certificate-chain verifiers (ML-DSA-44, -65 and -87 on 4.x); and `pub(crate) static PQDSA_MAPPING: &[(rustls::SignatureScheme, &[&dyn rustls::pki_types::SignatureVerificationAlgorithm])]`, the ML-DSA handshake schemes (ML-DSA-87 on 4.x). A backend without ML-DSA leaves both statics empty. A new provider file is listed in `crypto-profile/src/provider/mod.rs`, which is the only module list ([decision 0005](docs/decisions/0005-provider-source.md)).
 
-The linkage test looks for the shared library `test_support::FIPS_LIBRARY` names: the backend's build script takes it from aws-lc-rs's link metadata (`DEP_AWS_LC_RS_*_SYS_LIBCRYPTO`) and fails the build if it is missing, empty, or contains a path separator or control character. An unprefixed build reports `crypto`, which is accepted.
+The linkage test looks for the shared library `test_support::FIPS_LIBRARY` names: the backend's build script takes it from aws-lc-rs's link metadata (`DEP_AWS_LC_RS_*_SYS_LIBCRYPTO`) and fails the build unless exactly one such value is reported and it is the bundled, version-prefixed name (`aws_lc_fips_0_14_2_crypto` on 4.x, `aws_lc_fips_0_13_17_crypto` on 3.x; [usage §10](docs/usage.md#10-which-module-a-build-is)).
 
 ## 7. Residuals you must not make worse
 
