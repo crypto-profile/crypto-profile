@@ -75,7 +75,7 @@ the pinned 3.x build links 3.6.0.
 
 ### Isolated 3.x consumer
 
-The 3.x backend expands both source macros without direct modules. Its separate
+The 3.x backend expands both source macros without direct modules; the 4.x direct mode inspects both shared trees. Its separate
 workspace and lockfile preserve the older dependency line; both backend packages
 share a Cargo `links` key so one graph cannot contain both. The exact dependency
 pins refuse that graph first; the links key guards it if the pins ever become

@@ -1,6 +1,6 @@
 # Using crypto-profile
 
-This guide covers the core crate `crypto-profile` and the backend `crypto-profile-awslc4`. The named profiles are in [`profiles.md`](profiles.md).
+This guide covers the core crate `crypto-profile` and the backends `crypto-profile-awslc3` and `crypto-profile-awslc4`. The named profiles are in [`profiles.md`](profiles.md).
 
 Citations of the form `crate-x.y.z/path:line` refer to that crate's published source at that version. Paths without a version refer to this repository.
 
@@ -11,13 +11,15 @@ There is one backend crate per AWS-LC FIPS module line:
 | Backend | aws-lc-rs | Module line |
 |---|---|---|
 | `crypto-profile-awslc4` | 1.18.2 (`fips`), which builds aws-lc-fips-sys 0.14.2 | AWS-LC FIPS 4.x |
-| `crypto-profile-awslc3` (round 3) | 1.17.x (`fips`), which builds aws-lc-fips-sys 0.13.x | AWS-LC FIPS 3.x |
+| `crypto-profile-awslc3` | 1.17.4 (`fips`), which builds aws-lc-fips-sys 0.13.17 | AWS-LC FIPS 3.x |
 
-Cargo resolves one aws-lc-rs 1.x per lockfile, so a single crate cannot offer both lines, even behind separate features. Each backend therefore pins its own aws-lc-rs, and an application depends on exactly one. Its `Cargo.toml` then shows which module line it builds.
+Cargo resolves one aws-lc-rs 1.x per lockfile, so a single crate cannot offer both lines, even behind separate features. Each backend therefore pins its own aws-lc-rs, and an application depends on exactly one. Its `Cargo.toml` then shows which module line it builds. Both backends declare `links = "crypto-profile-backend"`. Their exact aws-lc-rs pins currently refuse a combined graph first; the links key refuses it if the pins ever become compatible. `ci/backend-links-negative.sh` checks the declarations and refusal.
+
+Call `crypto::awslc_version()` for the exact runtime-linked AWS-LC release. This is separate from `certificate(MODULE)`, which reports the certified release and status.
 
 Every backend exposes the same module paths (`aead`, `csr`, `digest`, `fips`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
 
-ML-DSA is available only on the 4.x backend: aws-lc-rs 1.17.4 compiles its `pqdsa` module out under `fips` (`aws-lc-rs-1.17.4/src/lib.rs:283-284`), while 1.18.2 exposes `signature::ML_DSA_87_SIGNING` unconditionally (`aws-lc-rs-1.18.2/src/signature.rs:1177`). The capability table marks ML-DSA unavailable on 3.x, so the 3.x backend will refuse it with `CryptoError::Unavailable` (`crypto-profile/src/capability.rs`, `three_x` and `ensure_available`).
+ML-DSA is available only on the 4.x backend: aws-lc-rs 1.17.4 compiles its `pqdsa` module out under `fips` (`aws-lc-rs-1.17.4/src/lib.rs:283-284`), while 1.18.2 exposes `signature::ML_DSA_87_SIGNING` unconditionally (`aws-lc-rs-1.18.2/src/signature.rs:1177`). The capability table marks ML-DSA unavailable on 3.x, so the 3.x backend refuses it with `CryptoError::Unavailable` (`crypto-profile/src/capability.rs`, `three_x` and `ensure_available`).
 
 ## 2. Static or dynamic linkage
 
@@ -80,7 +82,7 @@ Use the re-exported crate: `crypto_profile_awslc4::rustls`. Don't declare `rustl
 - Avoiding a direct dependency does not fix rustls's features. Cargo unifies features across the whole dependency graph, so any other crate that depends on rustls adds its own; an async TLS adapter with its default features, for example, adds `aws_lc_rs`, `logging` and `tls12` (`tokio-rustls-0.26.6/Cargo.toml`, `[features] default`). `cargo tree -e features -i rustls` shows what your build enables. Only the rustls version is fixed, by the backend's `=0.23.46` pin.
 - Build configurations through `tls::client_builder`, `tls::server_builder`, `tls::install_default` and the two verifier builders, which all take a `Policy`. rustls's own `ClientConfig::builder()`, `ServerConfig::builder()` and the WebPKI verifiers' `builder()` take the process-default provider. With no provider feature in the build they no longer install one: they panic unless a default is installed (`tls::install_default`). They install rustls's stock provider only when the features unified onto rustls name exactly one of `aws_lc_rs` and `ring` and do not include `custom-provider` (`rustls-0.23.46/src/crypto/mod.rs:243-286`); that provider carries rustls's defaults, not your policy.
 
-**What the provider covers.** `tls::crypto_provider` and the builders use the crate's own `CryptoProvider`, written once in core and instantiated by the backend ([decision 0005](decisions/0005-provider-source.md)). It implements the key-exchange groups, cipher suites, signing keys and certificate verifiers of the inventory; loads the ML-DSA-44, ML-DSA-65 and ML-DSA-87 keys rustls's built-in provider loaded, each signing only with a scheme of the policy; and derives keys with the module's HKDF and TLS PRF. Its TLS 1.3 suites carry QUIC packet and header protection (RFC 9001) as rustls's built-in suites did, so `rustls::quic` connections, as HTTP/3 uses, work under a policy that admits TLS 1.3. Its `fips()` classification is in section 8.
+**What the provider covers.** `tls::crypto_provider` and the builders use the crate's own `CryptoProvider`, written once in core and instantiated by the backend ([decision 0005](decisions/0005-provider-source.md)). It implements the key-exchange groups, cipher suites, signing keys and certificate verifiers of the inventory; loads ML-DSA-44, ML-DSA-65 and ML-DSA-87 keys on 4.x, each signing only with a scheme of the policy; 3.x does not load them; and derives keys with the module's HKDF and TLS PRF. Its TLS 1.3 suites carry QUIC packet and header protection (RFC 9001) as rustls's built-in suites did, so `rustls::quic` connections, as HTTP/3 uses, work under a policy that admits TLS 1.3. Its `fips()` classification is in section 8.
 
 **Residual: provider internals are reachable.** `rustls::crypto::CryptoProvider` has public fields: the cipher suites, the key-exchange groups, the signature verification algorithms, the random source and the key provider. Code holding a provider can call the primitives behind them directly. This repository's `clippy.toml` refuses the entry points it lists (`disallowed-methods`), such as key-exchange `start`, the HPKE functions, `SecureRandom::fill` and `KeyProvider::load_private_key`, in the crate's own code. That list does not cover every primitive reachable this way, and the lint does not apply to your crate. The provider is the crate's own (`crypto-profile/src/provider/`): the cryptography is AWS-LC through aws-lc-rs, and rustls supplies only the TLS protocol, state machine, record layer and chain validation.
 
@@ -88,7 +90,7 @@ Use the re-exported crate: `crypto_profile_awslc4::rustls`. Don't declare `rustl
 
 ## 6. TLS policies
 
-`tls::Policy` (`crypto-profile-awslc4/src/tls.rs`) lists what a TLS configuration may use: versions, cipher suites and key-exchange groups in preference order, and a set of signature schemes:
+`tls::Policy` (`crypto-profile/src/backend_body/tls.rs`) lists what a TLS configuration may use: versions, cipher suites and key-exchange groups in preference order, and a set of signature schemes:
 
 | Field | Meaning |
 |---|---|
@@ -106,6 +108,8 @@ Use the re-exported crate: `crypto_profile_awslc4::rustls`. Don't declare `rustl
 
 **What `signature_schemes` restricts:** the schemes this side's verifier accepts for the peer's handshake signature, and the schemes this side's own key signs with. The provider and both verifier builders carry the same list. A key loaded through the provider's key provider, which is what `with_single_cert`, `with_client_auth_cert`, `tls::load_private_key` and `Resolved::certified_key` use, signs only with a scheme that is both in the peer's offer and in the list; when none is, a server's handshake fails (`NoSignatureSchemesInCommon` on TLS 1.3) and a client sends an empty Certificate, which fails the handshake only if the server requires client authentication. Under `cnsa1`, an RSA-3072 key offered RSA-PSS with SHA-512 and SHA-384 signs with SHA-384 (test `cnsa1_signs_only_with_a_scheme_it_lists`). **What it does not restrict** is in section 9.
 
+Inspect `Resolved::excluded` after `resolve`: it records entries unavailable on the selected line after Options. On 3.x, `unrestricted`, `preferred` and `fips1403` record ML-DSA-87 as separate scheme and key entries; `cnsa2` returns `EmptyProfile` for signature schemes. Options can also leave a family empty. Resolution does not check approval: unmodified `fips1403` includes TLS 1.3 and hybrid cells that are `Unverified` on 3.x, so `assert_module_approves` refuses it.
+
 `Resolved::certified_key(chain, &key)` is the way to install this side's certificate under a profile: it refuses a key the profile does not admit (`KeyNotInProfile`) and a chain whose end-entity certificate does not carry the key (`TlsError::KeyMismatch`), and returns a `rustls::sign::CertifiedKey` whose key signs only with the profile's schemes, for `rustls::sign::SingleCertAndKey` or a resolver of your own.
 
 ## 7. Compatibility limits
@@ -114,19 +118,19 @@ These follow from rustls; they apply to any configuration this crate builds.
 
 - **Legacy applications that aren't TLS 1.3 capable** can connect over TLS 1.2 only with ECDHE key exchange and an AEAD cipher suite. The provider's TLS 1.2 suites are ECDHE with ECDSA or RSA authentication and AES-GCM or ChaCha20-Poly1305, the same six as rustls 0.23.46's built-in provider, and no others (`crypto-profile/src/provider/tls12.rs`).
 - There are no CBC suites, no RSA key transport and no finite-field DHE. A peer that needs one of these cannot connect.
-- **Interop is proven against two implementations,** not every one: rustls 0.23.46's built-in provider, for every group, suite and scheme both implement (`crypto-profile-awslc4/tests/differential.rs`), and OpenSSL 3.5, for SecP384r1MLKEM1024 in both directions (`crypto-profile-awslc4/tests/openssl_interop.rs`, `ci/openssl-interop.sh`; the version is in [`sources.md`](sources.md)).
+- **Interop is proven against two implementations,** not every one: rustls 0.23.46's built-in provider, for every group, suite and scheme both implement (`crypto-profile-awslc4/tests/differential.rs`), and OpenSSL 3.5, for SecP384r1MLKEM1024 in both directions on each backend (`crypto-profile-awslc4/tests/openssl_interop.rs`, `crypto-profile-awslc3/tests/openssl_interop.rs`, `ci/openssl-interop.sh`; the version is in [`sources.md`](sources.md)).
 - **The hybrid groups stay `Unverified` on every module,** SecP384r1MLKEM1024 included: CAVP has no algorithm for hybrid key establishment, and no published security policy names one (section 3).
-- **A FIPS provider refuses a TLS 1.2 peer without Extended Master Secret.** rustls sets `require_ems` from the provider's FIPS status (`rustls-0.23.46/src/client/builder.rs:166`, `src/server/builder.rs:104`) and enforces it in the TLS 1.2 handshake (`src/client/tls12.rs:110`, `src/server/tls12.rs:82`). The 3.x security policies list the TLS KDF "using non-extended master secret" as Non-Approved, Not Allowed (#5314 Table 8, p. 12). The test `tls12_fips_config_requires_ems` (`crypto-profile-awslc4/src/tls.rs`) pins this. The provider's AES suites report FIPS through the module's TLS PRF and HKDF (`Tls12Prf`, `AwsLcHkdf` in `crypto-profile/src/provider/{tls12,tls13}.rs`), so a FIPS provider requires EMS as rustls's built-in one did.
+- **A FIPS provider refuses a TLS 1.2 peer without Extended Master Secret.** rustls sets `require_ems` from the provider's FIPS status (`rustls-0.23.46/src/client/builder.rs:166`, `src/server/builder.rs:104`) and enforces it in the TLS 1.2 handshake (`src/client/tls12.rs:110`, `src/server/tls12.rs:82`). The 3.x security policies list the TLS KDF "using non-extended master secret" as Non-Approved, Not Allowed (#5314 Table 8, p. 12). The test `tls12_fips_config_requires_ems` (`crypto-profile/src/backend_body/tls.rs`) pins this. The provider's AES suites report FIPS through the module's TLS PRF and HKDF (`Tls12Prf`, `AwsLcHkdf` in `crypto-profile/src/provider/{tls12,tls13}.rs`), so a FIPS provider requires EMS as rustls's built-in one did.
 
 ## 8. Two different FIPS questions
 
 The backend answers two questions that are easy to confuse.
 
-**rustls's FIPS-mode classification.** `fips::assert_fips_client_config` and `fips::assert_fips_server_config` (`crypto-profile-awslc4/src/fips.rs`) refuse a configuration for which rustls's `fips()` is false. That holds when the module reports FIPS mode and rustls classifies every cipher suite, key-exchange group and signature verification algorithm, the random source and the key provider as FIPS (`rustls-0.23.46/src/crypto/mod.rs:294-307`), with Extended Master Secret required where TLS 1.2 is enabled (`src/client/client_conn.rs:396-409`, `src/server/server_conn.rs:553-563`).
+**rustls's FIPS-mode classification.** `fips::assert_fips_client_config` and `fips::assert_fips_server_config` (`crypto-profile/src/backend_body/fips.rs`) refuse a configuration for which rustls's `fips()` is false. That holds when the module reports FIPS mode and rustls classifies every cipher suite, key-exchange group and signature verification algorithm, the random source and the key provider as FIPS (`rustls-0.23.46/src/crypto/mod.rs:294-307`), with Extended Master Secret required where TLS 1.2 is enabled (`src/client/client_conn.rs:396-409`, `src/server/server_conn.rs:553-563`).
 - X25519 and ChaCha20-Poly1305 report `false`; every other component, the HKDF and TLS PRF included, reports the module's FIPS mode; a hybrid reports its first group's (SecP384r1MLKEM1024 follows P-384), mirroring rustls's built-in provider (`crypto-profile/src/provider/{kx,tls13,tls12}.rs`; test `every_shared_component_classifies_fips_as_the_reference`). The ChaCha20-Poly1305 QUIC algorithm (`crypto-profile/src/provider/quic.rs`) reports `fips() == false` because ChaCha20 is not FIPS-approved, unlike rustls's built-in one, which reports the module's mode; the suite-level classification is identical (`false`), and the AES QUIC algorithms report the module's mode.
 - So a policy with X25519 or ChaCha20-Poly1305 fails it, and one with the hybrid groups SecP384r1MLKEM1024, X25519MLKEM768 or SECP256R1MLKEM768 passes it.
 
-**The crate's approval report.** `fips::approval(alg)` returns the capability cell's `Approval` for this build's module, as its source states it: the module's security policy, or, for a module with none published, the CAVP certificate behind an `AlgorithmTested` cell (decision 0004). It is void (`Unverified`) unless the module reports FIPS mode at the time of the call (`crypto-profile-awslc4/src/fips.rs`, `approval` and `approval_given`).
+**The crate's approval report.** `fips::approval(alg)` returns the capability cell's `Approval` for this build's module, as its source states it: the module's security policy, or, for a module with none published, the CAVP certificate behind an `AlgorithmTested` cell (decision 0004). It is void (`Unverified`) unless the module reports FIPS mode at the time of the call (`crypto-profile/src/backend_body/fips.rs`, `approval` and `approval_given`).
 - On 3.x, the hybrid groups are `Unverified`, because neither 3.x security policy mentions hybrid key establishment, and so is TLS 1.3, because the policies' TLS KDF row lists v1.0/1.1 and v1.2 only (`crypto-profile/src/capability.rs`, `three_x`).
 - On 4.x, no security policy is published: a static-build cell is `Unverified`, and a dynamic-build cell is `AlgorithmTested` or `Unverified` as §3 lists. Neither is approved.
 
@@ -140,9 +144,9 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 
 ## 9. What a policy or profile does not restrict
 
-- **Certificate-chain signature algorithms.** The verifiers keep the full list of algorithms for signatures on certificates (`WebPkiSupportedAlgorithms::all`; `crypto-profile/src/provider/verify.rs` and the 4.x arms, `crypto-profile-awslc4/src/provider_arms.rs`), the same list as rustls 0.23.46's built-in provider (tests `the_verification_tables_match_the_reference`, `every_verifier_accepts_and_refuses_as_the_reference`); a `Policy` narrows only the handshake-signature mapping (`crypto-profile-awslc4/src/tls.rs`, `tables`).
+- **Certificate-chain signature algorithms.** The verifiers keep the full list of algorithms for signatures on certificates (`WebPkiSupportedAlgorithms::all`; `crypto-profile/src/provider/verify.rs` and the 4.x arms, `crypto-profile-awslc4/src/provider_arms.rs`), the same list as rustls 0.23.46's built-in provider (tests `the_verification_tables_match_the_reference`, `every_verifier_accepts_and_refuses_as_the_reference`); a `Policy` narrows only the handshake-signature mapping (`crypto-profile/src/backend_body/tls.rs`, `tables`).
 - **A signing key built outside the policy's provider.** A `rustls::sign::SigningKey` that did not come through the provider's key provider, `tls::load_private_key` or `Resolved::certified_key` signs with whatever scheme rustls picks from the peer's offer and the key's type.
-- **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile-awslc4/src/tls.rs`, `load_private_key`).
+- **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile/src/backend_body/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
 - **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5).
@@ -153,7 +157,7 @@ The 4.x backend compiles aws-lc-fips-sys 0.14.2, which bundles AWS-LC 4.2.0 sour
 
 `MODULE` and these statements assume the bundled source. aws-lc-fips-sys can instead link a system-installed AWS-LC FIPS module, one named by `AWS_LC_FIPS_SYS_SYSTEM_DIR` or one it detects through `OPENSSL_DIR`, `OPENSSL_INCLUDE_DIR`/`OPENSSL_LIB_DIR` or pkg-config unless `AWS_LC_FIPS_SYS_USE_SYSTEM=0` is set (`aws-lc-fips-sys-0.14.2/README.md`, "Using a system-installed AWS-LC FIPS module"); a build that links one is not described by them, and detecting it is a follow-up.
 
-The same caution applies to round 3: aws-lc-fips-sys 0.13.17 bundles AWS-LC 3.6.0 source (`aws-lc-fips-sys-0.13.17/aws-lc/include/openssl/base.h:125`), while the 3.x certificates validate the source tag AWS-LC-FIPS-3.1.0 (#5314 security policy, §11.1, p. 72). Whether a 0.13.17 build is the certified 3.1.0 module is unverified, and the 3.x backend will not claim it.
+The 3.x backend compiles aws-lc-fips-sys 0.13.17, which bundles AWS-LC 3.6.0 source (`aws-lc-fips-sys-0.13.17/aws-lc/include/openssl/base.h:125`). The 3.x certificates validate the source tag AWS-LC-FIPS-3.1.0 (#5314 security policy, §11.1, p. 72). The crate treats 3.6.0 as a later revision of the AWS-LC FIPS 3.x line whose 3.1.0 release is CMVP #5314 (static) / #5298 (dynamic), and so covered by that line's certificates. It reports both releases: `awslc_version()` the one it links, `certificate(MODULE)` the one certified. It never claims to be validated itself.
 
 ## 11. Secret-handling residuals
 
@@ -163,9 +167,9 @@ The crate holds secret material in zeroizing buffers that are sized at allocatio
 
 A further residual holds no secret material:
 
-- **Per-set verifier tables and key providers.** rustls takes both by `'static` reference, so each distinct set of signature schemes leaks one verification-algorithm table and one key provider, cached for the life of the process (`crypto-profile-awslc4/src/tls.rs`, `tables`). The cache is keyed by the set, not the list, so it holds one entry per distinct non-empty set of signature schemes, at most 2^n − 1 for the n schemes in the inventory (2,047 for today's eleven), however many policies an application builds (test `retained_cache_state_is_bounded_by_the_distinct_scheme_sets`).
+- **Per-set verifier tables and key providers.** rustls takes both by `'static` reference, so each distinct set of signature schemes leaks one verification-algorithm table and one key provider, cached for the life of the process (`crypto-profile/src/backend_body/tls.rs`, `tables`). The cache is keyed by the set, not the list, so it holds one entry per distinct non-empty set of signature schemes, at most 2^n − 1 for the n schemes in the inventory (2,047 for today's eleven), however many policies an application builds (test `retained_cache_state_is_bounded_by_the_distinct_scheme_sets`).
 
-RSA keys must have the public exponent 65537. `signature::KeyPair::from_pkcs8` refuses any other with `CryptoError::PrivateKey`, and `signature::verify` refuses a public key with any other with `CryptoError::Verify` (`crypto-profile-awslc4/src/signature.rs`, tests `an_rsa_key_whose_exponent_is_not_65537_is_refused` and `verify_refuses_an_rsa_key_whose_exponent_is_not_65537`).
+RSA keys must have the public exponent 65537. `signature::KeyPair::from_pkcs8` refuses any other with `CryptoError::PrivateKey`, and `signature::verify` refuses a public key with any other with `CryptoError::Verify` (`crypto-profile/src/backend_body/signature.rs`, tests `an_rsa_key_whose_exponent_is_not_65537_is_refused` and `verify_refuses_an_rsa_key_whose_exponent_is_not_65537`).
 
 An RSA key's modulus must be exactly the algorithm's bit length: 2048, 3072 or 4096. `signature::KeyPair::from_pkcs8` refuses any other length with `CryptoError::PrivateKey`, and `signature::verify` with `CryptoError::Verify`, even one bit off (tests `from_pkcs8_refuses_an_rsa_key_one_bit_off_its_size` and `verify_refuses_an_rsa_key_one_bit_off_its_size`). `signature::matches_spki` checks only the encoded length of the public key, so it does not tell a 3,072-bit modulus from a 3,073-bit one.
 
@@ -184,6 +188,7 @@ The conformance suite (`crypto-profile/src/conformance/`, run by every backend) 
 | Sealed box | a version-1 known-answer blob from an independent implementation, which must open unchanged |
 
 Gaps, and what covers them instead:
-- **ECDSA P-521/SHA-384** has no Wycheproof file. Its signatures are checked by the CSR test, which verifies every algorithm's CSR signature with rustls-webpki (`crypto-profile-awslc4/src/csr.rs`, `every_algorithm_signs_a_request_for_its_own_key`).
+- **ECDSA P-521/SHA-384** has no Wycheproof file. Its signatures are checked by the CSR test, which verifies every algorithm's CSR signature (`crypto-profile/src/backend_body/csr.rs`, `every_algorithm_signs_a_request_for_its_own_key`): on 4.x with rustls-webpki, on 3.x with the crate's own verifiers, because rustls-webpki's aws-lc-rs verifiers need aws-lc-rs 1.18. The 3.x check is therefore not independent; independence rests on the 4.x differential test, which compares the shared verifiers with the upstream ones.
+- **ML-DSA** has no 3.x known answers: every ML-DSA operation is refused as unavailable.
 - **RSA-PSS** is verified through TLS handshakes over the three PSS schemes, not through Wycheproof. `signature::verify` checks PKCS#1 v1.5, the scheme this crate's RSA keys sign CSRs with.
-- **AES-GCM sealing** has no known answers, because sealing never takes a caller's nonce: the module chooses it (`crypto-profile-awslc4/src/aead.rs`). Round trips and refusals cover sealing.
+- **AES-GCM sealing** has no known answers, because sealing never takes a caller's nonce: the module chooses it (`crypto-profile/src/backend_body/aead.rs`). Round trips and refusals cover sealing.

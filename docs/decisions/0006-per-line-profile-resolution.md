@@ -2,7 +2,7 @@
 
 Date: 2026-10-29. Status: accepted.
 
-Round 2 refused the first unavailable profile entry to prevent silent loss. This decision amends that rule: apply Options first, intersect the published profile set with module-line availability, and report every unavailable entry in `Selection::excluded` and `Resolved::excluded`. Preserve versions, suites, groups, schemes, keys order and each family's preference order. Options-only removals are not line exclusions. Approval does not filter resolution.
+The 2026-10-29 amendment to round 2 replaces its refusal of the first unavailable profile entry to prevent silent loss. The amended rule is: apply Options first, intersect the published profile set with module-line availability, and report every unavailable entry in `Selection::excluded` and `Resolved::excluded`. Preserve versions, suites, groups, schemes, keys order and each family's preference order. Options-only removals are not line exclusions. Approval does not filter resolution.
 
 Any empty family is still refused with `EmptyProfile`, naming the first empty family in that order. Direct primitive and provider operations retain `Unavailable`. A resolved profile describes the published set intersected with availability; it changes neither the governing edition nor the meaning of module approval. Callers can inspect exclusions and impose a stricter policy.
 
