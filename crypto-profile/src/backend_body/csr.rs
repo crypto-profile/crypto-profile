@@ -126,6 +126,14 @@ mod tests {
             ..Default::default()
         };
         for a in S::ALL {
+            if !crate::capability(crate::MODULE, crate::Algorithm::Signature(a)).available {
+                assert_eq!(
+                    generate_csr(a, &params).err(),
+                    Some(CryptoError::Unavailable(crate::Algorithm::Signature(a)))
+                );
+                assert!(super::super::backend::csr_oracle(a).is_err());
+                continue;
+            }
             let (key, pem_text) = generate_csr(a, &params).unwrap();
             assert_eq!(key.algorithm(), a);
             let der = der(&pem_text);
@@ -161,17 +169,7 @@ mod tests {
                 ),
                 "{a}"
             );
-            let oracle: &dyn rustls::pki_types::SignatureVerificationAlgorithm = match a {
-                S::MlDsa87 => webpki::aws_lc_rs::ML_DSA_87,
-                S::EcdsaP256Sha256 => webpki::aws_lc_rs::ECDSA_P256_SHA256,
-                S::EcdsaP384Sha384 => webpki::aws_lc_rs::ECDSA_P384_SHA384,
-                S::EcdsaP521Sha384 => webpki::aws_lc_rs::ECDSA_P521_SHA384,
-                S::EcdsaP521Sha512 => webpki::aws_lc_rs::ECDSA_P521_SHA512,
-                S::Ed25519 => webpki::aws_lc_rs::ED25519,
-                S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => {
-                    webpki::aws_lc_rs::RSA_PKCS1_2048_8192_SHA384
-                }
-            };
+            let oracle = super::super::backend::csr_oracle(a).unwrap();
             assert!(
                 oracle
                     .verify_signature(
@@ -180,7 +178,7 @@ mod tests {
                         csr.signature_value.data.as_ref()
                     )
                     .is_ok(),
-                "{a}: rustls-webpki refuses our CSR signature"
+                "{a}: the backend oracle refuses our CSR signature"
             );
         }
     }

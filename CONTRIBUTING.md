@@ -64,7 +64,7 @@ A file-level exclusion, or a pattern that matches more than one mutant, is refus
 A test that checks a mapping against the mapping itself proves nothing. The suite keeps its expected values apart from the code under test:
 
 - **Registry codepoints.** Core carries literal IANA values: `iana()` for every cipher suite, key-exchange group, signature scheme and TLS version (`crypto-profile/src/algorithm.rs`, pinned by `iana_codepoints_are_the_registry_values`). Every backend mapping is tested against them (`every_mapping_carries_its_registry_codepoint` in `crypto-profile-awslc4/src/tls.rs`). The handshake helper reads the negotiated suite, group and scheme as wire codepoints and maps them back through `iana()`, never through the mapping under test (`crypto-profile-awslc4/src/test_support.rs`).
-- **CSR signatures.** Every algorithm's CSR signature is verified by rustls-webpki's `aws_lc_rs` verifiers, chosen by a literal per-algorithm table in the test, and the CSR's signature-algorithm OID is compared with core's literal `signature_oid()` (`every_algorithm_signs_a_request_for_its_own_key` in `crypto-profile-awslc4/src/csr.rs`). A wrong hash or OID in the signing path fails it.
+- **CSR signatures.** On 4.x a backend test hook selects rustls-webpki verifiers from a literal per-algorithm table. On 3.x the hook selects this crate's provider verifiers: the independent upstream verifier feature requires a newer dependency that crosses the selected module line. The 3.x signature check therefore shares verification implementation with the provider. Both backends compare the CSR signature OID with core's literal `signature_oid()` and verify signatures over the encoded request (`every_algorithm_signs_a_request_for_its_own_key` in `crypto-profile/src/backend_body/csr.rs`).
 - **Provider behaviour.** `tests/differential.rs` drives every group, suite and scheme both the provider and rustls's reference provider implement, in both directions, against literal codepoints; compares the verification tables and `fips()` classification; checks that each TLS 1.3 suite's QUIC algorithm derives the same packet and header protection as rustls's for the same secret; and checks that every certificate-chain verifier accepts the same valid signature as rustls-webpki's and refuses the same flipped one.
 - **Known answers** come from published vector sets, byte for byte as retrieved, with their provenance and digests in `crypto-profile/src/conformance/vectors/SOURCES.md`.
 
@@ -193,3 +193,33 @@ Disclosure does not lower the bar. The gates, the oracle rules and the hard rule
 crypto-profile is licensed under MIT OR Apache-2.0. Contributions are accepted under the same terms (inbound equals outbound): unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in the work by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without any additional terms or conditions.
 
 The provider ports code from rustls (MIT) and rustls-webpki (ISC); their notices are in [`crypto-profile/LICENSE-THIRD-PARTY`](crypto-profile/LICENSE-THIRD-PARTY), and each published package carries an identical copy. A file that ports third-party code names its source, version and licence in a header, and its licence text is in each package's `LICENSE-THIRD-PARTY`; the copies stay identical.
+
+## Isolated backend workspaces
+
+The root workspace contains core and the 4.x backend. The 3.x backend is an
+excluded workspace with its own lockfile; root `--workspace` commands do not
+check it. Run its tests and lints separately:
+
+```sh
+cargo test --manifest-path crypto-profile-awslc3/Cargo.toml --all-features --locked
+cargo clippy --manifest-path crypto-profile-awslc3/Cargo.toml --all-targets --all-features --locked -- -D warnings
+```
+
+Run both backend suites with `AWS_LC_FIPS_SYS_STATIC=1` and `=0`. Both packages
+claim `links = "crypto-profile-backend"`. The exact dependency pins refuse a
+consumer containing both first; the shared links key guards that graph if the
+pins ever become compatible. `ci/backend-links-negative.sh` verifies both links
+values, each individual control, and the combined refusal with its actual reason.
+Select exactly one backend per application.
+
+The 3.x lockfile pins aws-lc-fips-sys to 0.13.17, preserving the selected module
+provenance. Its build script requires the forwarded libcrypto metadata to be exactly
+`aws_lc_fips_0_13_17_crypto` because its linkage derivation mirrors that
+builder's rules. Missing or different metadata refuses the build, including in
+a downstream consumer's dependency graph. Runtime conformance checks the
+actual loaded library for each linkage.
+
+Only 4.x supports `crypto_profile_provider_direct`; use it for root coverage
+and mutation discovery. Run 3.x coverage and mutation analysis separately,
+without that cfg. Its mutation configuration does not cross into the root
+workspace or rediscover the emitted shared bodies.

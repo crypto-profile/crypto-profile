@@ -72,3 +72,20 @@ to `aws_lc_rs::awslc_version()` to report the runtime-linked release. This is al
 mandatory item for the 3.x shell. The linked release is independent of the certified
 release recorded by `certificate(MODULE)`; the 3.x certificate names 3.1.0 while
 the pinned 3.x build links 3.6.0.
+
+### Isolated 3.x consumer
+
+The 3.x backend expands both source macros without direct modules. Its separate
+workspace and lockfile preserve the older dependency line; both backend packages
+share a Cargo `links` key so one graph cannot contain both. The exact dependency
+pins refuse that graph first; the links key guards it if the pins ever become
+compatible. The negative consumer check verifies both manifest keys through
+Cargo metadata and records the actual combined-resolution diagnostic. Shared tests
+retain module-aware availability and approval expectations.
+
+CSR tests use a backend hook. The 4.x hook uses the independent upstream
+verifiers; the 3.x hook uses the crate's provider verifiers because enabling the
+upstream verifier feature would pull a newer module dependency into that graph.
+This reduces verifier independence on 3.x; the literal OID oracle and encoded
+request signature checks still run. No replacement signing algorithm stands in
+for unavailable ML-DSA, and every facade operation explicitly refuses it.

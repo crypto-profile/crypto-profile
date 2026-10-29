@@ -59,6 +59,23 @@ impl MlDsa {
 }
 
 #[cfg(test)]
+pub(crate) fn csr_oracle(
+    a: SignatureAlgorithm,
+) -> Result<&'static dyn rustls::pki_types::SignatureVerificationAlgorithm, CryptoError> {
+    Ok(match a {
+        SignatureAlgorithm::MlDsa87 => webpki::aws_lc_rs::ML_DSA_87,
+        SignatureAlgorithm::EcdsaP256Sha256 => webpki::aws_lc_rs::ECDSA_P256_SHA256,
+        SignatureAlgorithm::EcdsaP384Sha384 => webpki::aws_lc_rs::ECDSA_P384_SHA384,
+        SignatureAlgorithm::EcdsaP521Sha384 => webpki::aws_lc_rs::ECDSA_P521_SHA384,
+        SignatureAlgorithm::EcdsaP521Sha512 => webpki::aws_lc_rs::ECDSA_P521_SHA512,
+        SignatureAlgorithm::Ed25519 => webpki::aws_lc_rs::ED25519,
+        SignatureAlgorithm::Rsa2048Sha384
+        | SignatureAlgorithm::Rsa3072Sha384
+        | SignatureAlgorithm::Rsa4096Sha384 => webpki::aws_lc_rs::RSA_PKCS1_2048_8192_SHA384,
+    })
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

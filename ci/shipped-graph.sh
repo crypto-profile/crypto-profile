@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
-tree() { cargo tree -p crypto-profile-awslc4 --locked --color never --target all $features "$@"; }
+backend="${1:-crypto-profile-awslc4}"
+case "$backend" in
+  crypto-profile-awslc4|crypto-profile-awslc3) ;;
+  *) echo "unknown backend: $backend" >&2; exit 1 ;;
+esac
+manifest="$backend/Cargo.toml"
+tree() { cargo tree --manifest-path "$manifest" -p "$backend" --locked --color never --target all $features "$@"; }
 err="$(mktemp)"
 trap 'rm -f "$err"' EXIT
 for features in "" "--all-features"; do
@@ -26,4 +32,4 @@ for features in "" "--all-features"; do
     printf '%s\n' "$ring"; echo "ring reaches the shipped graph ($features)"; exit 1
   fi
 done
-cargo clippy -p crypto-profile-awslc4 --lib --all-features --locked -- -D warnings
+cargo clippy --manifest-path "$manifest" -p "$backend" --lib --all-features --locked -- -D warnings

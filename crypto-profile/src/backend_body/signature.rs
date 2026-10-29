@@ -310,6 +310,21 @@ mod tests {
     #[test]
     fn every_algorithm_generates_signs_and_verifies() {
         for a in S::ALL {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                assert_eq!(
+                    KeyPair::generate(a).err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                assert_eq!(
+                    KeyPair::from_pkcs8(a, b"invalid").err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                assert_eq!(
+                    verify(a, b"", b"", b""),
+                    Err(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                continue;
+            }
             let k = KeyPair::generate(a).unwrap();
             assert_eq!(k.algorithm(), a);
             let sig = k.sign(b"message").unwrap();
@@ -325,6 +340,21 @@ mod tests {
     #[test]
     fn a_key_reloads_from_its_pkcs8() {
         for a in S::ALL {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                assert_eq!(
+                    KeyPair::generate(a).err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                assert_eq!(
+                    KeyPair::from_pkcs8(a, b"invalid").err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                assert_eq!(
+                    verify(a, b"", b"", b""),
+                    Err(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                continue;
+            }
             let k = KeyPair::generate(a).unwrap();
             let r = KeyPair::from_pkcs8(a, k.pkcs8_der()).unwrap();
             assert_eq!(r.public_key(), k.public_key(), "{a}");
@@ -366,6 +396,21 @@ mod tests {
     #[test]
     fn rcgen_sees_our_key_and_algorithm() {
         for a in S::ALL {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                assert_eq!(
+                    KeyPair::generate(a).err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                assert_eq!(
+                    KeyPair::from_pkcs8(a, b"invalid").err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                assert_eq!(
+                    verify(a, b"", b"", b""),
+                    Err(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                continue;
+            }
             let k = KeyPair::generate(a).unwrap();
             assert_eq!(
                 rcgen::PublicKeyData::der_bytes(&k),
@@ -406,11 +451,18 @@ mod tests {
                 "{a} params"
             );
             assert!(!matches_spki(*a, "1.2.3", params, *len, 0), "{a} oid");
-            assert_eq!(
-                KeyPair::generate(*a).unwrap().public_key().len(),
-                *len,
-                "{a} generated length"
-            );
+            if crate::capability(crate::MODULE, Algorithm::Signature(*a)).available {
+                assert_eq!(
+                    KeyPair::generate(*a).unwrap().public_key().len(),
+                    *len,
+                    "{a} generated length"
+                );
+            } else {
+                assert_eq!(
+                    KeyPair::generate(*a).err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(*a)))
+                );
+            }
         }
     }
 

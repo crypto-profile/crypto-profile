@@ -1,5 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
+backend="${1:-crypto-profile-awslc4}"
+case "$backend" in
+  crypto-profile-awslc4|crypto-profile-awslc3) ;;
+  *) echo "unknown backend: $backend" >&2; exit 1 ;;
+esac
+manifest="$backend/Cargo.toml"
 OPENSSL_VERSION=3.5.9
 OPENSSL_SHA256=603f5602e2eef00d77fbd429d34dcd5822bb301757a1bc9cdb24c670f1eb859a
 if [ -z "${CRYPTO_PROFILE_OPENSSL:-}" ]; then
@@ -15,6 +21,6 @@ if [ -z "${CRYPTO_PROFILE_OPENSSL:-}" ]; then
   fi
   export CRYPTO_PROFILE_OPENSSL="$prefix/bin/openssl"
 fi
-out="$(cargo test -p crypto-profile-awslc4 --all-features --locked --test openssl_interop -- --ignored --test-threads=1 2>&1)" || { printf '%s\n' "$out"; exit 1; }
+out="$(cargo test --manifest-path "$manifest" -p "$backend" --all-features --locked --test openssl_interop -- --ignored --test-threads=1 2>&1)" || { printf '%s\n' "$out"; exit 1; }
 printf '%s\n' "$out"
 grep -qE '^test result: ok\. 2 passed; 0 failed; 0 ignored' <<<"$out" || { echo "the interop tests did not both run"; exit 1; }

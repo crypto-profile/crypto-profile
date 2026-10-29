@@ -367,12 +367,23 @@ mod tests {
     use rustls::client::danger::ServerCertVerifier;
     use std::sync::Arc;
 
+    fn available_schemes() -> Vec<T> {
+        T::ALL
+            .into_iter()
+            .filter(|s| crate::capability(crate::MODULE, Algorithm::Scheme(*s)).available)
+            .collect()
+    }
+
     fn policy(versions: &[V], suites: &[C], kx: &[K], schemes: &[T]) -> Policy {
         Policy {
             versions: versions.to_vec(),
             cipher_suites: suites.to_vec(),
             kx_groups: kx.to_vec(),
-            signature_schemes: schemes.to_vec(),
+            signature_schemes: schemes
+                .iter()
+                .copied()
+                .filter(|s| crate::capability(crate::MODULE, Algorithm::Scheme(*s)).available)
+                .collect(),
         }
     }
 
@@ -738,6 +749,13 @@ mod tests {
     #[test]
     fn every_key_algorithm_authenticates_a_tls13_server() {
         for a in S::ALL {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                assert_eq!(
+                    crate::signature::KeyPair::generate(a).err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                continue;
+            }
             let n = handshake(&one13(K::Secp384r1), &one13(K::Secp384r1), a)
                 .unwrap_or_else(|e| panic!("{a}: {e}"));
             let full_offer = match a {
@@ -761,6 +779,13 @@ mod tests {
             .map(|a| (a, a.tls_scheme()))
             .chain(rsa.into_iter().map(|t| (S::Rsa2048Sha384, t)));
         for (a, t) in cases {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                assert_eq!(
+                    crate::signature::KeyPair::generate(a).err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(a)))
+                );
+                continue;
+            }
             let client = policy(
                 &[V::Tls13],
                 &[C::Tls13Aes256GcmSha384],
@@ -827,10 +852,19 @@ mod tests {
             Some(0x0805)
         );
         assert_eq!(chosen(&rsa(&[T::RsaPkcs1Sha384]), a, &offer), None);
-        assert_eq!(
-            chosen(&rsa(&[T::MlDsa87]), S::EcdsaP384Sha384, &T::ALL),
-            None
-        );
+        if crate::capability(crate::MODULE, Algorithm::Scheme(T::MlDsa87)).available {
+            assert_eq!(
+                chosen(&rsa(&[T::MlDsa87]), S::EcdsaP384Sha384, &T::ALL),
+                None
+            );
+        } else {
+            let mut unavailable = rsa(&[T::Ed25519]);
+            unavailable.signature_schemes = vec![T::MlDsa87];
+            assert_eq!(
+                crypto_provider(&unavailable).err(),
+                Some(CryptoError::Unavailable(Algorithm::Scheme(T::MlDsa87)))
+            );
+        }
     }
 
     #[derive(Debug)]
@@ -854,7 +888,7 @@ mod tests {
         let wrap = |base: &'static dyn KeyProvider| PolicyKeyProvider { base, schemes: &[] };
         assert!(!wrap(&NotFips).fips());
         assert!(wrap(base_provider().key_provider).fips());
-        assert!(keys(&T::ALL).fips());
+        assert!(keys(&available_schemes()).fips());
     }
 
     #[test]
@@ -879,8 +913,8 @@ mod tests {
     }
 
     fn subsets() -> impl Iterator<Item = Vec<T>> {
-        (1u16..1 << T::ALL.len()).map(|m| {
-            T::ALL
+        (1u16..1 << available_schemes().len()).map(|m| {
+            available_schemes()
                 .into_iter()
                 .enumerate()
                 .filter(|(i, _)| m & (1 << i) != 0)
@@ -1010,7 +1044,7 @@ mod tests {
         for s in subsets() {
             crypto_provider(&with_schemes(s)).unwrap();
         }
-        let sets = (1 << T::ALL.len()) - 1;
+        let sets = (1 << available_schemes().len()) - 1;
         assert_eq!(cache_len(), sets);
         for s in subsets() {
             let mut rev = s.clone();
@@ -1041,13 +1075,28 @@ mod tests {
 
     #[test]
     fn an_ml_dsa_44_or_65_key_loads_but_no_policy_signs_with_it() {
-        use aws_lc_rs::signature::{ML_DSA_44_SIGNING, ML_DSA_65_SIGNING, PqdsaKeyPair};
-        for (alg, scheme) in [
-            (&ML_DSA_44_SIGNING, rustls::SignatureScheme::ML_DSA_44),
-            (&ML_DSA_65_SIGNING, rustls::SignatureScheme::ML_DSA_65),
+        for (fixture, scheme) in [
+            (
+                super::super::backend::MlDsa::fixture44(),
+                rustls::SignatureScheme::ML_DSA_44,
+            ),
+            (
+                super::super::backend::MlDsa::fixture65(),
+                rustls::SignatureScheme::ML_DSA_65,
+            ),
         ] {
-            let pkcs8 = PqdsaKeyPair::generate(alg).unwrap().to_pkcs8v1().unwrap();
-            let der = PrivateKeyDer::Pkcs8(pkcs8.as_ref().to_vec().into());
+            assert_eq!(
+                fixture.is_some(),
+                crate::capability(crate::MODULE, Algorithm::Signature(S::MlDsa87)).available
+            );
+            let Some(pkcs8) = fixture else {
+                assert_eq!(
+                    super::super::backend::MlDsa::generate().err(),
+                    Some(CryptoError::Unavailable(Algorithm::Signature(S::MlDsa87)))
+                );
+                continue;
+            };
+            let der = PrivateKeyDer::Pkcs8(pkcs8.to_vec().into());
             let key = load_private_key(&one13(K::Secp384r1), der).unwrap();
             assert!(
                 key.choose_scheme(&[scheme, rustls::SignatureScheme::ML_DSA_87])

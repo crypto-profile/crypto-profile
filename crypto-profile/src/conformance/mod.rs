@@ -487,7 +487,7 @@ macro_rules! conformance_tests {
                     KxGroup::Secp384r1,
                     KxGroup::Secp256r1,
                 ],
-                &TlsSignatureScheme::ALL,
+                &$crate::conformance::__peer_schemes(MODULE),
             )
         }
 
@@ -500,7 +500,7 @@ macro_rules! conformance_tests {
                     CipherSuite::Tls12EcdheRsaAes256GcmSha384,
                 ],
                 &[KxGroup::Secp384r1],
-                &TlsSignatureScheme::ALL,
+                &$crate::conformance::__peer_schemes(MODULE),
             )
         }
 
@@ -715,7 +715,7 @@ macro_rules! conformance_tests {
                             &[TlsVersion::Tls13],
                             &[CipherSuite::Tls13Aes256GcmSha384],
                             &[k],
-                            &TlsSignatureScheme::ALL,
+                            &$crate::conformance::__peer_schemes(MODULE),
                         );
                         if cap.available {
                             let n = handshake(&p, &p, SignatureAlgorithm::EcdsaP384Sha384)
@@ -733,7 +733,7 @@ macro_rules! conformance_tests {
                             &[c.version()],
                             &[c],
                             &[KxGroup::Secp384r1],
-                            &TlsSignatureScheme::ALL,
+                            &$crate::conformance::__peer_schemes(MODULE),
                         );
                         if cap.available {
                             let n = handshake(&p, &p, suite_key(c))
@@ -755,7 +755,7 @@ macro_rules! conformance_tests {
                             &[v],
                             &suites,
                             &[KxGroup::Secp384r1],
-                            &TlsSignatureScheme::ALL,
+                            &$crate::conformance::__peer_schemes(MODULE),
                         );
                         if cap.available {
                             let n = handshake(&p, &p, SignatureAlgorithm::EcdsaP384Sha384)
@@ -770,8 +770,12 @@ macro_rules! conformance_tests {
                     }
                     Algorithm::Scheme(t) => {
                         let (key, v, c) = scheme_setup(t);
-                        let server =
-                            policy(&[v], &[c], &[KxGroup::Secp384r1], &TlsSignatureScheme::ALL);
+                        let server = policy(
+                            &[v],
+                            &[c],
+                            &[KxGroup::Secp384r1],
+                            &$crate::conformance::__peer_schemes(MODULE),
+                        );
                         let client = policy(&[v], &[c], &[KxGroup::Secp384r1], &[t]);
                         if cap.available {
                             let n = handshake(&client, &server, key)
@@ -828,7 +832,7 @@ macro_rules! conformance_tests {
                 &[TlsVersion::Tls12],
                 &[CipherSuite::Tls12EcdheRsaAes256GcmSha384],
                 &[KxGroup::Secp384r1],
-                &TlsSignatureScheme::ALL,
+                &$crate::conformance::__peer_schemes(MODULE),
             );
             let n = handshake(
                 &legacy,
@@ -844,6 +848,17 @@ macro_rules! conformance_tests {
                     KxGroup::Secp384r1
                 )
             );
+        }
+
+        #[test]
+        fn conformance_runtime_release_matches_the_selected_line() {
+            let expected = if MODULE.line == ModuleLine::AwsLcFips3 {
+                "3.6.0"
+            } else {
+                assert_eq!(MODULE.line, ModuleLine::AwsLcFips4);
+                "4.2.0"
+            };
+            assert_eq!(awslc_version(), expected);
         }
 
         #[test]
