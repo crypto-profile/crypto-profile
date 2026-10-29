@@ -2,13 +2,13 @@ additional_cargo_args = ["--all-features"]
 test_workspace = true
 exclude_globs = [
   # Test infrastructure compiled only under `test-support`, never shipped behaviour (spec §9 excludes test-support helpers).
-  "crypto-profile-awslc4/src/test_support.rs",
+  "crypto-profile-awslc4/src/../../crypto-profile/src/backend_body/test_support.rs",
   # The conformance macro's scaffolding (vector parsers), compiled only under `conformance` (spec §9).
   "crypto-profile/src/conformance/**",
 ]
 exclude_re = [
   # The decision is fips_result, tested both ways; the wrapper's only input is the loaded module's FIPS_mode(), which a FIPS build cannot make false (spec §9, decision 0003).
-  "^crypto-profile-awslc4/src/fips\\.rs:[0-9]+:[0-9]+: replace assert_fips_module -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/backend_body/fips\\.rs:[0-9]+:[0-9]+: replace assert_fips_module -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
   # Every 4.x cell is available, so ensure's Ok(()) mutant is equivalent on this backend. The refusal branch is ensure_available, tested in core (ensure_available_refuses_ml_dsa_on_3x), and round 3's -awslc3 conformance run exercises it for real.
   "^crypto-profile-awslc4/src/lib\\.rs:[0-9]+:[0-9]+: replace ensure -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
   # Every test process runs in FIPS mode, so fips() is true either way (decision 0003); the false mutant is caught by the_module_is_in_fips_mode_on_this_build.

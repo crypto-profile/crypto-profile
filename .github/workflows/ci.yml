@@ -19,6 +19,7 @@ jobs:
       - run: rustup toolchain install
       - run: cargo fmt --all --check
       - run: rustfmt --check --edition 2024 crypto-profile/src/provider/mod.rs
+      - run: rustfmt --check --edition 2024 crypto-profile/src/backend_body/mod.rs
 
   clippy:
     runs-on: ubuntu-24.04
@@ -135,7 +136,9 @@ jobs:
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-mutants@27.1.0
-      - run: cargo mutants --workspace --no-shuffle --shard ${{ matrix.shard }}/4
+      - env:
+          RUSTFLAGS: --cfg crypto_profile_provider_direct
+        run: cargo mutants --workspace --no-shuffle --shard ${{ matrix.shard }}/4
 
   dco:
     if: github.event_name == 'pull_request'

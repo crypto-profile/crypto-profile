@@ -139,6 +139,7 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
     } else {
         "mod backend {\n    pub(crate) use crate::provider_arms::*;\n}\n"
     };
+    let mut profile_exports = false;
     let mut has_bridge = false;
     let mut names = BTreeSet::new();
     let mut declarations = Vec::new();
@@ -157,6 +158,14 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
             continue;
         }
         first = false;
+        if body
+            && !test_support
+            && !profile_exports
+            && line == "pub use profiles::{Resolved, assert_module_approves, resolve};"
+        {
+            profile_exports = true;
+            continue;
+        }
         if line == "mod backend {" && !has_bridge {
             for expected in bridge.lines().skip(1) {
                 if lines.next() != Some(expected) {
@@ -252,6 +261,12 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
             output.push_str("#[cfg(any(test, feature = \"test-support\"))]\n");
         }
         output.push_str(&format!("{visibility}mod {name} {{\n{source}\n}}\n"));
+    }
+    if profile_exports {
+        if !names.contains("profiles") {
+            fail(&index, "profile exports require profiles module");
+        }
+        output.push_str("pub use profiles::{Resolved, assert_module_approves, resolve};\n");
     }
     (output, has_bridge)
 }

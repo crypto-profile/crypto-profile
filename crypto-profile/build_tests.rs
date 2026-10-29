@@ -164,3 +164,22 @@ fn child_declaration_text_in_strings_is_refused() {
         );
     }
 }
+
+#[test]
+fn profile_exports_are_exact_and_require_the_module() {
+    let fixture = Fixture::new();
+    let exports = "pub use profiles::{Resolved, assert_module_approves, resolve};\n";
+    fixture.write("mod.rs", exports);
+    assert!(std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err());
+    fixture.write(
+        "profiles.rs",
+        "pub struct Resolved; pub fn resolve() {} pub fn assert_module_approves() {}\n",
+    );
+    fixture.write("mod.rs", &format!("mod profiles;\n{exports}"));
+    let (output, _) = modules(&fixture.0, true);
+    assert!(output.ends_with(exports));
+    for suffix in [exports, "pub use profiles::*;\n"] {
+        fixture.write("mod.rs", &format!("mod profiles;\n{exports}{suffix}"));
+        assert!(std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err());
+    }
+}
