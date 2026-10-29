@@ -103,7 +103,10 @@ pub fn parse_spki(der: &[u8]) -> Result<PeerKey, PeerCertificateViolation> {
     if der.len() > 16384 {
         return Err(Malformed);
     }
-    let mut spki = sequence(der)?;
+    parse_spki_contents(sequence(der)?)
+}
+
+fn parse_spki_contents(mut spki: Der<'_>) -> Result<PeerKey, PeerCertificateViolation> {
     let mut algorithm = Der(spki.value(0x30)?);
     let oid = algorithm.oid()?;
     let params = algorithm.0;
@@ -211,26 +214,171 @@ pub fn check_leaf(profile: Profile, cert: &CertificateDer<'_>) -> Result<(), Tls
     let check = || {
         let key = leaf_key(cert)?;
         let rule = &peer_certificate_rule(profile).leaf_keys;
-        let allowed = match key {
-            PeerKey::Ec(curve) => rule.ec_curves.contains(&curve),
-            PeerKey::Rsa(bits) => {
-                bits <= 8192
-                    && (!rule.rsa_even_bits || bits % 2 == 0)
-                    && match rule.rsa {
-                        Some(RsaSizeRule::Minimum(min)) => bits >= min,
-                        Some(RsaSizeRule::Exact(sizes)) => sizes.contains(&bits),
-                        None => false,
-                    }
-            }
-            PeerKey::Ed25519 => rule.ed25519,
-            PeerKey::MlDsa(set) => rule.ml_dsa.contains(&set),
-            PeerKey::Unknown => false,
-        };
+        let allowed = key_allowed(rule, key);
         if allowed {
             Ok(())
         } else {
             Err(PeerCertificateViolation::LeafKey(key))
         }
+    };
+    check().map_err(|violation| TlsError::PeerCertificate { profile, violation })
+}
+
+fn key_allowed(rule: &crate::PeerKeyRule, key: PeerKey) -> bool {
+    match key {
+        PeerKey::Ec(curve) => rule.ec_curves.contains(&curve),
+        PeerKey::Rsa(bits) => {
+            bits <= 8192
+                && (!rule.rsa_even_bits || bits % 2 == 0)
+                && match rule.rsa {
+                    Some(RsaSizeRule::Minimum(min)) => bits >= min,
+                    Some(RsaSizeRule::Exact(sizes)) => sizes.contains(&bits),
+                    None => false,
+                }
+        }
+        PeerKey::Ed25519 => rule.ed25519,
+        PeerKey::MlDsa(set) => rule.ml_dsa.contains(&set),
+        PeerKey::Unknown => false,
+    }
+}
+
+fn digest(der: &[u8]) -> Result<Option<crate::HashAlgorithm>, PeerCertificateViolation> {
+    use crate::HashAlgorithm::{Sha256, Sha384, Sha512};
+    let mut alg = sequence(der)?;
+    let hash = match alg.oid()? {
+        [0x60, 0x86, 0x48, 1, 0x65, 3, 4, 2, 1] => Some(Sha256),
+        [0x60, 0x86, 0x48, 1, 0x65, 3, 4, 2, 2] => Some(Sha384),
+        [0x60, 0x86, 0x48, 1, 0x65, 3, 4, 2, 3] => Some(Sha512),
+        _ => None,
+    };
+    if !alg.0.is_empty() && !alg.value(5)?.is_empty() {
+        return Err(Malformed);
+    }
+    alg.end()?;
+    Ok(hash)
+}
+
+fn signature(
+    der: &[u8],
+    issuer: PeerKey,
+) -> Result<crate::CertificateSignature, PeerCertificateViolation> {
+    use crate::{
+        CertificateSignature as S,
+        HashAlgorithm::{Sha256, Sha384, Sha512},
+    };
+    let mut alg = Der(der);
+    let oid = alg.oid()?;
+    let result = match oid {
+        [0x2a, 0x86, 0x48, 0xce, 0x3d, 4, 3, hash @ 2..=4] => {
+            alg.end()?;
+            let hash = match hash {
+                2 => Sha256,
+                3 => Sha384,
+                _ => Sha512,
+            };
+            match issuer {
+                PeerKey::Ec(curve) => S::Ecdsa(curve, hash),
+                PeerKey::Rsa(_) | PeerKey::Ed25519 | PeerKey::MlDsa(_) | PeerKey::Unknown => {
+                    S::Unknown
+                }
+            }
+        }
+        [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, hash @ 11..=13] => {
+            if !alg.0.is_empty() && !alg.value(5)?.is_empty() {
+                return Err(Malformed);
+            }
+            alg.end()?;
+            S::RsaPkcs1(match hash {
+                11 => Sha256,
+                12 => Sha384,
+                _ => Sha512,
+            })
+        }
+        [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, 10] => {
+            let mut params = Der(alg.value(0x30)?);
+            alg.end()?;
+            let hash = digest(params.value(0xa0)?)?;
+            let mut mgf = sequence(params.value(0xa1)?)?;
+            let mgf_oid = mgf.oid()?;
+            let mgf_hash = digest(mgf.0)?;
+            let mut salt = Der(params.value(0xa2)?);
+            let salt_value = positive_integer(&mut salt)?;
+            salt.end()?;
+            let trailer_ok = if params.0.is_empty() {
+                true
+            } else {
+                params.value(0xa3)? == [2, 1, 1]
+            };
+            params.end()?;
+            match hash {
+                Some(hash)
+                    if mgf_oid == [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, 8]
+                        && mgf_hash == Some(hash)
+                        && trailer_ok
+                        && salt_value
+                            == [match hash {
+                                Sha256 => 32,
+                                Sha384 => 48,
+                                Sha512 => 64,
+                            }] =>
+                {
+                    S::RsaPss(hash)
+                }
+                Some(_) | None => S::Unknown,
+            }
+        }
+        [0x2b, 0x65, 0x70] => {
+            alg.end()?;
+            S::Ed25519
+        }
+        [0x60, 0x86, 0x48, 1, 0x65, 3, 4, 3, set @ 0x11..=0x13] => {
+            alg.end()?;
+            S::MlDsa(match set {
+                0x11 => MlDsaParameterSet::MlDsa44,
+                0x12 => MlDsaParameterSet::MlDsa65,
+                _ => MlDsaParameterSet::MlDsa87,
+            })
+        }
+        _ => S::Unknown,
+    };
+    Ok(result)
+}
+
+fn check_edge(
+    profile: Profile,
+    child: &CertificateDer<'_>,
+    issuer: PeerKey,
+) -> Result<(), PeerCertificateViolation> {
+    let mut cert = sequence(child.as_ref())?;
+    cert.value(0x30)?;
+    let signature = signature(cert.value(0x30)?, issuer)?;
+    let rule = peer_certificate_rule(profile);
+    if !rule.signatures.contains(&signature) {
+        return Err(PeerCertificateViolation::ChainSignature(signature));
+    }
+    if !key_allowed(&rule.issuer_keys, issuer) {
+        return Err(PeerCertificateViolation::IssuerKey(issuer));
+    }
+    Ok(())
+}
+
+pub(crate) fn check_verified_path(
+    profile: Profile,
+    path: &webpki::VerifiedPath<'_>,
+) -> Result<(), TlsError> {
+    check_leaf(profile, &path.end_entity().der())?;
+    let check = || {
+        let mut child = path.end_entity().der();
+        for issuer in path.intermediate_certificates() {
+            check_edge(
+                profile,
+                &child,
+                parse_spki(issuer.subject_public_key_info().as_ref())?,
+            )?;
+            child = issuer.der();
+        }
+        let issuer = parse_spki_contents(Der(path.anchor().subject_public_key_info.as_ref()))?;
+        check_edge(profile, &child, issuer)
     };
     check().map_err(|violation| TlsError::PeerCertificate { profile, violation })
 }
@@ -308,6 +456,316 @@ mod tests {
             0x30,
             &[tlv(0x30, &tbs), tlv(0x30, &[]), tlv(3, &[0, 1])].concat(),
         ))
+    }
+
+    #[test]
+    fn chain_predicates_pin_signatures_and_issuer_bounds() {
+        use crate::{CertificateSignature as CS, HashAlgorithm as H};
+        let profiles = [
+            Profile::Unrestricted,
+            Profile::Preferred,
+            Profile::Cnsa2,
+            Profile::Cnsa1,
+            Profile::Bsi,
+            Profile::Fips1403,
+            Profile::Fips1402,
+        ];
+        for (sig, allowed) in [
+            (
+                CS::RsaPkcs1(H::Sha384),
+                [true, true, false, true, false, true, true],
+            ),
+            (
+                CS::RsaPss(H::Sha384),
+                [true, true, false, true, true, true, true],
+            ),
+            (
+                CS::Ecdsa(PeerCurve::P384, H::Sha384),
+                [true, true, false, true, true, true, true],
+            ),
+            (
+                CS::Ecdsa(PeerCurve::P256, H::Sha384),
+                [true, true, false, false, false, true, true],
+            ),
+            (CS::Ed25519, [true, false, false, false, false, true, false]),
+            (
+                CS::MlDsa(MlDsa87),
+                [true, false, true, false, false, true, false],
+            ),
+            (CS::MlDsa(MlDsa65), [false; 7]),
+            (CS::Unknown, [false; 7]),
+        ] {
+            for (profile, allowed) in profiles.into_iter().zip(allowed) {
+                assert_eq!(
+                    peer_certificate_rule(profile).signatures.contains(&sig),
+                    allowed
+                );
+            }
+        }
+        for (profile, bits, allowed) in [
+            (Profile::Cnsa1, 2048, false),
+            (Profile::Cnsa1, 3072, true),
+            (Profile::Cnsa1, 4096, true),
+            (Profile::Cnsa1, 8192, false),
+            (Profile::Preferred, 3071, false),
+            (Profile::Preferred, 3072, true),
+            (Profile::Preferred, 8192, true),
+            (Profile::Bsi, 2999, false),
+            (Profile::Bsi, 3000, true),
+            (Profile::Bsi, 8192, true),
+            (Profile::Fips1403, 2049, false),
+            (Profile::Fips1403, 2050, true),
+        ] {
+            assert_eq!(
+                key_allowed(
+                    &peer_certificate_rule(profile).issuer_keys,
+                    PeerKey::Rsa(bits)
+                ),
+                allowed
+            );
+        }
+    }
+
+    #[test]
+    fn certificate_signature_identifiers_and_pss_parameters() {
+        use crate::{CertificateSignature as CS, HashAlgorithm as H};
+        for (last, hash) in [(11, H::Sha256), (12, H::Sha384), (13, H::Sha512)] {
+            for params in [vec![], vec![5, 0]] {
+                let oid = [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, last];
+                let alg = [tlv(6, &oid), params].concat();
+                assert_eq!(signature(&alg, PeerKey::Rsa(3072)), Ok(CS::RsaPkcs1(hash)));
+            }
+        }
+        for (id, hash, salt) in [(1, H::Sha256, 32), (2, H::Sha384, 48), (3, H::Sha512, 64)] {
+            let digest = tlv(
+                0x30,
+                &[
+                    tlv(6, &[0x60, 0x86, 0x48, 1, 0x65, 3, 4, 2, id]),
+                    vec![5, 0],
+                ]
+                .concat(),
+            );
+            let mgf = tlv(
+                0x30,
+                &[
+                    tlv(6, &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, 8]),
+                    digest.clone(),
+                ]
+                .concat(),
+            );
+            let oid = tlv(6, &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, 10]);
+            let make = |salt, mgf: &[u8]| {
+                [
+                    oid.clone(),
+                    tlv(
+                        0x30,
+                        &[tlv(0xa0, &digest), tlv(0xa1, mgf), tlv(0xa2, &[2, 1, salt])].concat(),
+                    ),
+                ]
+                .concat()
+            };
+            assert_eq!(
+                signature(&make(salt, &mgf), PeerKey::Rsa(3072)),
+                Ok(CS::RsaPss(hash))
+            );
+            assert_eq!(
+                signature(&make(salt + 1, &mgf), PeerKey::Rsa(3072)),
+                Ok(CS::Unknown)
+            );
+            assert!(signature(&make(salt, &[]), PeerKey::Rsa(3072)).is_err());
+        }
+    }
+
+    #[test]
+    fn chain_edges_check_actual_signature_and_issuer_independently() {
+        use crate::{CertificateSignature as CS, HashAlgorithm as H};
+        let cert = |alg: &[u8]| {
+            let leaf = certificate(&ec(P384, 97), true);
+            let mut seq = sequence(leaf.as_ref()).unwrap();
+            CertificateDer::from(tlv(
+                0x30,
+                &[
+                    tlv(0x30, seq.value(0x30).unwrap()),
+                    tlv(0x30, alg),
+                    tlv(3, &[0, 1]),
+                ]
+                .concat(),
+            ))
+        };
+        for (oid, issuer, sig) in [
+            (
+                vec![0x2a, 0x86, 0x48, 0xce, 0x3d, 4, 3, 2],
+                PeerKey::Ec(PeerCurve::P256),
+                CS::Ecdsa(PeerCurve::P256, H::Sha256),
+            ),
+            (
+                vec![0x2a, 0x86, 0x48, 0xce, 0x3d, 4, 3, 3],
+                PeerKey::Ec(PeerCurve::P384),
+                CS::Ecdsa(PeerCurve::P384, H::Sha384),
+            ),
+            (
+                vec![0x2a, 0x86, 0x48, 0xce, 0x3d, 4, 3, 4],
+                PeerKey::Ec(PeerCurve::P521),
+                CS::Ecdsa(PeerCurve::P521, H::Sha512),
+            ),
+            (ED.to_vec(), PeerKey::Ed25519, CS::Ed25519),
+            (ML44.to_vec(), PeerKey::MlDsa(MlDsa44), CS::MlDsa(MlDsa44)),
+            (ML65.to_vec(), PeerKey::MlDsa(MlDsa65), CS::MlDsa(MlDsa65)),
+            (ML87.to_vec(), PeerKey::MlDsa(MlDsa87), CS::MlDsa(MlDsa87)),
+            (vec![0x2a, 3], PeerKey::Unknown, CS::Unknown),
+        ] {
+            let alg = tlv(6, &oid);
+            assert_eq!(signature(&alg, issuer), Ok(sig));
+            for profile in [
+                Profile::Unrestricted,
+                Profile::Preferred,
+                Profile::Cnsa2,
+                Profile::Cnsa1,
+                Profile::Bsi,
+                Profile::Fips1403,
+                Profile::Fips1402,
+            ] {
+                let rule = peer_certificate_rule(profile);
+                let expected = if !rule.signatures.contains(&sig) {
+                    Err(PeerCertificateViolation::ChainSignature(sig))
+                } else if !key_allowed(&rule.issuer_keys, issuer) {
+                    Err(PeerCertificateViolation::IssuerKey(issuer))
+                } else {
+                    Ok(())
+                };
+                assert_eq!(check_edge(profile, &cert(&alg), issuer), expected);
+            }
+        }
+        let alg = tlv(6, &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, 12]);
+        for bits in [2048, 3072, 4096, 8192] {
+            let key = PeerKey::Rsa(bits);
+            assert_eq!(
+                check_edge(Profile::Cnsa1, &cert(&alg), key),
+                if [3072, 4096].contains(&bits) {
+                    Ok(())
+                } else {
+                    Err(PeerCertificateViolation::IssuerKey(key))
+                }
+            );
+        }
+        let ecdsa = tlv(6, &[0x2a, 0x86, 0x48, 0xce, 0x3d, 4, 3, 3]);
+        for key in [
+            PeerKey::Rsa(3072),
+            PeerKey::Ed25519,
+            PeerKey::MlDsa(MlDsa87),
+            PeerKey::Unknown,
+        ] {
+            assert_eq!(signature(&ecdsa, key), Ok(CS::Unknown));
+        }
+        for alg in [tlv(6, ED), tlv(6, ML87), ecdsa] {
+            assert_eq!(
+                signature(&[alg, vec![5, 0]].concat(), PeerKey::Ec(PeerCurve::P384)),
+                Err(Malformed)
+            );
+        }
+        for alg in [
+            vec![],
+            vec![6],
+            [
+                tlv(6, &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, 12]),
+                vec![5, 1, 0],
+            ]
+            .concat(),
+        ] {
+            assert_eq!(signature(&alg, PeerKey::Rsa(3072)), Err(Malformed));
+        }
+        assert_eq!(
+            check_edge(
+                Profile::Cnsa1,
+                &CertificateDer::from(&[0x30, 0][..]),
+                PeerKey::Rsa(3072)
+            ),
+            Err(Malformed)
+        );
+    }
+
+    #[test]
+    fn pss_rejects_mismatched_hash_mgf_salt_and_trailer() {
+        use crate::{CertificateSignature as CS, HashAlgorithm as H};
+        let hash = |id| {
+            tlv(
+                0x30,
+                &[
+                    tlv(6, &[0x60, 0x86, 0x48, 1, 0x65, 3, 4, 2, id]),
+                    vec![5, 0],
+                ]
+                .concat(),
+            )
+        };
+        let make = |id, mgf_oid, mgf_id, salt: &[u8], trailer: &[u8]| {
+            [
+                tlv(6, &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, 10]),
+                tlv(
+                    0x30,
+                    &[
+                        tlv(0xa0, &hash(id)),
+                        tlv(
+                            0xa1,
+                            &tlv(
+                                0x30,
+                                &[
+                                    tlv(6, &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, mgf_oid]),
+                                    hash(mgf_id),
+                                ]
+                                .concat(),
+                            ),
+                        ),
+                        tlv(0xa2, salt),
+                        trailer.to_vec(),
+                    ]
+                    .concat(),
+                ),
+            ]
+            .concat()
+        };
+        for (id, mgf_oid, mgf_id, salt, trailer) in [
+            (2, 8, 1, vec![2, 1, 48], vec![]),
+            (2, 9, 2, vec![2, 1, 48], vec![]),
+            (4, 8, 4, vec![2, 1, 48], vec![]),
+            (2, 8, 2, vec![2, 1, 47], vec![]),
+            (2, 8, 2, vec![2, 1, 48], tlv(0xa3, &[2, 1, 2])),
+        ] {
+            assert_eq!(
+                signature(
+                    &make(id, mgf_oid, mgf_id, &salt, &trailer),
+                    PeerKey::Rsa(3072)
+                ),
+                Ok(CS::Unknown)
+            );
+        }
+        assert_eq!(
+            signature(
+                &make(2, 8, 2, &[2, 1, 48], &tlv(0xa3, &[2, 1, 1])),
+                PeerKey::Rsa(3072)
+            ),
+            Ok(CS::RsaPss(H::Sha384))
+        );
+        assert_eq!(
+            signature(&make(2, 8, 2, &[2, 1, 48, 0], &[]), PeerKey::Rsa(3072)),
+            Err(Malformed)
+        );
+        let valid = make(2, 8, 2, &[2, 1, 48], &[]);
+        for end in 0..valid.len() {
+            assert!(signature(&valid[..end], PeerKey::Rsa(3072)).is_err());
+        }
+        for params in [vec![], vec![5, 0]] {
+            assert_eq!(
+                digest(&tlv(
+                    0x30,
+                    &[tlv(6, &[0x60, 0x86, 0x48, 1, 0x65, 3, 4, 2, 1]), params].concat()
+                )),
+                Ok(Some(H::Sha256))
+            );
+        }
+        assert_eq!(
+            digest(&tlv(0x30, &[tlv(6, &[0x2a, 3]), vec![5, 1, 0]].concat())),
+            Err(Malformed)
+        );
     }
 
     #[test]

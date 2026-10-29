@@ -155,23 +155,51 @@ struct Tables {
     keys: &'static PolicyKeyProvider,
 }
 
-static TABLES: OnceLock<Mutex<HashMap<u16, Tables>>> = OnceLock::new();
-
-#[cfg(test)]
-fn cache_len() -> usize {
-    TABLES
-        .get_or_init(Default::default)
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .len()
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+struct TableKey {
+    scheme_bits: u16,
+    rule: Option<crypto_profile::PeerCertificateRuleId>,
 }
 
-fn tables(set: &SchemeSet) -> Result<Tables, CryptoError> {
-    let mut cache = TABLES
+static TABLES: OnceLock<Mutex<HashMap<TableKey, Tables>>> = OnceLock::new();
+static STRICT_TABLES: OnceLock<Mutex<HashMap<TableKey, Tables>>> = OnceLock::new();
+
+fn tables_for_rule(
+    set: &SchemeSet,
+    rule: Option<crypto_profile::PeerCertificateRuleId>,
+) -> Result<Tables, CryptoError> {
+    let cache = match rule {
+        None => &TABLES,
+        Some(_) => &STRICT_TABLES,
+    };
+    let mut cache = cache
         .get_or_init(Default::default)
         .lock()
         .unwrap_or_else(|e| e.into_inner());
-    if let Some(t) = cache.get(&set.bits).copied() {
+    cached_tables(
+        &mut cache,
+        TableKey {
+            scheme_bits: set.bits,
+            rule,
+        },
+        set,
+    )
+}
+
+#[cfg(test)]
+fn tables(set: &SchemeSet) -> Result<Tables, CryptoError> {
+    tables_for_rule(set, None)
+}
+
+fn cached_tables(
+    cache: &mut HashMap<TableKey, Tables>,
+    key: TableKey,
+    set: &SchemeSet,
+) -> Result<Tables, CryptoError> {
+    if set.ordered.is_empty() {
+        return Err(CryptoError::PolicyEmpty(Family::SignatureScheme));
+    }
+    if let Some(t) = cache.get(&key).copied() {
         return Ok(t);
     }
     let base = base_provider();
@@ -187,7 +215,7 @@ fn tables(set: &SchemeSet) -> Result<Tables, CryptoError> {
             schemes: Box::leak(set.ordered.iter().map(|t| rustls_scheme(*t)).collect()),
         })),
     };
-    cache.insert(set.bits, t);
+    cache.insert(key, t);
     Ok(t)
 }
 
@@ -251,7 +279,7 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     if suites.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::CipherSuite));
     }
-    let tables = tables(&schemes)?;
+    let tables = tables_for_rule(&schemes, p.peer_certificate_rule)?;
     Ok(CryptoProvider {
         cipher_suites: suites,
         kx_groups: p.kx_groups.iter().map(|k| rustls_group(*k)).collect(),
@@ -457,7 +485,7 @@ impl ProfileVerifier {
                     .with_expiration_policy(self.config.expiration)
                     .build()
             });
-        let _path = cert
+        let path = cert
             .verify_for_usage(
                 self.config.algorithms.all,
                 &self.config.roots.roots,
@@ -476,7 +504,7 @@ impl ProfileVerifier {
             PeerVerifierIdentity::Owned {
                 rule: Some(rule), ..
             } => {
-                super::peer_certificates::check_leaf(rule_profile(rule), leaf)
+                super::peer_certificates::check_verified_path(rule_profile(rule), &path)
                     .map_err(certificate_error)?;
             }
             PeerVerifierIdentity::Owned { rule: None, .. } | PeerVerifierIdentity::Opaque => {}
@@ -1303,6 +1331,443 @@ mod tests {
         assert_eq!(cause.downcast_ref::<W>(), Some(&W::UnknownIssuer));
     }
 
+    struct Sha256<'a>(&'a crate::signature::KeyPair);
+    impl rcgen::PublicKeyData for Sha256<'_> {
+        fn der_bytes(&self) -> &[u8] {
+            rcgen::PublicKeyData::der_bytes(self.0)
+        }
+        fn algorithm(&self) -> &'static rcgen::SignatureAlgorithm {
+            &rcgen::PKCS_RSA_SHA256
+        }
+    }
+    impl rcgen::SigningKey for Sha256<'_> {
+        fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
+            let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.pkcs8_der()).unwrap();
+            let mut sig = vec![0; key.public_modulus_len()];
+            key.sign(
+                &aws_lc_rs::signature::RSA_PKCS1_SHA256,
+                &aws_lc_rs::rand::SystemRandom::new(),
+                msg,
+                &mut sig,
+            )
+            .unwrap();
+            Ok(sig)
+        }
+    }
+
+    #[test]
+    fn peer_certificates_forbidden_intermediate_edges() {
+        use crate::{
+            CertificateSignature as CS, HashAlgorithm as H, PeerCertificateViolation as V, Profile,
+        };
+        use rcgen::{CertificateParams, Issuer};
+        use rustls::server::danger::ClientCertVerifier;
+        for (algorithm, sha256, violation) in [
+            (
+                S::Rsa2048Sha384,
+                false,
+                V::IssuerKey(crate::PeerKey::Rsa(2048)),
+            ),
+            (
+                S::Rsa3072Sha384,
+                true,
+                V::ChainSignature(CS::RsaPkcs1(H::Sha256)),
+            ),
+        ] {
+            let root_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+            let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+            params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+            let root = params.self_signed(&root_key).unwrap();
+            let root_issuer = Issuer::new(params.clone(), &root_key);
+            let intermediate_key = crate::signature::KeyPair::generate(algorithm).unwrap();
+            let intermediate = params.signed_by(&intermediate_key, &root_issuer).unwrap();
+            let sha256_key = Sha256(&intermediate_key);
+            let signing_key: &dyn rcgen::SigningKey = if sha256 {
+                &sha256_key
+            } else {
+                &intermediate_key
+            };
+            let issuer = Issuer::new(params, signing_key);
+            let leaf_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+            let leaf = CertificateParams::new(vec!["localhost".into()])
+                .unwrap()
+                .signed_by(&leaf_key, &issuer)
+                .unwrap();
+            let mut roots = rustls::RootCertStore::empty();
+            roots.add(root.der().clone()).unwrap();
+            let roots = Arc::new(roots);
+            let chain = [intermediate.der().clone()];
+            for rule in [None, Some(PeerCertificateRuleId::Cnsa1)] {
+                let policy = Policy {
+                    peer_certificate_rule: rule,
+                    ..one13(K::Secp384r1)
+                };
+                let server = server_cert_verifier_builder(roots.clone(), &policy)
+                    .unwrap()
+                    .build()
+                    .unwrap();
+                let client = client_cert_verifier_builder(roots.clone(), &policy)
+                    .unwrap()
+                    .build()
+                    .unwrap();
+                for result in [
+                    server
+                        .verify_server_cert(
+                            leaf.der(),
+                            &chain,
+                            &ServerName::try_from("localhost").unwrap(),
+                            &[],
+                            UnixTime::now(),
+                        )
+                        .map(|_| ()),
+                    client
+                        .verify_client_cert(leaf.der(), &chain, UnixTime::now())
+                        .map(|_| ()),
+                ] {
+                    if rule.is_none() {
+                        result.unwrap();
+                    } else {
+                        let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(
+                            rustls::OtherError(cause),
+                        )) = result.unwrap_err()
+                        else {
+                            panic!("missing intermediate-edge refusal")
+                        };
+                        assert_eq!(
+                            cause.downcast_ref::<TlsError>(),
+                            Some(&TlsError::PeerCertificate {
+                                profile: Profile::Cnsa1,
+                                violation
+                            })
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn peer_certificates_selected_path_ignores_unused_alternatives() {
+        use crate::{
+            CertificateSignature, HashAlgorithm, PeerCertificateViolation, PeerCurve, Profile,
+        };
+        use rcgen::{CertificateParams, DistinguishedName, DnType, Issuer};
+        use rustls::server::danger::ClientCertVerifier;
+        let ca_params = |name: &str| {
+            let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+            params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+            params.distinguished_name = DistinguishedName::new();
+            params.distinguished_name.push(DnType::CommonName, name);
+            params
+        };
+        let good_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let bad_key = crate::signature::KeyPair::generate(S::EcdsaP256Sha256).unwrap();
+        let good_params = ca_params("good root");
+        let bad_params = ca_params("bad root");
+        let good_root = good_params.self_signed(&good_key).unwrap();
+        let bad_root = bad_params.self_signed(&bad_key).unwrap();
+        let good_issuer = Issuer::new(good_params, &good_key);
+        let bad_issuer = Issuer::new(bad_params, &bad_key);
+        let intermediate_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let intermediate_params = ca_params("shared intermediate");
+        let good = intermediate_params
+            .signed_by(&intermediate_key, &good_issuer)
+            .unwrap();
+        let bad = intermediate_params
+            .signed_by(&intermediate_key, &bad_issuer)
+            .unwrap();
+        let issuer = Issuer::new(intermediate_params, &intermediate_key);
+        let crls: Vec<_> = [&good_issuer, &bad_issuer, &issuer]
+            .into_iter()
+            .map(|issuer| {
+                rcgen::CertificateRevocationListParams {
+                    this_update: rcgen::date_time_ymd(2020, 1, 1),
+                    next_update: rcgen::date_time_ymd(2040, 1, 1),
+                    crl_number: rcgen::SerialNumber::from(1),
+                    issuing_distribution_point: None,
+                    revoked_certs: vec![],
+                    key_identifier_method: rcgen::KeyIdMethod::Sha256,
+                }
+                .signed_by(issuer)
+                .unwrap()
+                .der()
+                .clone()
+            })
+            .collect();
+        let parsed_crls: Vec<_> = crls
+            .iter()
+            .map(|crl| {
+                webpki::CertRevocationList::from(
+                    webpki::BorrowedCertRevocationList::from_der(crl.as_ref()).unwrap(),
+                )
+            })
+            .collect();
+        let crl_refs: Vec<_> = parsed_crls.iter().collect();
+        let revocation = webpki::RevocationOptionsBuilder::new(&crl_refs)
+            .unwrap()
+            .with_expiration_policy(webpki::ExpirationPolicy::Enforce)
+            .build();
+        let leaf_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let leaf = CertificateParams::new(vec!["localhost".into()])
+            .unwrap()
+            .signed_by(&leaf_key, &issuer)
+            .unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(good_root.der().clone()).unwrap();
+        roots.add(bad_root.der().clone()).unwrap();
+        let policy = Policy {
+            peer_certificate_rule: Some(PeerCertificateRuleId::Cnsa1),
+            ..one13(K::Secp384r1)
+        };
+        let roots = Arc::new(roots);
+        for usage in [
+            webpki::KeyUsage::server_auth(),
+            webpki::KeyUsage::client_auth(),
+        ] {
+            for bad_first in [false, true] {
+                let chain = if bad_first {
+                    vec![bad.der().clone(), good.der().clone()]
+                } else {
+                    vec![good.der().clone(), bad.der().clone()]
+                };
+                let cert = webpki::EndEntityCert::try_from(leaf.der()).unwrap();
+                let path = cert
+                    .verify_for_usage(
+                        base_provider().signature_verification_algorithms.all,
+                        &roots.roots,
+                        &chain,
+                        UnixTime::now(),
+                        usage,
+                        Some(revocation),
+                        None,
+                    )
+                    .unwrap();
+                let selected: Vec<_> = path
+                    .intermediate_certificates()
+                    .map(|cert| cert.der())
+                    .collect();
+                assert_eq!(selected, vec![chain[0].clone()]);
+                let selected_root = if bad_first {
+                    bad_root.der()
+                } else {
+                    good_root.der()
+                };
+                assert_eq!(
+                    path.anchor().subject_public_key_info,
+                    webpki::anchor_from_trusted_cert(selected_root)
+                        .unwrap()
+                        .subject_public_key_info
+                );
+                for rule in [None, policy.peer_certificate_rule] {
+                    let policy = Policy {
+                        peer_certificate_rule: rule,
+                        ..policy.clone()
+                    };
+                    let server = server_cert_verifier_builder(roots.clone(), &policy)
+                        .unwrap()
+                        .with_crls(crls.clone())
+                        .enforce_revocation_expiration()
+                        .build()
+                        .unwrap();
+                    let client = client_cert_verifier_builder(roots.clone(), &policy)
+                        .unwrap()
+                        .with_crls(crls.clone())
+                        .enforce_revocation_expiration()
+                        .build()
+                        .unwrap();
+                    for result in [
+                        server
+                            .verify_server_cert(
+                                leaf.der(),
+                                &chain,
+                                &ServerName::try_from("localhost").unwrap(),
+                                &[],
+                                UnixTime::now(),
+                            )
+                            .map(|_| ()),
+                        client
+                            .verify_client_cert(leaf.der(), &chain, UnixTime::now())
+                            .map(|_| ()),
+                    ] {
+                        if bad_first && rule.is_some() {
+                            let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(
+                                rustls::OtherError(cause),
+                            )) = result.unwrap_err()
+                            else {
+                                panic!("missing selected-path refusal")
+                            };
+                            assert_eq!(
+                                cause.downcast_ref::<TlsError>(),
+                                Some(&TlsError::PeerCertificate {
+                                    profile: Profile::Cnsa1,
+                                    violation: PeerCertificateViolation::ChainSignature(
+                                        CertificateSignature::Ecdsa(
+                                            PeerCurve::P256,
+                                            HashAlgorithm::Sha256
+                                        )
+                                    )
+                                })
+                            );
+                        } else {
+                            result.unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn peer_certificates_sha256_crls_stay_baseline_with_strict_sha384_paths() {
+        use rcgen::{CertificateParams, CertificateRevocationListParams, SerialNumber};
+        use rustls::server::danger::ClientCertVerifier;
+        let key = crate::signature::KeyPair::generate(S::Rsa3072Sha384).unwrap();
+        let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+        let root = params.self_signed(&Sha256(&key)).unwrap();
+        let issuer = rcgen::Issuer::new(params.clone(), &key);
+        let sha256 = Sha256(&key);
+        let crl_issuer = rcgen::Issuer::new(params, &sha256);
+        let leaf_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let mut params = CertificateParams::new(vec!["localhost".into()]).unwrap();
+        params.serial_number = Some(SerialNumber::from(42));
+        let leaf = params.signed_by(&leaf_key, &issuer).unwrap();
+        let mut roots = rustls::RootCertStore::empty();
+        roots.add(root.der().clone()).unwrap();
+        let roots = Arc::new(roots);
+        let strict = Policy {
+            peer_certificate_rule: Some(PeerCertificateRuleId::Cnsa1),
+            ..one13(K::Secp384r1)
+        };
+        for revoked in [false, true] {
+            let crl = CertificateRevocationListParams {
+                this_update: rcgen::date_time_ymd(2020, 1, 1),
+                next_update: rcgen::date_time_ymd(2040, 1, 1),
+                crl_number: SerialNumber::from(1),
+                issuing_distribution_point: None,
+                revoked_certs: if revoked {
+                    vec![rcgen::RevokedCertParams {
+                        serial_number: SerialNumber::from(42),
+                        revocation_time: rcgen::date_time_ymd(2020, 1, 1),
+                        reason_code: None,
+                        invalidity_date: None,
+                    }]
+                } else {
+                    vec![]
+                },
+                key_identifier_method: rcgen::KeyIdMethod::Sha256,
+            }
+            .signed_by(&crl_issuer)
+            .unwrap()
+            .der()
+            .clone();
+            let server = server_cert_verifier_builder(roots.clone(), &strict)
+                .unwrap()
+                .with_crls([crl.clone()])
+                .enforce_revocation_expiration()
+                .build()
+                .unwrap();
+            let client = client_cert_verifier_builder(roots.clone(), &strict)
+                .unwrap()
+                .with_crls([crl])
+                .enforce_revocation_expiration()
+                .build()
+                .unwrap();
+            for result in [
+                server
+                    .verify_server_cert(
+                        leaf.der(),
+                        &[],
+                        &ServerName::try_from("localhost").unwrap(),
+                        &[],
+                        UnixTime::now(),
+                    )
+                    .map(|_| ()),
+                client
+                    .verify_client_cert(leaf.der(), &[], UnixTime::now())
+                    .map(|_| ()),
+            ] {
+                if revoked {
+                    assert_eq!(
+                        result,
+                        Err(rustls::Error::InvalidCertificate(
+                            rustls::CertificateError::Revoked
+                        ))
+                    );
+                } else {
+                    result.unwrap();
+                }
+            }
+            assert!(strict_client_builder(&strict, server).is_ok());
+            assert!(strict_server_builder(&strict, client).is_ok());
+        }
+    }
+
+    #[test]
+    fn peer_certificates_selected_path_chain_refusals() {
+        use crate::{
+            CertificateSignature as CS, HashAlgorithm as H, PeerCertificateViolation as E,
+            PeerCurve as EC, Profile,
+        };
+        use rustls::server::danger::ClientCertVerifier;
+        for (ca, violation) in [
+            (
+                S::EcdsaP256Sha256,
+                E::ChainSignature(CS::Ecdsa(EC::P256, H::Sha256)),
+            ),
+            (S::Rsa2048Sha384, E::IssuerKey(crate::PeerKey::Rsa(2048))),
+        ] {
+            let pki = crate::test_support::pki(ca, S::EcdsaP384Sha384).unwrap();
+            for rule in [None, Some(PeerCertificateRuleId::Cnsa1)] {
+                let policy = Policy {
+                    peer_certificate_rule: rule,
+                    ..one13(K::Secp384r1)
+                };
+                let roots = Arc::new(pki.roots.clone());
+                let server = server_cert_verifier_builder(roots.clone(), &policy)
+                    .unwrap()
+                    .build()
+                    .unwrap();
+                let client = client_cert_verifier_builder(roots, &policy)
+                    .unwrap()
+                    .build()
+                    .unwrap();
+                for result in [
+                    server
+                        .verify_server_cert(
+                            &pki.chain[0],
+                            &pki.chain[1..],
+                            &ServerName::try_from("localhost").unwrap(),
+                            &[],
+                            UnixTime::now(),
+                        )
+                        .map(|_| ()),
+                    client
+                        .verify_client_cert(&pki.chain[0], &pki.chain[1..], UnixTime::now())
+                        .map(|_| ()),
+                ] {
+                    if rule.is_none() {
+                        result.unwrap();
+                    } else {
+                        let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(
+                            rustls::OtherError(cause),
+                        )) = result.unwrap_err()
+                        else {
+                            panic!("missing typed chain cause")
+                        };
+                        assert_eq!(
+                            cause.downcast_ref::<TlsError>(),
+                            Some(&TlsError::PeerCertificate {
+                                profile: Profile::Cnsa1,
+                                violation
+                            })
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn peer_certificates_revocation_modes_survive_owned_completion() {
         use rcgen::{CertificateParams, CertificateRevocationListParams, SerialNumber};
@@ -1468,8 +1933,21 @@ mod tests {
         server_checks_client: bool,
         peer_key: S,
     ) -> Result<(), (bool, rustls::Error)> {
+        peer_certificate_chain_handshake(strict, server_checks_client, S::EcdsaP384Sha384, peer_key)
+    }
+
+    fn peer_certificate_chain_handshake(
+        strict: &Policy,
+        server_checks_client: bool,
+        peer_ca: S,
+        peer_key: S,
+    ) -> Result<(), (bool, rustls::Error)> {
         let server_pki = crate::test_support::pki(
-            S::EcdsaP384Sha384,
+            if server_checks_client {
+                S::EcdsaP384Sha384
+            } else {
+                peer_ca
+            },
             if server_checks_client {
                 S::EcdsaP384Sha384
             } else {
@@ -1478,7 +1956,11 @@ mod tests {
         )
         .unwrap();
         let client_pki = crate::test_support::pki(
-            S::EcdsaP384Sha384,
+            if server_checks_client {
+                peer_ca
+            } else {
+                S::EcdsaP384Sha384
+            },
             if server_checks_client {
                 peer_key
             } else {
@@ -1558,6 +2040,53 @@ mod tests {
             }
         }
         Ok(())
+    }
+
+    #[test]
+    fn peer_certificates_strict_completion_enforces_chain_in_both_directions() {
+        use crate::{
+            CertificateSignature as CS, HashAlgorithm as H, PeerCertificateViolation as E,
+            PeerCurve as EC, Profile,
+        };
+        for version in [V::Tls12, V::Tls13] {
+            let strict = Policy {
+                peer_certificate_rule: Some(PeerCertificateRuleId::Cnsa1),
+                versions: vec![version],
+                cipher_suites: C::ALL.to_vec(),
+                ..one13(K::Secp384r1)
+            };
+            for direction in [false, true] {
+                for (ca, violation) in [
+                    (
+                        S::EcdsaP256Sha256,
+                        E::ChainSignature(CS::Ecdsa(EC::P256, H::Sha256)),
+                    ),
+                    (S::Rsa2048Sha384, E::IssuerKey(crate::PeerKey::Rsa(2048))),
+                ] {
+                    let (detector, error) = peer_certificate_chain_handshake(
+                        &strict,
+                        direction,
+                        ca,
+                        S::EcdsaP384Sha384,
+                    )
+                    .unwrap_err();
+                    assert_eq!(detector, direction);
+                    let rustls::Error::InvalidCertificate(rustls::CertificateError::Other(
+                        rustls::OtherError(cause),
+                    )) = error
+                    else {
+                        panic!("missing typed path error")
+                    };
+                    assert_eq!(
+                        cause.downcast_ref::<TlsError>(),
+                        Some(&TlsError::PeerCertificate {
+                            profile: Profile::Cnsa1,
+                            violation
+                        })
+                    );
+                }
+            }
+        }
     }
 
     #[test]
@@ -2468,20 +2997,156 @@ mod tests {
     }
 
     #[test]
+    fn strict_cache_is_bounded_and_keeps_baseline_algorithms() {
+        use PeerCertificateRuleId::*;
+        let mut cache = HashMap::new();
+        for schemes in subsets() {
+            let set = scheme_set(&schemes).unwrap();
+            let mut reverse = schemes.clone();
+            reverse.reverse();
+            for rule in [
+                Unrestricted,
+                Preferred,
+                Cnsa2,
+                Cnsa1,
+                Bsi,
+                Fips1403,
+                Fips1402,
+            ] {
+                let key = TableKey {
+                    scheme_bits: set.bits,
+                    rule: Some(rule),
+                };
+                let first = cached_tables(&mut cache, key, &set).unwrap();
+                let again = cached_tables(&mut cache, key, &scheme_set(&reverse).unwrap()).unwrap();
+                assert!(std::ptr::eq(first.verification, again.verification));
+                let baseline = base_provider().signature_verification_algorithms;
+                assert!(std::ptr::eq(first.verification.all, baseline.all));
+                assert_eq!(
+                    first
+                        .verification
+                        .mapping
+                        .iter()
+                        .map(|(s, _)| *s)
+                        .collect::<Vec<_>>(),
+                    set.ordered
+                        .iter()
+                        .map(|s| rustls_scheme(*s))
+                        .collect::<Vec<_>>()
+                );
+            }
+        }
+        let expected = if available_schemes().len() == 11 {
+            14329
+        } else {
+            7161
+        };
+        assert_eq!(cache.len(), expected);
+        let set = scheme_set(&[T::RsaPssSha384]).unwrap();
+        let a = cached_tables(
+            &mut cache,
+            TableKey {
+                scheme_bits: set.bits,
+                rule: Some(Cnsa1),
+            },
+            &set,
+        )
+        .unwrap();
+        let b = cached_tables(
+            &mut cache,
+            TableKey {
+                scheme_bits: set.bits,
+                rule: Some(Preferred),
+            },
+            &set,
+        )
+        .unwrap();
+        assert!(!std::ptr::eq(a.verification, b.verification));
+        let empty = scheme_set(&[]).unwrap();
+        assert!(
+            cached_tables(
+                &mut cache,
+                TableKey {
+                    scheme_bits: 0,
+                    rule: Some(Cnsa1)
+                },
+                &empty
+            )
+            .is_err()
+        );
+        assert_eq!(cache.len(), expected);
+        let on = Policy {
+            peer_certificate_rule: Some(Cnsa1),
+            ..one13(K::Secp384r1)
+        };
+        let off = Policy {
+            peer_certificate_rule: None,
+            ..on.clone()
+        };
+        let on_provider = crypto_provider(&on).unwrap();
+        let off_provider = crypto_provider(&off).unwrap();
+        assert!(std::ptr::eq(
+            on_provider.signature_verification_algorithms.all,
+            off_provider.signature_verification_algorithms.all
+        ));
+        assert!(!std::ptr::addr_eq(
+            on_provider.key_provider,
+            off_provider.key_provider
+        ));
+    }
+
+    #[test]
     fn retained_cache_state_is_bounded_by_the_distinct_scheme_sets() {
+        let mut cache = HashMap::new();
         for s in subsets() {
-            crypto_provider(&with_schemes(s)).unwrap();
+            let set = scheme_set(&s).unwrap();
+            cached_tables(
+                &mut cache,
+                TableKey {
+                    scheme_bits: set.bits,
+                    rule: None,
+                },
+                &set,
+            )
+            .unwrap();
         }
         let sets = (1 << available_schemes().len()) - 1;
-        assert_eq!(cache_len(), sets);
+        assert_eq!(cache.len(), sets);
         for s in subsets() {
             let mut rev = s.clone();
             rev.reverse();
             let mut rot = s.clone();
             rot.rotate_left(1);
-            crypto_provider(&with_schemes(rev)).unwrap();
-            crypto_provider(&with_schemes(rot)).unwrap();
-            crypto_provider(&with_schemes(s.clone())).unwrap();
+            let set = scheme_set(&rev).unwrap();
+            cached_tables(
+                &mut cache,
+                TableKey {
+                    scheme_bits: set.bits,
+                    rule: None,
+                },
+                &set,
+            )
+            .unwrap();
+            let set = scheme_set(&rot).unwrap();
+            cached_tables(
+                &mut cache,
+                TableKey {
+                    scheme_bits: set.bits,
+                    rule: None,
+                },
+                &set,
+            )
+            .unwrap();
+            let set = scheme_set(&s.clone()).unwrap();
+            cached_tables(
+                &mut cache,
+                TableKey {
+                    scheme_bits: set.bits,
+                    rule: None,
+                },
+                &set,
+            )
+            .unwrap();
             let mut dup = s.clone();
             dup.push(s[0]);
             assert_eq!(
@@ -2489,7 +3154,7 @@ mod tests {
                 Some(CryptoError::PolicyDuplicate(Algorithm::Scheme(s[0])))
             );
         }
-        assert_eq!(cache_len(), sets);
+        assert_eq!(cache.len(), sets);
     }
 
     #[test]
