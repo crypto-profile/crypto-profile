@@ -465,8 +465,7 @@ fn peer_certificate_cnsa1_p256_client_tls12_sha384() -> Result<(), String> {
         let listener = TcpListener::bind("127.0.0.1:0").map_err(e)?;
         let port = listener.local_addr().map_err(e)?.port();
         let server = std::thread::spawn(move || -> Result<(), std::io::Error> {
-            let (mut sock, _) = listener.accept()?;
-            timed(&sock).map_err(std::io::Error::other)?;
+            let mut sock = accept_within(&listener).map_err(std::io::Error::other)?;
             let mut conn = rustls::ServerConnection::new(Arc::new(server_cfg))
                 .map_err(std::io::Error::other)?;
             while conn.is_handshaking() {
