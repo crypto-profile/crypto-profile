@@ -66,3 +66,9 @@ those modules move. These paths therefore resolve identically in both compilatio
 Core includes only the emitted macro definition and acquires no cryptographic dependency.
 The 4.x shell selects the direct body with the existing `crypto_profile_provider_direct`
 cfg; other backends use only macro emission.
+
+Every backend shell must expose `pub fn awslc_version() -> &'static str`, delegating
+to `aws_lc_rs::awslc_version()` to report the runtime-linked release. This is also a
+mandatory item for the 3.x shell. The linked release is independent of the certified
+release recorded by `certificate(MODULE)`; the 3.x certificate names 3.1.0 while
+the pinned 3.x build links 3.6.0.

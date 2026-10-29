@@ -37,6 +37,13 @@ pub const MODULE: Module = Module {
     },
 };
 
+/// Returns the exact runtime-linked AWS-LC release, independently of its certificate release.
+///
+/// This initializes the linked library and also reflects its version with dynamic linkage.
+pub fn awslc_version() -> &'static str {
+    aws_lc_rs::awslc_version()
+}
+
 pub(crate) fn ensure(alg: Algorithm) -> Result<(), CryptoError> {
     ensure_available(MODULE, alg)
 }
