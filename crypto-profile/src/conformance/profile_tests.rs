@@ -457,12 +457,26 @@ macro_rules! __conformance_profile_tests {
         }
 
         #[test]
-        fn rustls_refuses_pkcs1_in_a_tls13_handshake() {
+        fn a_tls13_pkcs1_only_policy_is_refused_at_build() {
             if let Some(f) = admitted(Profile::Fips1403, Options::default()) {
                 assert_eq!(
-                    verifies(&pkcs1(&f, V::Tls13), S::Rsa3072Sha384),
-                    err(NO_SCHEME)
+                    tls::crypto_provider(&pkcs1(&f, V::Tls13)).err(),
+                    Some(CryptoError::PolicyVersionUnusable {
+                        version: V::Tls13,
+                        family: Family::SignatureScheme
+                    })
                 );
+            }
+        }
+
+        #[test]
+        fn every_resolved_profile_builds_a_provider() {
+            for p in Profile::ALL {
+                for o in [Options::default(), PQ] {
+                    if let Some(r) = admitted(p, o) {
+                        assert_eq!(tls::crypto_provider(&r.tls).err(), None, "{p} {o}");
+                    }
+                }
             }
         }
 

@@ -8,6 +8,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Added
 
+- `tls::crypto_provider`, and every builder that calls it, refuses a policy that lists a version with no suite, no key-exchange group usable at it, or no signature scheme a suite at it can sign with (TLS 1.2 has no ML-KEM or hybrid group and no ML-DSA, and fixes ECDSA or RSA authentication per suite; TLS 1.3 has no RSA PKCS#1 v1.5 handshake signature), as `CryptoError::PolicyVersionUnusable { version, family }`. New public helpers: `KxGroup::usable_in`, `TlsSignatureScheme::usable_in`, `CipherSuite::signs_with`.
+
 - Opt-in `Options::peer_certificates_match_profile` checks peer leaf keys and selected certificate paths against cited profile rules. Strict TLS builders install matching crate-owned verifier handles and report typed refusals. See [decision 0007](docs/decisions/0007-peer-certificate-rules.md).
 
 - Both backends' build scripts refuse a build that does not link their bundled AWS-LC FIPS source build (the reported library name must be the bundled, version-prefixed one), so `MODULE` and `certificate()` always describe the linked module. Set `AWS_LC_FIPS_SYS_USE_SYSTEM=0` on a host with a system AWS-LC.
