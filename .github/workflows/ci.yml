@@ -29,6 +29,7 @@ jobs:
       - run: rustup toolchain install
       - run: cargo test -p crypto-profile --all-features --locked
       - run: cargo clippy -p crypto-profile --all-targets --all-features --locked -- -D warnings
+      - run: ci/build-script-tests.sh
 
   clippy:
     runs-on: ubuntu-24.04

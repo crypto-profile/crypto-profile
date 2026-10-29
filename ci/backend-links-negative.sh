@@ -3,6 +3,8 @@ set -euo pipefail
 root="$PWD"
 work="$(mktemp -d)"
 trap 'rm -rf -- "$work"' EXIT
+CARGO_NET_OFFLINE=false cargo fetch --manifest-path "$root/Cargo.toml" --locked
+CARGO_NET_OFFLINE=false cargo fetch --manifest-path "$root/crypto-profile-awslc3/Cargo.toml" --locked
 mkdir -p "$work/src"
 printf 'fn main() {}\n' > "$work/src/main.rs"
 manifest() {
@@ -26,6 +28,11 @@ packages = [p for p in json.load(sys.stdin)["packages"] if p["name"] == sys.argv
 assert len(packages) == 1 and packages[0]["links"] == "crypto-profile-backend", packages
 ' "$backend"
   manifest "$backend"
+  if [[ "$backend" == crypto-profile-awslc4 ]]; then
+    cp "$root/Cargo.lock" "$work/Cargo.lock"
+  else
+    cp "$root/$backend/Cargo.lock" "$work/Cargo.lock"
+  fi
   cargo check --manifest-path "$work/Cargo.toml" --offline
   rm -f "$work/Cargo.lock"
 done
