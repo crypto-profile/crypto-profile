@@ -11,12 +11,12 @@ crypto-profile is pre-release, and no version is supported for production use ye
 In scope is this repository's own code and its claims:
 
 - the core crate `crypto-profile`: the algorithm types, the capability table and its citations, the sealed-box framing and the conformance suite;
-- the backend `crypto-profile-awslc4`: how it selects, composes and checks AWS-LC's primitives, its TLS policy and provider construction, its key, CSR, AEAD and sealed-box code, and its FIPS checks;
+- the backends `crypto-profile-awslc4` and `crypto-profile-awslc3`: how each selects, composes and checks AWS-LC's primitives, its TLS policy and provider construction, its key, CSR, AEAD and sealed-box code, and its FIPS checks;
 - the claims the crate makes: a capability cell that misstates its source (a security policy's table, or for an `AlgorithmTested` cell the CAVP certificate it names), a certificate status that is wrong for the release, or documentation that implies a validation the crate does not have.
 
 Out of scope here, and to be reported to the project that owns the code:
 
-- **AWS-LC, aws-lc-rs and aws-lc-fips-sys:** AWS asks that potential security issues be reported through its [vulnerability reporting page](https://aws.amazon.com/security/vulnerability-reporting/), not a public GitHub issue (`aws-lc-rs-1.18.2/README.md:255-258`; `aws-lc-fips-sys-0.14.2/README.md:228-233`).
+- **AWS-LC, aws-lc-rs and aws-lc-fips-sys:** AWS asks that potential security issues be reported through its [vulnerability reporting page](https://aws.amazon.com/security/vulnerability-reporting/), not a public GitHub issue (`aws-lc-rs-1.18.2/README.md:255-258`; `aws-lc-fips-sys-0.14.2/README.md:228-233`; `aws-lc-rs-1.17.4/README.md:254-257`; `aws-lc-fips-sys-0.13.17/README.md:186-189`).
 - **rustls:** report through [rustls's GitHub security advisories](https://github.com/rustls/rustls/security/advisories/new), as its [security policy](https://github.com/rustls/rustls/blob/main/SECURITY.md) describes.
 - **rustls-webpki and rcgen:** through their own repositories' security reporting.
 

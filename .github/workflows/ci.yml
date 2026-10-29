@@ -8,14 +8,21 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   fmt:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - run: cargo fmt --all --check
       - run: cargo fmt --manifest-path crypto-profile-awslc3/Cargo.toml --all --check
@@ -24,8 +31,11 @@ jobs:
 
   core:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - run: cargo test -p crypto-profile --all-features --locked
       - run: cargo clippy -p crypto-profile --all-targets --all-features --locked -- -D warnings
@@ -33,6 +43,7 @@ jobs:
 
   clippy:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -53,6 +64,8 @@ jobs:
       CARGO_TARGET_DIR: target/${{ matrix.build.backend }}-${{ matrix.build.mode }}-${{ matrix.static }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
@@ -62,8 +75,11 @@ jobs:
 
   deny:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           command: check
@@ -71,8 +87,11 @@ jobs:
 
   deny-3:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
@@ -92,6 +111,8 @@ jobs:
       AWS_LC_FIPS_SYS_STATIC: ${{ matrix.static }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
@@ -102,6 +123,8 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - run: ci/provider-build-negative.sh
 
@@ -117,6 +140,8 @@ jobs:
       AWS_LC_FIPS_SYS_STATIC: ${{ matrix.static }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
@@ -125,6 +150,7 @@ jobs:
   test:
     name: test (${{ matrix.backend }}, ${{ matrix.platform.name }})
     runs-on: ${{ matrix.platform.os }}
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -132,6 +158,8 @@ jobs:
         platform: ${{ fromJSON(github.event.repository.private && '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"}]' || '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"},{"name":"linux-arm64-static","os":"ubuntu-24.04-arm","dynamic":"0"},{"name":"macos-arm64","os":"macos-15","dynamic":"0"}]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - name: Install build tools (Linux)
@@ -149,8 +177,11 @@ jobs:
 
   msrv:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install 1.99.1 --profile minimal
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
@@ -164,8 +195,11 @@ jobs:
         backend: [crypto-profile-awslc4, crypto-profile-awslc3]
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
@@ -179,6 +213,7 @@ jobs:
     if: ${{ !github.event.repository.private }}
     name: mutants (${{ matrix.backend }}, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:
@@ -186,6 +221,8 @@ jobs:
         shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
@@ -197,8 +234,11 @@ jobs:
 
   backend-links-negative:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - run: ci/backend-links-negative.sh
@@ -208,6 +248,8 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - run: sudo mkdir -p /opt/rust/tmp && sudo chown "$USER" /opt/rust/tmp
@@ -215,8 +257,11 @@ jobs:
 
   docs:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - run: rustup toolchain install
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - run: cargo doc --workspace --all-features --no-deps --locked
@@ -225,9 +270,11 @@ jobs:
   dco:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          persist-credentials: false
           fetch-depth: 0
       - name: Every commit carries a Signed-off-by matching its author
         run: |
