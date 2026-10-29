@@ -2024,20 +2024,24 @@ mod tests {
         .unwrap();
         let mut server = rustls::ServerConnection::new(Arc::new(server_config)).unwrap();
         while client.is_handshaking() || server.is_handshaking() {
-            let mut flight = Vec::new();
-            client.write_tls(&mut flight).unwrap();
-            let mut bytes = flight.as_slice();
+            let mut to_server = Vec::new();
+            client.write_tls(&mut to_server).unwrap();
+            let mut bytes = to_server.as_slice();
             while !bytes.is_empty() {
                 assert_ne!(server.read_tls(&mut bytes).unwrap(), 0);
                 server.process_new_packets().map_err(|e| (true, e))?;
             }
-            let mut flight = Vec::new();
-            server.write_tls(&mut flight).unwrap();
-            let mut bytes = flight.as_slice();
+            let mut to_client = Vec::new();
+            server.write_tls(&mut to_client).unwrap();
+            let mut bytes = to_client.as_slice();
             while !bytes.is_empty() {
                 assert_ne!(client.read_tls(&mut bytes).unwrap(), 0);
                 client.process_new_packets().map_err(|e| (false, e))?;
             }
+            assert!(
+                !(to_server.is_empty() && to_client.is_empty()),
+                "handshake stalled"
+            );
         }
         Ok(())
     }
