@@ -55,7 +55,7 @@ For coverage and mutation, use cargo-llvm-cov 0.8.7 and cargo-mutants 27.1.0. Us
 RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
 RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo mutants --workspace --no-shuffle
 cargo llvm-cov --manifest-path crypto-profile-awslc3/Cargo.toml --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
-(cd crypto-profile-awslc3 && cargo mutants --workspace --no-shuffle)
+ci/quality.sh mutants crypto-profile-awslc3
 ```
 
 Per-change mutation checks can use `cargo mutants --in-diff <diff>`; the final gate runs both full workspaces. Source emission validates both module indices and the nested sealbox child. Inspect the shared files directly with the 4.x direct cfg; run the macro smoke check to verify regeneration and test sensitivity.

@@ -18,22 +18,46 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - run: cargo fmt --all --check
+      - run: cargo fmt --manifest-path crypto-profile-awslc3/Cargo.toml --all --check
       - run: rustfmt --check --edition 2024 crypto-profile/src/provider/mod.rs
       - run: rustfmt --check --edition 2024 crypto-profile/src/backend_body/mod.rs
 
+  core:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - run: cargo test -p crypto-profile --all-features --locked
+      - run: cargo clippy -p crypto-profile --all-targets --all-features --locked -- -D warnings
+
   clippy:
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        static: ['1', '0']
+        build:
+          - backend: crypto-profile-awslc4
+            mode: macro
+            flags: ''
+          - backend: crypto-profile-awslc4
+            mode: direct
+            flags: --cfg crypto_profile_provider_direct
+          - backend: crypto-profile-awslc3
+            mode: macro
+            flags: ''
+    env:
+      AWS_LC_FIPS_SYS_STATIC: ${{ matrix.static }}
+      RUSTFLAGS: ${{ matrix.build.flags }}
+      CARGO_TARGET_DIR: target/${{ matrix.build.backend }}-${{ matrix.build.mode }}-${{ matrix.static }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - name: Clippy on the provider source
-        env:
-          RUSTFLAGS: --cfg crypto_profile_provider_direct
-          CARGO_TARGET_DIR: target/direct
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo clippy --manifest-path ${{ matrix.build.backend }}/Cargo.toml --all-targets --all-features --locked -- -D warnings
+      - if: matrix.build.mode == 'direct'
+        run: cargo test --manifest-path ${{ matrix.build.backend }}/Cargo.toml --all-features --locked
 
   deny:
     runs-on: ubuntu-24.04
@@ -44,15 +68,33 @@ jobs:
           command: check
           arguments: --locked
 
+  deny-3:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
+        with:
+          tool: cargo-deny@0.20.2 # Pin the checker used for the local two-root policy gate.
+      - working-directory: crypto-profile-awslc3
+        run: cargo deny --config ../deny.toml --locked check
+
   shipped-graph:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [crypto-profile-awslc4, crypto-profile-awslc3]
+        static: ['1', '0']
+    env:
+      AWS_LC_FIPS_SYS_STATIC: ${{ matrix.static }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
-      - run: ci/shipped-graph.sh
+      - run: ci/shipped-graph.sh ${{ matrix.backend }}
 
   provider-build-negative:
     runs-on: ubuntu-24.04
@@ -65,20 +107,28 @@ jobs:
   openssl-interop:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [crypto-profile-awslc4, crypto-profile-awslc3]
+        static: ['1', '0']
+    env:
+      AWS_LC_FIPS_SYS_STATIC: ${{ matrix.static }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
-      - run: ci/openssl-interop.sh
+      - run: ci/openssl-interop.sh ${{ matrix.backend }}
 
   test:
-    name: test (${{ matrix.name }})
-    runs-on: ${{ matrix.os }}
+    name: test (${{ matrix.backend }}, ${{ matrix.platform.name }})
+    runs-on: ${{ matrix.platform.os }}
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(github.event.repository.private && '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"}]' || '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"},{"name":"linux-arm64-static","os":"ubuntu-24.04-arm","dynamic":"0"},{"name":"macos-arm64","os":"macos-15","dynamic":"0"}]') }}
+        backend: [crypto-profile-awslc4, crypto-profile-awslc3]
+        platform: ${{ fromJSON(github.event.repository.private && '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"}]' || '[{"name":"linux-x86_64-static","os":"ubuntu-24.04","dynamic":"0"},{"name":"linux-x86_64-dynamic","os":"ubuntu-24.04","dynamic":"1"},{"name":"linux-arm64-static","os":"ubuntu-24.04-arm","dynamic":"0"},{"name":"macos-arm64","os":"macos-15","dynamic":"0"}]') }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: rustup toolchain install
@@ -91,10 +141,10 @@ jobs:
         run: brew install cmake go
       - name: Test
         env:
-          DYNAMIC: ${{ matrix.dynamic }}
+          DYNAMIC: ${{ matrix.platform.dynamic }}
         run: |
-          if [ "$DYNAMIC" = 1 ]; then export AWS_LC_FIPS_SYS_STATIC=0; fi
-          cargo test --workspace --all-features --locked
+          if [ "$DYNAMIC" = 1 ]; then export AWS_LC_FIPS_SYS_STATIC=0; else export AWS_LC_FIPS_SYS_STATIC=1; fi
+          cargo test --manifest-path ${{ matrix.backend }}/Cargo.toml -p ${{ matrix.backend }} --all-features --locked
 
   msrv:
     runs-on: ubuntu-24.04
@@ -104,8 +154,13 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
       - run: cargo +1.99.1 check --workspace --all-features --locked
+      - run: cargo +1.99.1 check --manifest-path crypto-profile-awslc3/Cargo.toml --all-features --locked
 
   coverage:
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [crypto-profile-awslc4, crypto-profile-awslc3]
     if: ${{ !github.event.repository.private }}
     runs-on: ubuntu-24.04
     steps:
@@ -116,17 +171,17 @@ jobs:
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-llvm-cov@0.8.7
-      - env:
-          RUSTFLAGS: --cfg crypto_profile_provider_direct
-        run: cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
+      - run: sudo mkdir -p /opt/rust/tmp && sudo chown "$USER" /opt/rust/tmp
+      - run: ci/quality.sh coverage ${{ matrix.backend }}
 
   mutants:
     if: ${{ !github.event.repository.private }}
-    name: mutants (shard ${{ matrix.shard }}/4)
+    name: mutants (${{ matrix.backend }}, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
       matrix:
+        backend: [crypto-profile-awslc4, crypto-profile-awslc3]
         shard: [0, 1, 2, 3]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -136,9 +191,35 @@ jobs:
       - uses: taiki-e/install-action@5488ac5a951645ce95062214902ac4b6bc1a1037 # v2.87.32
         with:
           tool: cargo-mutants@27.1.0
-      - env:
-          RUSTFLAGS: --cfg crypto_profile_provider_direct
-        run: cargo mutants --workspace --no-shuffle --shard ${{ matrix.shard }}/4
+      - run: sudo mkdir -p /opt/rust/tmp && sudo chown "$USER" /opt/rust/tmp
+      - run: ci/quality.sh mutants ${{ matrix.backend }} ${{ matrix.shard }}/4
+
+  backend-links-negative:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
+      - run: ci/backend-links-negative.sh
+
+  macro-mutation-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
+      - run: sudo mkdir -p /opt/rust/tmp && sudo chown "$USER" /opt/rust/tmp
+      - run: ci/macro-mutation-smoke.sh
+
+  docs:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install
+      - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
+      - run: cargo doc --workspace --all-features --no-deps --locked
+      - run: cargo doc --manifest-path crypto-profile-awslc3/Cargo.toml --all-features --no-deps --locked
 
   dco:
     if: github.event_name == 'pull_request'
