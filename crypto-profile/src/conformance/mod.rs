@@ -847,6 +847,14 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_linkage_matches_the_binary() {
+            if let Ok(intended) = std::env::var("AWS_LC_FIPS_SYS_STATIC") {
+                let expected = match intended.as_str() {
+                    "1" => Linkage::Static,
+                    "0" => Linkage::Dynamic,
+                    other => panic!("invalid intended linkage: {other:?}"),
+                };
+                assert_eq!(MODULE.linkage, expected, "{MODULE:?}");
+            }
             let lib = test_support::FIPS_LIBRARY;
             assert!($crate::conformance::__library_basename(lib), "{lib:?}");
             let named = |path: Option<&str>, file: &str| {

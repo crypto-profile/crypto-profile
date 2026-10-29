@@ -33,3 +33,32 @@ The crate's rustls `CryptoProvider` lives in a core macro, so each backend expan
 - A body file that names `crate::` requires the macro's `#[expect(clippy::crate_in_macro_def)]`.
 - A backend that glob re-exports core (`pub use crypto_profile::*`, as `crypto-profile-awslc4` does) makes the hidden `provider!` reachable from the backend's root too. It stays `#[doc(hidden)]` there and is not part of either crate's API.
 - A second backend does not carry the `#[path]` module: only `crypto-profile-awslc4` does, or each body mutant would be tested twice. A second backend instantiates `provider!` only.
+
+## Shared backend body
+
+A separate hidden `backend_body!` macro uses the same source-list validator and emitter as
+`provider!`. Its index is `crypto-profile/src/backend_body/mod.rs`. During the initial
+scaffold this index and the macro invocation are empty; the backend retains its existing
+modules. The arms bridge and root re-exports are added when their consumers move.
+
+The body index permits blanks, at most one leading purpose doc line, public declarations
+for `signature`, `csr`, `aead`, `digest`, `random`, `fips`, `tls`, and `sealbox`, private
+`mod profiles;`, and exactly `#[cfg(any(test, feature = "test-support"))]` paired with
+`pub mod test_support;`. When present, its private `backend` module imports exactly
+`crate::backend_arms::*`; macro emission replaces that bridge with its argument import.
+Both indices reject duplicate or invalid names, arbitrary attributes and items, missing
+files, and unlisted files or directories. The complete source trees trigger regeneration.
+
+The nested body file `sealbox.rs` contains exactly one `mod keys;`. The emitter validates
+`sealbox/` contains only `keys.rs` and inlines that child at its declaration. Other
+production contents of `sealbox.rs` are ordinary Rust, outside the index grammar.
+Direct compilation uses ordinary Rust child resolution and the same source files.
+
+The shared backend body permits public module children and public API items. Its paths
+also permit `pem::`, `rcgen::`, and backend-root references including `crate::signature`,
+`crate::tls`, `crate::MODULE`, and `crate::ensure`. Backends re-export the public body
+modules and `profiles::{Resolved, resolve, assert_module_approves}` at their root when
+those modules move. These paths therefore resolve identically in both compilation modes.
+Core includes only the emitted macro definition and acquires no cryptographic dependency.
+The 4.x shell selects the direct body with the existing `crypto_profile_provider_direct`
+cfg; other backends use only macro emission.
