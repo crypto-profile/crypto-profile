@@ -3,6 +3,7 @@ use crate::{Algorithm, CryptoError, Module, SignatureAlgorithm, TlsSignatureSche
 
 #[doc(hidden)]
 pub mod golden;
+mod peer_certificate_tests;
 mod profile_tests;
 
 #[doc(hidden)]

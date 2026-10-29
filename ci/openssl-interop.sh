@@ -23,4 +23,4 @@ if [ -z "${CRYPTO_PROFILE_OPENSSL:-}" ]; then
 fi
 out="$(cargo test --manifest-path "$manifest" -p "$backend" --all-features --locked --test openssl_interop -- --ignored --test-threads=1 2>&1)" || { printf '%s\n' "$out"; exit 1; }
 printf '%s\n' "$out"
-grep -qE '^test result: ok\. 2 passed; 0 failed; 0 ignored' <<<"$out" || { echo "the interop tests did not both run"; exit 1; }
+grep -qE '^test result: ok\. 4 passed; 0 failed; 0 ignored' <<<"$out" || { echo "the interop tests did not all run"; exit 1; }
