@@ -2890,12 +2890,7 @@ mod tests {
 
     #[test]
     fn tls12_with_only_post_quantum_groups_is_refused() {
-        for k in [
-            K::MlKem1024,
-            K::Secp384r1MlKem1024,
-            K::X25519MlKem768,
-            K::Secp256r1MlKem768,
-        ] {
+        for k in K::ALL.into_iter().filter(|k| k.is_post_quantum()) {
             assert!(
                 crate::capability(crate::MODULE, Algorithm::Kx(k)).available,
                 "{k:?}"
@@ -3022,15 +3017,7 @@ mod tests {
 
     #[test]
     fn kx_usability_matches_the_provider() {
-        for k in [
-            K::MlKem1024,
-            K::Secp384r1MlKem1024,
-            K::X25519MlKem768,
-            K::Secp256r1MlKem768,
-            K::Secp384r1,
-            K::Secp256r1,
-            K::X25519,
-        ] {
+        for k in K::ALL {
             for (v, wire) in [
                 (V::Tls12, rustls::ProtocolVersion::TLSv1_2),
                 (V::Tls13, rustls::ProtocolVersion::TLSv1_3),

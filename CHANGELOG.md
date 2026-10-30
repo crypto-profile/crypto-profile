@@ -9,14 +9,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Added
 
 - `tls::crypto_provider`, and every builder that calls it, refuses a policy that lists a version with no suite, no key-exchange group usable at it, or no signature scheme a suite at it can sign with (TLS 1.2 has no ML-KEM or hybrid group and no ML-DSA, and fixes ECDSA or RSA authentication per suite; TLS 1.3 has no RSA PKCS#1 v1.5 handshake signature), as `CryptoError::PolicyVersionUnusable { version, family }`. New public helpers: `KxGroup::usable_in`, `TlsSignatureScheme::usable_in`, `CipherSuite::signs_with`.
-
 - Opt-in `Options::peer_certificates_match_profile` checks peer leaf keys and selected certificate paths against cited profile rules. Strict TLS builders install matching crate-owned verifier handles and report typed refusals. See [decision 0007](docs/decisions/0007-peer-certificate-rules.md).
-
 - Both backends' build scripts refuse a build that does not link their bundled AWS-LC FIPS source build (the reported library name must be the bundled, version-prefixed one), so `MODULE` and `certificate()` always describe the linked module. Set `AWS_LC_FIPS_SYS_USE_SYSTEM=0` on a host with a system AWS-LC.
-
 - The `crypto-profile-awslc3` backend, in its own workspace and lockfile, builds AWS-LC 3.6.0 from the FIPS 3.x line; its 3.1.0 release has CMVP certificates #5314 (static) and #5298 (dynamic). Both backends expose `awslc_version()` separately from certificate data and share provider and backend-body source. Exactly one backend can enter a build graph.
 - Profile resolution records unavailable line entries in `Selection::excluded` and `Resolved::excluded`; an empty family is refused. On 3.x, `cnsa2` is refused and ML-DSA is excluded from the applicable successful profiles. Approval remains a separate check.
-
 - The core crate `crypto-profile`, with no aws-lc dependency:
   - exhaustive algorithm types: `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `TlsVersion` and `Algorithm`, with literal IANA codepoints (`iana()`), the canonical TLS signature-scheme order (`TlsSignatureScheme::preference`) and X.509 signature OIDs (`signature_oid()`), and `FromStr` and `Display` for `SignatureAlgorithm`;
   - the capability model: `Module { line, linkage }`, `certificate()` and `capability()`, where each 3.x cell cites the AWS-LC FIPS 3.1.0 security policy of its own certificate, #5314 (static) or #5298 (dynamic): an `Approved` cell cites Table 5 (pp. 8-11), a `NotApproved` cell cites its absence from Tables 5-8, and the hybrid key-exchange groups and TLS 1.3 are `Unverified`, with no source; every 4.x static cell is `Unverified`, and each 4.x dynamic cell is `Approval::AlgorithmTested`, citing the one AWS-LC FIPS 4.0.0 CAVP certificate that shows every operation it needs, or `Unverified` (decision record 0004); `AlgorithmTested`, like `Unverified`, is never approved;

@@ -472,7 +472,11 @@ macro_rules! __conformance_profile_tests {
         #[test]
         fn every_resolved_profile_builds_a_provider() {
             for p in Profile::ALL {
-                for o in [Options::default(), PQ] {
+                for (pq, peer) in [(false, false), (true, false), (false, true), (true, true)] {
+                    let o = Options {
+                        pq_key_exchange_required: pq,
+                        peer_certificates_match_profile: peer,
+                    };
                     if let Some(r) = admitted(p, o) {
                         assert_eq!(tls::crypto_provider(&r.tls).err(), None, "{p} {o}");
                     }

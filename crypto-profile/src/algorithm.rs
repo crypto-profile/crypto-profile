@@ -172,12 +172,12 @@ pub enum TlsSignatureScheme {
 impl TlsSignatureScheme {
     /// Whether a handshake at `v` can sign with this scheme. RFC 8446 §4.2.3 excludes RSA
     /// PKCS#1 v1.5 from TLS 1.3 handshake signatures; ML-DSA is defined for TLS 1.3 only.
-    pub fn usable_in(self, v: TlsVersion) -> bool {
+    pub const fn usable_in(self, v: TlsVersion) -> bool {
         match self {
             TlsSignatureScheme::RsaPkcs1Sha256
             | TlsSignatureScheme::RsaPkcs1Sha384
-            | TlsSignatureScheme::RsaPkcs1Sha512 => v == TlsVersion::Tls12,
-            TlsSignatureScheme::MlDsa87 => v == TlsVersion::Tls13,
+            | TlsSignatureScheme::RsaPkcs1Sha512 => matches!(v, TlsVersion::Tls12),
+            TlsSignatureScheme::MlDsa87 => matches!(v, TlsVersion::Tls13),
             TlsSignatureScheme::EcdsaNistp256Sha256
             | TlsSignatureScheme::EcdsaNistp384Sha384
             | TlsSignatureScheme::EcdsaNistp521Sha512
@@ -284,7 +284,7 @@ impl CipherSuite {
     /// Whether a handshake under this suite can sign with `t`. A TLS 1.2 suite fixes the
     /// authentication algorithm (ECDSA or EdDSA for `EcdheEcdsa`, RSA for `EcdheRsa`); a TLS 1.3
     /// suite does not.
-    pub fn signs_with(self, t: TlsSignatureScheme) -> bool {
+    pub const fn signs_with(self, t: TlsSignatureScheme) -> bool {
         use TlsSignatureScheme as T;
         match self {
             CipherSuite::Tls13Aes256GcmSha384
@@ -395,7 +395,7 @@ pub enum KxGroup {
 impl KxGroup {
     /// Whether a handshake at `v` can use this group. TLS 1.2 has no ML-KEM or hybrid key
     /// exchange.
-    pub fn usable_in(self, v: TlsVersion) -> bool {
+    pub const fn usable_in(self, v: TlsVersion) -> bool {
         match v {
             TlsVersion::Tls13 => true,
             TlsVersion::Tls12 => match self {

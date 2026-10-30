@@ -8,7 +8,7 @@ if AWS_LC_FIPS_SYS_NO_PREFIX=1 CARGO_TARGET_DIR="$work/target" \
   echo "FAIL crypto-profile-awslc4 built with an unprefixed module name" >&2
   exit 1
 fi
-if ! grep -q 'AWS_LC_FIPS_SYS_USE_SYSTEM=0' "$work/build.log"; then
+if ! grep -q 'crypto-profile-awslc4: the linked FIPS module is not the bundled' "$work/build.log"; then
   echo "FAIL crypto-profile-awslc4 failed for another reason:" >&2
   tail -20 "$work/build.log" >&2
   exit 1
