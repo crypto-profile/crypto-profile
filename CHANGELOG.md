@@ -36,16 +36,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `test_support::FIPS_LIBRARY`, the FIPS module's crypto library name, taken from aws-lc-rs's link metadata by the build script; the build fails if aws-lc-rs does not report it or reports anything but the bundled, version-prefixed name;
   - the `rustls` re-export, and `rcgen` under the `test-support` feature.
 - Known-answer tests: Wycheproof (ECDSA, Ed25519, RSA PKCS#1 v1.5 SHA-384, ML-DSA-87, AES-GCM), NIST CAVP SHA-2, RFC 8032 and a sealed-box version-1 blob.
-- Documentation: `docs/usage.md`, `docs/profiles.md`, `CONTRIBUTING.md` (with the Developer Certificate of Origin and the AI-assistance disclosure), `SECURITY.md`, decision records 0001 to 0004 and the pull request template.
+- Documentation: `docs/usage.md`, `docs/profiles.md`, `CONTRIBUTING.md` (with the Developer Certificate of Origin and the AI-assistance disclosure), `SECURITY.md`, decision records 0001 to 0004, the pull request template, `CODE_OF_CONDUCT.md` (the Contributor Covenant 2.1) and issue templates.
 - `docs/sources.md`: every document a profile, citation or capability cell depends on, with the edition followed, the issuer's link and the SHA-256 of the copy the maintainers read; linked from `docs/profiles.md` and the README.
 - The crate's own rustls `CryptoProvider`: written once in core and emitted by the core `provider!` macro, which `crypto-profile-awslc4` instantiates (decision record 0005). The cryptography is the module's through aws-lc-rs; rustls supplies the TLS protocol.
 - QUIC on the provider's TLS 1.3 suites: packet and header protection and RFC 9001's packet limits, ported from rustls's built-in aws-lc-rs provider, so `rustls::quic` connections (HTTP/3, for example) keep working as they did on rustls's own suites; tested against RFC 9001 Appendix A, a QUIC handshake and rustls's suites (#12).
 - `KxGroup::Secp384r1MlKem1024` (SecP384r1MLKEM1024, 0x11ED, RFC 10024), `Unverified` on every module, in `unrestricted`, `preferred` and `fips1403`.
 - `crypto-profile-awslc4/tests/differential.rs`, which checks the provider against rustls's built-in one; `ci/shipped-graph.sh`, which refuses a stock rustls provider in the shipped graph; and the OpenSSL interop test (`crypto-profile-awslc4/tests/openssl_interop.rs`, `ci/openssl-interop.sh`), which negotiates SecP384r1MLKEM1024 with OpenSSL 3.5 in both directions.
+- CI tests both backends on Linux x86_64 (static and dynamic), Linux aarch64 (static) and macOS arm64 (dynamic).
+- From 0.9.1, releases are cut from a `v*` tag on `main` and published through crates.io trusted publishing. Each `.crate` gets a build-provenance attestation, made only after the file crates.io serves matches the package built from the tagged commit. 0.9.0 is published by hand, because trusted publishing cannot make a crate's first release.
 
 ### Changed
 
 - `crypto-profile-awslc4` builds rustls with `std` and `tls12` only, so the re-exported `rustls` no longer has a built-in provider: `rustls::crypto::aws_lc_rs` (with its `Ticketer`, `hpke`, `cipher_suite`, `kx_group` and `sign`) and `rustls::crypto::default_fips_provider` are gone, and `ClientConfig::builder()`, `ServerConfig::builder()` and the WebPKI verifiers' `builder()` no longer install a provider: they panic unless one is installed as the process default (`tls::install_default`), or the features another crate in the build unifies onto rustls name exactly one of `aws_lc_rs` and `ring` and not `custom-provider`, in which case they install rustls's stock provider.
+
+### Known issues
+
+- On aarch64 (Linux and macOS, both module lines), the AWS-LC FIPS module refuses two valid Wycheproof P-256/SHA-256 signatures: s = 2^128 and s = n - 2^128 ([#24](https://github.com/crypto-profile/crypto-profile/issues/24), reported as [aws/aws-lc#3715](https://github.com/aws/aws-lc/issues/3715)).
+  - The refusal fails closed, and no invalid signature is accepted on any target.
+  - An honest signature takes either value with probability about 2^-255.
+  - The conformance suite pins both refusals, so it fails once a module fixes them.
 
 ### Known 0.x items
 
