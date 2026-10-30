@@ -3050,7 +3050,9 @@ mod tests {
             for t in T::ALL {
                 let provider = match rustls_suite(c) {
                     rustls::SupportedCipherSuite::Tls12(s) => s.sign.contains(&rustls_scheme(t)),
-                    rustls::SupportedCipherSuite::Tls13(_) => t.usable_in(V::Tls13),
+                    rustls::SupportedCipherSuite::Tls13(_) => {
+                        !matches!(t, T::RsaPkcs1Sha256 | T::RsaPkcs1Sha384 | T::RsaPkcs1Sha512)
+                    }
                 };
                 assert_eq!(c.signs_with(t), provider, "{c:?} {t:?}");
             }
