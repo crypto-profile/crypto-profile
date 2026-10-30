@@ -10,6 +10,7 @@ updates:
       semver-minor-days: 5
       semver-major-days: 10
     open-pull-requests-limit: 5
+    labels: [dependencies, rust]
     commit-message:
       prefix: build
       include: scope
@@ -27,6 +28,7 @@ updates:
       semver-minor-days: 5
       semver-major-days: 10
     open-pull-requests-limit: 5
+    labels: [dependencies, rust, "backend: awslc3"]
     commit-message:
       prefix: build
       include: scope
@@ -46,6 +48,7 @@ updates:
       interval: weekly
     cooldown:
       default-days: 5
+    labels: [dependencies, github-actions]
     commit-message:
       prefix: ci
     groups:
