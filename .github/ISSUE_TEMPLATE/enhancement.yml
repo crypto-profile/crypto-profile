@@ -1,0 +1,14 @@
+name: Enhancement
+description: A change to behavior, an algorithm, or a profile.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem, not the solution
+    validations: { required: true }
+  - type: textarea
+    id: source
+    attributes:
+      label: Governing text, for a profile change
+      description: A regime-named profile moves only when its issuer publishes a new edition (docs/profiles.md section 8). Name the document, its edition and the section.
