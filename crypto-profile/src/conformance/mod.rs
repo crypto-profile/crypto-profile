@@ -610,7 +610,14 @@ macro_rules! conformance_tests {
                                     "{a} tcId {id}: not an e=65537 key of the algorithm's size"
                                 );
                             }
-                            assert!(ok || !available, "{a} tcId {id}: valid but refused");
+                            if module_refuses(a, id) {
+                                assert!(
+                                    !ok,
+                                    "{a} tcId {id}: now accepted; drop it from module_refuses (#24)"
+                                );
+                            } else {
+                                assert!(ok || !available, "{a} tcId {id}: valid but refused");
+                            }
                         }
                         "invalid" => {
                             invalid += 1;
@@ -622,6 +629,13 @@ macro_rules! conformance_tests {
                 }
                 assert_eq!((valid, invalid), want, "{a}");
             }
+        }
+
+        // AWS-LC refuses these valid P-256 signatures on aarch64 (#24).
+        fn module_refuses(a: SignatureAlgorithm, id: u64) -> bool {
+            cfg!(target_arch = "aarch64")
+                && matches!(a, SignatureAlgorithm::EcdsaP256Sha256)
+                && matches!(id, 483 | 484)
         }
 
         fn rsa_public_len(a: SignatureAlgorithm) -> Option<usize> {
