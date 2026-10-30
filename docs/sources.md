@@ -2,12 +2,30 @@
 
 This page lists every document a profile, citation or capability cell depends on, with the edition the crate follows, the issuer's link, and the SHA-256 of the exact copy the maintainers read, so a reader can confirm they hold the same text: issuers revise documents at the same URL. A profile follows the edition listed here, and changes only through a reviewed change when the issuer publishes a new one ([`docs/profiles.md`](profiles.md) section 8).
 
-## United States
+¹ A web page with no fixed edition, read but not stored, so there is no hash.
+
+Jurisdictions: [Australia](#australia) · [Canada](#canada) · [European Union](#european-union) · [Germany](#germany) · [United Kingdom](#united-kingdom) · [United States](#united-states)
+
+Standards and evidence: [NIST and CMVP](#nist-and-cmvp) · [IETF](#ietf) · [Interoperability](#interoperability) · [CAVP certificates](#cavp-certificates) · [3.x backend provenance](#3x-backend-provenance)
+
+## Australia
 
 | Document | Issuer | Edition | Link | Used by | SHA-256 |
 |---|---|---|---|---|---|
-| CNSSP 15, Use of Public Standards for Secure Information Sharing (CNSA 2.0 edition) | CNSS | December 2024 (signed 2025-02-28) | <https://www.cnss.gov/CNSS/issuances/Policies.cfm> | `cnsa2` (Annex B, pp. B-1 to B-2); `cnsa1` dates (para. 18, p. 8); `docs/profiles.md` section 7 | `0faf4a9336a1b310987b3b57bd7fed37aa3232ff68ded3cae556bf67aa314c1c` |
-| CNSSP 15, Use of Public Standards for Secure Information Sharing (CNSA 1.0 edition) | CNSS | 20 October 2016 | <https://www.cnss.gov/CNSS/issuances/Policies.cfm> | `cnsa1` (Annex B algorithms) | `862a6c5e9e4d3ee669b8a388b83d7f9c0b661d06af6e8cbabc5222ce51839dc0` |
+| Information security manual, Guidelines for cryptography | ASD / ACSC | September 2026 (first published 7 September 2026) | Edition: <https://www.cyber.gov.au/ism/2026-09><br>Guideline: <https://www.cyber.gov.au/ism/2026-09/guidelines-for-cryptography> | `preferred` (ISM-cited cells); `docs/profiles.md` sections 3, 4 and 7 | `de582a6a541f9221dce77e36bd13418694bd6514de9ba2f54c75eed9aa550ac2` |
+
+## Canada
+
+| Document | Issuer | Edition | Link | Used by | SHA-256 |
+|---|---|---|---|---|---|
+| Roadmap for the migration to post-quantum cryptography for the Government of Canada (ITSM.40.001) | CCCS | June 2025 | <https://www.cyber.gc.ca/en/guidance/roadmap-migration-post-quantum-cryptography-government-canada-itsm40001> | `docs/profiles.md` section 7 (Canada) | —¹ |
+| Cryptographic algorithms for UNCLASSIFIED, PROTECTED A, PROTECTED B information (ITSP.40.111) | CCCS | Version 5, 29 May 2026 | <https://www.cyber.gc.ca/en/guidance/cryptographic-algorithms-unclassified-protected-protected-b-information-itsp40111> | `docs/profiles.md` section 7 (Canada) | —¹ |
+
+## European Union
+
+| Document | Issuer | Edition | Link | Used by | SHA-256 |
+|---|---|---|---|---|---|
+| A Coordinated Implementation Roadmap for the Transition to Post-Quantum Cryptography | EU NIS Cooperation Group / European Commission | v1.1, 11 June 2025 | <https://ec.europa.eu/newsroom/dae/redirection/document/117507> | `docs/profiles.md` section 7 (EU) | `e76b0ea3abe5606e71d49c154a2fe1422413b5c31d0cc8dbf87a74263ead00ea` |
 
 ## Germany
 
@@ -16,23 +34,19 @@ This page lists every document a profile, citation or capability cell depends on
 | TR-02102-1, Cryptographic Mechanisms: Recommendations and Key Lengths | BSI | Version 2026-01 (23 January 2026) | <https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TG02102/BSI-TR-02102-1.pdf?__blob=publicationFile> | `bsi` | `f601cdf25c000b431573a307a3c125f3c51d301897089e7e63dde0449367a62a` |
 | TR-02102-2, Use of Transport Layer Security (TLS) | BSI | Version 2026-01 (27 January 2026) | <https://www.bsi.bund.de/SharedDocs/Downloads/EN/BSI/Publications/TechGuidelines/TG02102/BSI-TR-02102-2.pdf?__blob=publicationFile> | `bsi` | `a7f55c3403d45719287415d2698bf51e629aafe841e2e9867e8afe8749d238e5` |
 
-## Australia
+## United Kingdom
 
 | Document | Issuer | Edition | Link | Used by | SHA-256 |
 |---|---|---|---|---|---|
-| Information security manual, Guidelines for cryptography | ASD / ACSC | September 2026 (first published 7 September 2026) | Edition: <https://www.cyber.gov.au/ism/2026-09><br>Guideline: <https://www.cyber.gov.au/ism/2026-09/guidelines-for-cryptography> | `preferred` (ISM-cited cells); `docs/profiles.md` sections 3, 4 and 7 | `de582a6a541f9221dce77e36bd13418694bd6514de9ba2f54c75eed9aa550ac2` |
-
-## European Union / United Kingdom / Canada
-
-| Document | Issuer | Edition | Link | Used by | SHA-256 |
-|---|---|---|---|---|---|
-| A Coordinated Implementation Roadmap for the Transition to Post-Quantum Cryptography | EU NIS Cooperation Group / European Commission | v1.1, 11 June 2025 | <https://ec.europa.eu/newsroom/dae/redirection/document/117507> | `docs/profiles.md` section 7 (EU) | `e76b0ea3abe5606e71d49c154a2fe1422413b5c31d0cc8dbf87a74263ead00ea` |
 | Timelines for migration to post-quantum cryptography | NCSC (UK) | v1.0, 2025; PDF of August 2026 | <https://www.ncsc.gov.uk/guidance/pqc-migration-timelines> | `docs/profiles.md` section 7 (UK) | —¹ |
 | Using Transport Layer Security to protect data | NCSC (UK) | v1.2, 15 October 2026 | <https://www.ncsc.gov.uk/guidance/using-tls-to-protect-data> | `docs/profiles.md` section 7 (UK) | —¹ |
-| Roadmap for the migration to post-quantum cryptography for the Government of Canada (ITSM.40.001) | CCCS | June 2025 | <https://www.cyber.gc.ca/en/guidance/roadmap-migration-post-quantum-cryptography-government-canada-itsm40001> | `docs/profiles.md` section 7 (Canada) | —¹ |
-| Cryptographic algorithms for UNCLASSIFIED, PROTECTED A, PROTECTED B information (ITSP.40.111) | CCCS | Version 5, 29 May 2026 | <https://www.cyber.gc.ca/en/guidance/cryptographic-algorithms-unclassified-protected-protected-b-information-itsp40111> | `docs/profiles.md` section 7 (Canada) | —¹ |
 
-¹ A web page with no fixed edition, read but not stored, so there is no hash.
+## United States
+
+| Document | Issuer | Edition | Link | Used by | SHA-256 |
+|---|---|---|---|---|---|
+| CNSSP 15, Use of Public Standards for Secure Information Sharing (CNSA 2.0 edition) | CNSS | December 2024 (signed 2025-02-28) | <https://www.cnss.gov/CNSS/issuances/Policies.cfm> | `cnsa2` (Annex B, pp. B-1 to B-2); `cnsa1` dates (para. 18, p. 8); `docs/profiles.md` section 7 | `0faf4a9336a1b310987b3b57bd7fed37aa3232ff68ded3cae556bf67aa314c1c` |
+| CNSSP 15, Use of Public Standards for Secure Information Sharing (CNSA 1.0 edition) | CNSS | 20 October 2016 | <https://www.cnss.gov/CNSS/issuances/Policies.cfm> | `cnsa1` (Annex B algorithms) | `862a6c5e9e4d3ee669b8a388b83d7f9c0b661d06af6e8cbabc5222ce51839dc0` |
 
 ## NIST and CMVP
 

@@ -1,8 +1,10 @@
 # crypto-profile
 
-Named cryptographic profiles for Rust: a policy layer and a [rustls](https://github.com/rustls/rustls) `CryptoProvider` over [aws-lc-rs](https://github.com/aws/aws-lc-rs).
+[![CI](https://github.com/crypto-profile/crypto-profile/actions/workflows/ci.yml/badge.svg)](https://github.com/crypto-profile/crypto-profile/actions/workflows/ci.yml)
+[![Rust](https://img.shields.io/crates/msrv/crypto-profile?logo=rust&label=rust)](Cargo.toml)
+[![License](https://img.shields.io/crates/l/crypto-profile)](#licensing)
 
-> **Status: pre-release, and the repository is private.** The API will change before 0.1. Nothing is published to crates.io.
+Named cryptographic profiles for Rust: a policy layer and a [rustls](https://github.com/rustls/rustls) `CryptoProvider` over [aws-lc-rs](https://github.com/aws/aws-lc-rs).
 
 ## What it is
 
