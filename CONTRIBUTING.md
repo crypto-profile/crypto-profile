@@ -19,6 +19,8 @@ These rules apply to every contributor, human or AI-assisted. [`docs/usage.md`](
 
 Run these gates for both workspaces. The root lockfile covers core and 4.x; 3.x has its own lockfile. Use `--locked` so a gate cannot silently change either resolution. Clear target-qualified `AWS_LC_FIPS_SYS_STATIC_<target>` variables before selecting a linkage. Use separate target directories for static and dynamic builds.
 
+Releases are cut by pushing a `vX.Y.Z` tag on a commit already on `main`; `release.yml` verifies ancestry, lockstep and packaging, then publishes after the maintainer approves the `release` environment. `ci/package.sh` packages committed files, so commit before running it.
+
 ```sh
 cargo fmt --all --check
 cargo fmt --manifest-path crypto-profile-awslc3/Cargo.toml --all --check
@@ -40,6 +42,8 @@ ci/provider-build-negative.sh
 ci/backend-links-negative.sh
 ci/module-guard-negative.sh
 ci/build-script-tests.sh
+ci/release-lockstep.sh
+ci/package.sh "$(mktemp -d)"
 ci/macro-mutation-smoke.sh
 cargo deny --locked check
 (cd crypto-profile-awslc3 && cargo deny --config ../deny.toml --locked check)
