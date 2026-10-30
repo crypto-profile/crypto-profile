@@ -196,6 +196,8 @@ The conformance suite (`crypto-profile/src/conformance/`, run by every backend) 
 | SHA-256, SHA-384, SHA-512 | NIST CAVP byte-oriented short messages |
 | Sealed box | a version-1 known-answer blob from an independent implementation, which must open unchanged |
 
+**A module refusal on aarch64 ([#24](https://github.com/crypto-profile/crypto-profile/issues/24)).** On every aarch64 target, both module lines refuse two valid Wycheproof P-256/SHA-256 signatures: tcId 483 (s = 2^128) and tcId 484 (s = n - 2^128). The refusal fails closed, and no invalid signature is accepted on any target. An honest signature lands on either value with probability about 2^-255. The conformance test asserts both refusals on aarch64, so it fails once a module fixes them.
+
 Gaps, and what covers them instead:
 - **ECDSA P-521/SHA-384** has no Wycheproof file. Its signatures are checked by the CSR test, which verifies every algorithm's CSR signature (`crypto-profile/src/backend_body/csr.rs`, `every_algorithm_signs_a_request_for_its_own_key`): on 4.x with rustls-webpki, on 3.x with the crate's own verifiers, because rustls-webpki's aws-lc-rs verifiers need aws-lc-rs 1.18. The 3.x check is therefore not independent; independence rests on the 4.x differential test, which compares the shared verifiers with the upstream ones.
 - **ML-DSA** has no 3.x known answers: every ML-DSA operation is refused as unavailable.
