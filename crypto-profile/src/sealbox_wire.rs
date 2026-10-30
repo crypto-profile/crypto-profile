@@ -42,8 +42,9 @@ pub fn parse_blob(blob: &[u8]) -> Result<BlobParts<'_>, CryptoError> {
     if blob[1] != UNCOMPRESSED_POINT {
         return Err(CryptoError::SealEphemeralKey);
     }
-    let mut nonce = [0u8; NONCE_LEN];
-    nonce.copy_from_slice(&blob[1 + EPHEMERAL_KEY_LEN..HEADER_LEN]);
+    let nonce = blob[1 + EPHEMERAL_KEY_LEN..HEADER_LEN]
+        .try_into()
+        .map_err(|_| CryptoError::SealBlob)?;
     Ok(BlobParts {
         ephemeral: &blob[1..1 + EPHEMERAL_KEY_LEN],
         nonce,
