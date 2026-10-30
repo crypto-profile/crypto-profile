@@ -1,0 +1,51 @@
+name: Bug report
+description: A defect, with the reproduction first.
+labels: [bug]
+body:
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The smallest code or command sequence that shows the defect. A failing test is ideal.
+    validations: { required: true }
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected versus observed
+      description: Include the exact error, for example the `CryptoError` variant.
+    validations: { required: true }
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Backend
+      options:
+        - crypto-profile-awslc4
+        - crypto-profile-awslc3
+        - core only (crypto-profile)
+    validations: { required: true }
+  - type: dropdown
+    id: linkage
+    attributes:
+      label: Linkage
+      options:
+        - static (the Linux default)
+        - dynamic
+        - not sure
+    validations: { required: true }
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      placeholder: Linux x86_64 / aarch64 or macOS arm64; distribution and version
+    validations: { required: true }
+  - type: input
+    id: versions
+    attributes:
+      label: Crate version and rustc version
+      placeholder: 0.9.0; rustc 1.99.1
+    validations: { required: true }
+  - type: input
+    id: profile
+    attributes:
+      label: Profile and Options, if relevant
+      placeholder: "cnsa2, Options { pq_key_exchange_required: true, .. }"
