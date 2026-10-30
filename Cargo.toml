@@ -4,12 +4,14 @@ exclude = ["crypto-profile-awslc3"]
 members = ["crypto-profile", "crypto-profile-awslc4"]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.9.0"
 edition = "2024"
 rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/crypto-profile/crypto-profile"
-publish = false
+readme = "README.md"
+keywords = ["fips", "tls", "rustls", "cryptography", "aws-lc"]
+categories = ["cryptography", "network-programming"]
 
 [workspace.lints.rust]
 unsafe_code = "forbid"

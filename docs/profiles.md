@@ -2,7 +2,7 @@
 
 A profile is an algorithm set, not a validation claim. It names the protocol versions, cipher suites, key-exchange groups, handshake signature schemes and key algorithms a text admits. Whether the running module is validated for that set is a separate call, `assert_module_approves`, which fails closed; on the 4.x module it fails today, because a cell is `Approved` only where a published security policy lists it (section 6).
 
-The profiles are 0.x API: their names and contents may change before 0.1. The contents below match the constants in `crypto-profile/src/profile.rs`, whose doc comments carry each entry's citation.
+The profiles are 0.x API: their names and contents may change before 1.0. The contents below match the constants in `crypto-profile/src/profile.rs`, whose doc comments carry each entry's citation.
 
 ## 1. Using a profile
 
