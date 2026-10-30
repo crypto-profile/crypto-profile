@@ -266,7 +266,9 @@ fn validate(
 /// A provider carrying exactly `p`. It refuses, in this order: an empty version, group or scheme
 /// list; a duplicate entry in any list, naming the first one found in versions, suites, groups,
 /// then schemes; an unavailable algorithm; and a suite list left empty once suites of unlisted
-/// versions are dropped. A key loaded through its key provider signs only with a scheme in
+/// versions are dropped; then, for each listed version in policy order, a version with no suite,
+/// no group usable at it, or no scheme a suite at it can sign with, checked in that order
+/// (`PolicyVersionUnusable`). A key loaded through its key provider signs only with a scheme in
 /// `p.signature_schemes`.
 pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     let schemes = validate(p, ensure)?;
@@ -278,6 +280,31 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
         .collect();
     if suites.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::CipherSuite));
+    }
+    for v in &p.versions {
+        let refuse = |family| CryptoError::PolicyVersionUnusable {
+            version: *v,
+            family,
+        };
+        let at_v: Vec<C> = p
+            .cipher_suites
+            .iter()
+            .copied()
+            .filter(|c| c.version() == *v)
+            .collect();
+        if at_v.is_empty() {
+            return Err(refuse(Family::CipherSuite));
+        }
+        if !p.kx_groups.iter().any(|k| k.usable_in(*v)) {
+            return Err(refuse(Family::KxGroup));
+        }
+        if !p
+            .signature_schemes
+            .iter()
+            .any(|t| at_v.iter().any(|c| c.signs_with(*t)))
+        {
+            return Err(refuse(Family::SignatureScheme));
+        }
     }
     let tables = tables_for_rule(&schemes, p.peer_certificate_rule)?;
     Ok(CryptoProvider {
@@ -2812,7 +2839,20 @@ mod tests {
             chosen(&rsa(&[T::RsaPssSha256, T::RsaPssSha384]), a, &offer),
             Some(0x0805)
         );
-        assert_eq!(chosen(&rsa(&[T::RsaPkcs1Sha384]), a, &offer), None);
+        let pkcs1_tls12 = policy(
+            &[V::Tls12],
+            &[C::Tls12EcdheRsaAes256GcmSha384],
+            &[K::Secp384r1],
+            &[T::RsaPkcs1Sha384],
+        );
+        assert_eq!(chosen(&pkcs1_tls12, a, &offer), None);
+        assert_eq!(
+            crypto_provider(&rsa(&[T::RsaPkcs1Sha384])).err(),
+            Some(CryptoError::PolicyVersionUnusable {
+                version: V::Tls13,
+                family: Family::SignatureScheme
+            })
+        );
         if crate::capability(crate::MODULE, Algorithm::Scheme(T::MlDsa87)).available {
             assert_eq!(
                 chosen(&rsa(&[T::MlDsa87]), S::EcdsaP384Sha384, &T::ALL),
@@ -2825,6 +2865,184 @@ mod tests {
                 crypto_provider(&unavailable).err(),
                 Some(CryptoError::Unavailable(Algorithm::Scheme(T::MlDsa87)))
             );
+        }
+    }
+
+    fn lit(versions: &[V], suites: &[C], kx: &[K], schemes: &[T]) -> Policy {
+        Policy {
+            peer_certificate_rule: None,
+            versions: versions.to_vec(),
+            cipher_suites: suites.to_vec(),
+            kx_groups: kx.to_vec(),
+            signature_schemes: schemes.to_vec(),
+        }
+    }
+
+    fn unusable(version: V, family: Family) -> Option<CryptoError> {
+        Some(CryptoError::PolicyVersionUnusable { version, family })
+    }
+
+    fn ml_dsa() -> bool {
+        crate::capability(crate::MODULE, Algorithm::Scheme(T::MlDsa87)).available
+    }
+
+    const BOTH_SUITES: [C; 2] = [C::Tls13Aes256GcmSha384, C::Tls12EcdheEcdsaAes256GcmSha384];
+
+    #[test]
+    fn tls12_with_only_post_quantum_groups_is_refused() {
+        for k in K::ALL.into_iter().filter(|k| k.is_post_quantum()) {
+            assert!(
+                crate::capability(crate::MODULE, Algorithm::Kx(k)).available,
+                "{k:?}"
+            );
+            let q = lit(
+                &[V::Tls12, V::Tls13],
+                &BOTH_SUITES,
+                &[k],
+                &[T::EcdsaNistp384Sha384],
+            );
+            assert_eq!(
+                crypto_provider(&q).err(),
+                unusable(V::Tls12, Family::KxGroup),
+                "{k:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_listed_version_without_a_suite_is_refused() {
+        let q = lit(
+            &[V::Tls12, V::Tls13],
+            &[C::Tls13Aes256GcmSha384],
+            &[K::Secp384r1],
+            &[T::EcdsaNistp384Sha384],
+        );
+        assert_eq!(
+            crypto_provider(&q).err(),
+            unusable(V::Tls12, Family::CipherSuite)
+        );
+    }
+
+    #[test]
+    fn tls13_with_only_pkcs1_schemes_is_refused() {
+        let q = lit(
+            &[V::Tls13],
+            &[C::Tls13Aes256GcmSha384],
+            &[K::Secp384r1],
+            &[T::RsaPkcs1Sha256, T::RsaPkcs1Sha384, T::RsaPkcs1Sha512],
+        );
+        assert_eq!(
+            crypto_provider(&q).err(),
+            unusable(V::Tls13, Family::SignatureScheme)
+        );
+    }
+
+    #[test]
+    fn tls12_with_only_ml_dsa_is_refused() {
+        let q = lit(
+            &[V::Tls12],
+            &[C::Tls12EcdheEcdsaAes256GcmSha384],
+            &[K::Secp384r1],
+            &[T::MlDsa87],
+        );
+        let want = if ml_dsa() {
+            unusable(V::Tls12, Family::SignatureScheme)
+        } else {
+            Some(CryptoError::Unavailable(Algorithm::Scheme(T::MlDsa87)))
+        };
+        assert_eq!(crypto_provider(&q).err(), want);
+    }
+
+    #[test]
+    fn tls12_suites_that_cannot_sign_with_any_listed_scheme_are_refused() {
+        let ecdsa_suites_rsa_schemes = lit(
+            &[V::Tls12],
+            &[C::Tls12EcdheEcdsaAes256GcmSha384],
+            &[K::Secp384r1],
+            &[T::RsaPssSha384, T::RsaPkcs1Sha384],
+        );
+        assert_eq!(
+            crypto_provider(&ecdsa_suites_rsa_schemes).err(),
+            unusable(V::Tls12, Family::SignatureScheme)
+        );
+        let rsa_suites_ecdsa_schemes = lit(
+            &[V::Tls12],
+            &[C::Tls12EcdheRsaAes256GcmSha384],
+            &[K::Secp384r1],
+            &[T::EcdsaNistp384Sha384, T::Ed25519],
+        );
+        assert_eq!(
+            crypto_provider(&rsa_suites_ecdsa_schemes).err(),
+            unusable(V::Tls12, Family::SignatureScheme)
+        );
+    }
+
+    #[test]
+    fn versions_are_checked_in_policy_order() {
+        let a = lit(
+            &[V::Tls13, V::Tls12],
+            &BOTH_SUITES,
+            &[K::MlKem1024],
+            &[T::RsaPkcs1Sha256],
+        );
+        assert_eq!(
+            crypto_provider(&a).err(),
+            unusable(V::Tls13, Family::SignatureScheme)
+        );
+        let b = lit(
+            &[V::Tls12, V::Tls13],
+            &BOTH_SUITES,
+            &[K::MlKem1024],
+            &[T::RsaPkcs1Sha256],
+        );
+        assert_eq!(
+            crypto_provider(&b).err(),
+            unusable(V::Tls12, Family::KxGroup)
+        );
+    }
+
+    #[test]
+    fn groups_are_checked_before_schemes() {
+        let q = lit(
+            &[V::Tls12],
+            &[C::Tls12EcdheEcdsaAes256GcmSha384],
+            &[K::MlKem1024],
+            &[T::RsaPkcs1Sha256],
+        );
+        assert_eq!(
+            crypto_provider(&q).err(),
+            unusable(V::Tls12, Family::KxGroup)
+        );
+    }
+
+    #[test]
+    fn kx_usability_matches_the_provider() {
+        for k in K::ALL {
+            for (v, wire) in [
+                (V::Tls12, rustls::ProtocolVersion::TLSv1_2),
+                (V::Tls13, rustls::ProtocolVersion::TLSv1_3),
+            ] {
+                assert_eq!(
+                    k.usable_in(v),
+                    rustls_group(k).usable_for_version(wire),
+                    "{k:?} {v:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn suite_signing_matches_the_provider() {
+        for c in C::ALL {
+            for t in T::ALL {
+                let provider = match rustls_suite(c) {
+                    rustls::SupportedCipherSuite::Tls12(s) => s.sign.contains(&rustls_scheme(t)),
+                    rustls::SupportedCipherSuite::Tls13(_) => {
+                        !matches!(t, T::RsaPkcs1Sha256 | T::RsaPkcs1Sha384 | T::RsaPkcs1Sha512)
+                    }
+                };
+                assert_eq!(c.signs_with(t), provider, "{c:?} {t:?}");
+            }
         }
     }
 

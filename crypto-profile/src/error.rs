@@ -1,5 +1,5 @@
 //! The crate's refusals.
-use crate::algorithm::{Algorithm, SignatureAlgorithm};
+use crate::algorithm::{Algorithm, SignatureAlgorithm, TlsVersion};
 use crate::capability::Approval;
 use crate::peer_certificate::PeerCertificateViolation;
 use crate::profile::{Options, Profile};
@@ -133,6 +133,13 @@ pub enum CryptoError {
     PolicyDuplicate(Algorithm),
     /// A provider does not carry exactly a policy's algorithms.
     PolicyDrift,
+    /// A TLS policy lists a version but names nothing in this family usable with it.
+    PolicyVersionUnusable {
+        /// The listed version.
+        version: TlsVersion,
+        /// The family with nothing usable at that version.
+        family: Family,
+    },
     /// The process is not running the AWS-LC FIPS module, or a provider is not FIPS.
     NotFips,
     /// Key generation failed.
@@ -204,6 +211,10 @@ impl fmt::Display for CryptoError {
             }
             CryptoError::PolicyEmpty(fam) => write!(f, "the TLS policy names no {fam:?}"),
             CryptoError::PolicyDuplicate(a) => write!(f, "the TLS policy names {a:?} twice"),
+            CryptoError::PolicyVersionUnusable { version, family } => write!(
+                f,
+                "the TLS policy lists {version:?} but names no {family:?} usable with it"
+            ),
             CryptoError::PolicyDrift => {
                 f.write_str("the provider does not carry exactly the policy's algorithms")
             }
@@ -288,6 +299,14 @@ mod tests {
         assert_eq!(
             CryptoError::PolicyEmpty(Family::KxGroup).to_string(),
             "the TLS policy names no KxGroup"
+        );
+        assert_eq!(
+            CryptoError::PolicyVersionUnusable {
+                version: TlsVersion::Tls12,
+                family: Family::KxGroup
+            }
+            .to_string(),
+            "the TLS policy lists Tls12 but names no KxGroup usable with it"
         );
         assert_eq!(
             CryptoError::PolicyDuplicate(Algorithm::Scheme(TlsSignatureScheme::Ed25519))
