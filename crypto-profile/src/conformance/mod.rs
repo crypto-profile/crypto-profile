@@ -528,6 +528,7 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_wycheproof_signatures() {
+            let mut bad: Vec<String> = Vec::new();
             let p = "publicKey";
             for (a, file, field, sub, want) in [
                 (
@@ -610,11 +611,11 @@ macro_rules! conformance_tests {
                                     "{a} tcId {id}: not an e=65537 key of the algorithm's size"
                                 );
                             }
-                            assert!(ok || !available, "{a} tcId {id}: valid but refused");
+                            if !(ok || !available) { bad.push(format!("{a} tcId {id}: valid but refused ({verdict:?})")); }
                         }
                         "invalid" => {
                             invalid += 1;
-                            assert!(!ok, "{a} tcId {id}: invalid but accepted");
+                            if ok { bad.push(format!("{a} tcId {id}: INVALID BUT ACCEPTED")); }
                         }
                         "acceptable" => {}
                         other => panic!("{a} tcId {id}: unknown result {other:?}"),
@@ -622,6 +623,8 @@ macro_rules! conformance_tests {
                 }
                 assert_eq!((valid, invalid), want, "{a}");
             }
+            for b in &bad { eprintln!("WYCHEPROOF-MISMATCH {b}"); }
+            assert!(bad.is_empty(), "{} mismatches", bad.len());
         }
 
         fn rsa_public_len(a: SignatureAlgorithm) -> Option<usize> {
