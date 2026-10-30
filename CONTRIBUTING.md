@@ -64,7 +64,7 @@ cargo llvm-cov --manifest-path crypto-profile-awslc3/Cargo.toml --all-features -
 ci/quality.sh mutants crypto-profile-awslc3
 ```
 
-Per-change mutation checks can use `cargo mutants --in-diff <diff>`; the final gate runs both full workspaces. Source emission validates both module indices and the nested sealbox child. Inspect the shared files directly with the 4.x direct cfg; run the macro smoke check to verify regeneration and test sensitivity.
+Per-change mutation checks can use `cargo mutants --in-diff <diff>`; the final gate runs both full workspaces. CI runs the full mutation set weekly and on demand (`gh workflow run ci.yml --ref main`), not on every push; run it on demand before a release. Source emission validates both module indices and the nested sealbox child. Inspect the shared files directly with the 4.x direct cfg; run the macro smoke check to verify regeneration and test sensitivity.
 
 `--all-features` matters: the conformance suite needs the backend's `test-support` feature and is skipped without it.
 

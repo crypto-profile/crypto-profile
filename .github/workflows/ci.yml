@@ -5,6 +5,8 @@ on:
   push:
     branches: [main]
   workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * 1'
 
 permissions:
   contents: read
@@ -211,7 +213,7 @@ jobs:
       - run: ci/quality.sh coverage ${{ matrix.backend }}
 
   mutants:
-    if: ${{ !github.event.repository.private }}
+    if: ${{ !github.event.repository.private && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
     name: mutants (${{ matrix.backend }}, shard ${{ matrix.shard }}/4)
     runs-on: ubuntu-24.04
     timeout-minutes: 240
