@@ -26,5 +26,9 @@ pub use profile::{GoverningText, Options, ParseProfileError, Profile, ProfileSpe
 #[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod sealbox_wire;
+#[doc(hidden)]
+pub mod __test_data {
+    pub const RSA8192_PKCS8: &[u8] = include_bytes!("../testdata/rsa8192.pkcs8.der");
+}
 include!(concat!(env!("OUT_DIR"), "/provider.rs"));
 include!(concat!(env!("OUT_DIR"), "/backend_body.rs"));

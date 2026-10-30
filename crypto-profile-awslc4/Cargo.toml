@@ -6,7 +6,9 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-publish.workspace = true
+readme.workspace = true
+keywords.workspace = true
+categories.workspace = true
 build = "build.rs"
 links = "crypto-profile-backend"
 
@@ -17,7 +19,7 @@ workspace = true
 test-support = []
 
 [dependencies]
-crypto-profile = { path = "../crypto-profile" }
+crypto-profile = { path = "../crypto-profile", version = "=0.9.0" }
 # FIPS POSTURE: aws-lc-rs 1.18 with `fips` builds aws-lc-fips-sys 0.14.2, which bundles AWS-LC 4.2.0
 # source. The module in CMVP review is AWS-LC-FIPS v4.0; whether this build is that module is
 # unverified, and this crate claims neither that nor any validation of its own.
@@ -33,7 +35,7 @@ zeroize = "1"
 
 [dev-dependencies]
 hex = "0.4"
-crypto-profile = { path = "../crypto-profile", features = ["conformance"] }
+crypto-profile = { path = "../crypto-profile", version = "=0.9.0", features = ["conformance"] }
 x509-parser = { version = "0.18", default-features = false }
 # Pin the policy/provider API so resolution cannot change its contract.
 rustls = { version = "=0.23.46", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }

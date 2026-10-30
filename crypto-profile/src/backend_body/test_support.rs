@@ -486,11 +486,7 @@ pub fn peer_certificate_fixture(
         let root = params.self_signed(&issuer_key).map_err(e)?;
         let issuer = rcgen::Issuer::new(params, &issuer_key);
         let der = rustls::pki_types::PrivatePkcs8KeyDer::from(
-            include_bytes!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/../crypto-profile/testdata/rsa8192.pkcs8.der"
-            ))
-            .to_vec(),
+            crypto_profile::__test_data::RSA8192_PKCS8.to_vec(),
         );
         let key = rcgen::KeyPair::from_pkcs8_der_and_sign_algo(&der, &rcgen::PKCS_RSA_SHA384)
             .map_err(e)?;

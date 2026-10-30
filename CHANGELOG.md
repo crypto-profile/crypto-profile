@@ -2,12 +2,15 @@
 
 All notable changes to this project are documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project will adhere to [Semantic Versioning](https://semver.org/spec/v2.0.0.html) once it publishes. Nothing is published yet; the first release will be 0.1.0.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0, a minor version may change the API. The three crates share one version and are released together.
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-30
+
 ### Added
 
+- crates.io metadata, per-crate licence files, and the test-support RSA-8192 key packaged inside the core crate.
 - `tls::crypto_provider`, and every builder that calls it, refuses a policy that lists a version with no suite, no key-exchange group usable at it, or no signature scheme a suite at it can sign with (TLS 1.2 has no ML-KEM or hybrid group and no ML-DSA, and fixes ECDSA or RSA authentication per suite; TLS 1.3 has no RSA PKCS#1 v1.5 handshake signature), as `CryptoError::PolicyVersionUnusable { version, family }`. New public helpers: `KxGroup::usable_in`, `TlsSignatureScheme::usable_in`, `CipherSuite::signs_with`.
 - Opt-in `Options::peer_certificates_match_profile` checks peer leaf keys and selected certificate paths against cited profile rules. Strict TLS builders install matching crate-owned verifier handles and report typed refusals. See [decision 0007](docs/decisions/0007-peer-certificate-rules.md).
 - Both backends' build scripts refuse a build that does not link their bundled AWS-LC FIPS source build (the reported library name must be the bundled, version-prefixed one), so `MODULE` and `certificate()` always describe the linked module. Set `AWS_LC_FIPS_SYS_USE_SYSTEM=0` on a host with a system AWS-LC.
@@ -16,7 +19,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - The core crate `crypto-profile`, with no aws-lc dependency:
   - exhaustive algorithm types: `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `TlsVersion` and `Algorithm`, with literal IANA codepoints (`iana()`), the canonical TLS signature-scheme order (`TlsSignatureScheme::preference`) and X.509 signature OIDs (`signature_oid()`), and `FromStr` and `Display` for `SignatureAlgorithm`;
   - the capability model: `Module { line, linkage }`, `certificate()` and `capability()`, where each 3.x cell cites the AWS-LC FIPS 3.1.0 security policy of its own certificate, #5314 (static) or #5298 (dynamic): an `Approved` cell cites Table 5 (pp. 8-11), a `NotApproved` cell cites its absence from Tables 5-8, and the hybrid key-exchange groups and TLS 1.3 are `Unverified`, with no source; every 4.x static cell is `Unverified`, and each 4.x dynamic cell is `Approval::AlgorithmTested`, citing the one AWS-LC FIPS 4.0.0 CAVP certificate that shows every operation it needs, or `Unverified` (decision record 0004); `AlgorithmTested`, like `Unverified`, is never approved;
-  - the seven profiles `unrestricted`, `preferred`, `cnsa2`, `cnsa1`, `bsi`, `fips1403` and `fips1402` as the public `ProfileSpec` constants `UNRESTRICTED`, `PREFERRED`, `CNSA2`, `CNSA1`, `BSI`, `FIPS1403` and `FIPS1402`, each entry cited in its constant's doc comment (0.x API: names and contents may change before 0.1); `Profile`, with `Profile::ALL`, `as_str`, `spec` and `governing_text`, `FromStr` and `Display` over exact names, and `ParseProfileError` for a name that is not a profile; and `GoverningText`;
+  - the seven profiles `unrestricted`, `preferred`, `cnsa2`, `cnsa1`, `bsi`, `fips1403` and `fips1402` as the public `ProfileSpec` constants `UNRESTRICTED`, `PREFERRED`, `CNSA2`, `CNSA1`, `BSI`, `FIPS1403` and `FIPS1402`, each entry cited in its constant's doc comment (0.x API: names and contents may change before 1.0); `Profile`, with `Profile::ALL`, `as_str`, `spec` and `governing_text`, `FromStr` and `Display` over exact names, and `ParseProfileError` for a name that is not a profile; and `GoverningText`;
   - `Options` and post-quantum key exchange required (`pq_key_exchange_required`), with `Display` and `KxGroup::is_post_quantum`;
   - `crypto_profile::profile::select`, the backend-independent half of resolution, which returns a `Selection` with line exclusions recorded after Options and refuses an empty family;
   - typed errors: `CryptoError`, with `Unavailable(Algorithm)`, `PolicyEmpty(Family)`, `PolicyDuplicate(Algorithm)`, `PolicyDrift`, `EmptyProfile`, `KeyNotInProfile` and `NotApproved`, `Family::KeyAlgorithm`, and the typed causes `CsrError` and `TlsError`;
