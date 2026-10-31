@@ -492,6 +492,41 @@ fn certificate_error(error: impl std::error::Error + Send + Sync + 'static) -> r
     )))
 }
 
+/// The end-entity certificate after crypto-profile's own checks have passed.
+pub struct PeerLeaf<'a> {
+    der: &'a CertificateDer<'a>,
+    cert: &'a webpki::EndEntityCert<'a>,
+}
+
+impl<'a> PeerLeaf<'a> {
+    /// The certificate as received.
+    pub fn der(&self) -> &CertificateDer<'a> {
+        self.der
+    }
+
+    /// The subjectAltName URIs, in certificate order, as rustls-webpki parses them.
+    ///
+    /// Refuses with `CertificateError::BadEncoding` when the crate's own count of URI entries
+    /// differs from rustls-webpki's, so an entry rustls-webpki skips (not UTF-8, or undecodable)
+    /// is a refusal, not an omission.
+    pub fn uri_names(&self) -> Result<Vec<&'a str>, rustls::Error> {
+        let names: Vec<&'a str> = self.cert.valid_uri_names().collect();
+        match super::peer_certificates::uri_name_count(self.der) {
+            Ok(count) if count == names.len() => Ok(names),
+            _ => Err(rustls::CertificateError::BadEncoding.into()),
+        }
+    }
+}
+
+/// An application's check of the peer's identity, run after every crate check has passed.
+///
+/// It can only refuse: its `Ok` is the verifier's own `Ok`, and its `Err` is returned unchanged.
+/// A panic inside it fails the handshake.
+pub trait PeerIdentity: std::fmt::Debug + Send + Sync {
+    /// Refuses `leaf` unless it carries the expected identity.
+    fn check(&self, leaf: &PeerLeaf<'_>) -> Result<(), rustls::Error>;
+}
+
 impl ProfileVerifier {
     fn verify(
         &self,
@@ -1084,6 +1119,71 @@ mod tests {
     };
     use rustls::client::danger::ServerCertVerifier;
     use std::sync::Arc;
+
+    fn self_signed(
+        sans: Vec<rcgen::SanType>,
+        extensions: Vec<rcgen::CustomExtension>,
+    ) -> CertificateDer<'static> {
+        let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.subject_alt_names = sans;
+        params.custom_extensions = extensions;
+        params.self_signed(&key).unwrap().der().clone()
+    }
+
+    fn uri(s: &str) -> rcgen::SanType {
+        rcgen::SanType::URI(s.try_into().unwrap())
+    }
+
+    fn uri_names_of(der: &CertificateDer<'_>) -> Result<Vec<String>, rustls::Error> {
+        let cert = webpki::EndEntityCert::try_from(der).unwrap();
+        let leaf = PeerLeaf { der, cert: &cert };
+        assert_eq!(leaf.der(), der);
+        leaf.uri_names()
+            .map(|names| names.into_iter().map(str::to_owned).collect())
+    }
+
+    #[test]
+    fn uri_names_lists_the_uris_in_order_and_ignores_other_names() {
+        assert_eq!(
+            uri_names_of(&self_signed(vec![], vec![])).unwrap(),
+            Vec::<String>::new()
+        );
+        let der = self_signed(
+            vec![
+                uri("spiffe://example.org/a"),
+                rcgen::SanType::DnsName("a.example".try_into().unwrap()),
+                uri("spiffe://example.org/b"),
+            ],
+            vec![],
+        );
+        assert_eq!(
+            uri_names_of(&der).unwrap(),
+            ["spiffe://example.org/a", "spiffe://example.org/b"]
+        );
+    }
+
+    #[test]
+    fn uri_names_refuses_a_uri_entry_webpki_would_skip() {
+        let mut names = vec![0x86, 22];
+        names.extend_from_slice(b"spiffe://example.org/a");
+        names.extend_from_slice(&[0x86, 1, 0xff]);
+        let mut general_names = vec![0x30, names.len() as u8];
+        general_names.extend(names);
+        let der = self_signed(
+            vec![],
+            vec![rcgen::CustomExtension::from_oid_content(
+                &[2, 5, 29, 17],
+                general_names,
+            )],
+        );
+        assert_eq!(
+            uri_names_of(&der),
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::BadEncoding
+            ))
+        );
+    }
 
     fn available_schemes() -> Vec<T> {
         T::ALL
