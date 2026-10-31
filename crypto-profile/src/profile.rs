@@ -2,8 +2,8 @@
 //! admits. A profile is an algorithm set, not a validation claim; whether the running module is
 //! validated for it is a separate check.
 use crate::algorithm::{
-    Algorithm, CipherSuite as C, KxGroup as K, SignatureAlgorithm as S, TlsSignatureScheme as T,
-    TlsVersion as V,
+    Algorithm, CipherSuite as C, KxGroup as K, MacAlgorithm, SignatureAlgorithm as S,
+    TlsSignatureScheme as T, TlsVersion as V,
 };
 use crate::capability::{Module, capability};
 use crate::error::{CryptoError, Family};
@@ -161,23 +161,34 @@ pub struct Options {
     pub pq_key_exchange_required: bool,
     /// Require peer leaf keys and certification paths to match the profile. Off by default.
     pub peer_certificates_match_profile: bool,
+    /// Admit HMAC-SHA256 under `cnsa1`, as CNSSP 15 (20 October 2016) Annex B ¶2b (p. B-2) allows
+    /// in the near term for UNCLASSIFIED NSS data and community-of-interest separation only.
+    /// Ignored by every other profile, and by every family but message authentication. Off by
+    /// default.
+    pub cnsa1_unclassified_nss: bool,
 }
 
 impl fmt::Display for Options {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(
-            match (
+        let names: Vec<&str> = [
+            (
                 self.pq_key_exchange_required,
+                "post-quantum key exchange required",
+            ),
+            (
                 self.peer_certificates_match_profile,
-            ) {
-                (false, false) => "no options",
-                (true, false) => "post-quantum key exchange required",
-                (false, true) => "peer certificates match profile",
-                (true, true) => {
-                    "post-quantum key exchange required, peer certificates match profile"
-                }
-            },
-        )
+                "peer certificates match profile",
+            ),
+            (self.cnsa1_unclassified_nss, "cnsa1 UNCLASSIFIED NSS"),
+        ]
+        .into_iter()
+        .filter_map(|(on, name)| on.then_some(name))
+        .collect();
+        if names.is_empty() {
+            f.write_str("no options")
+        } else {
+            f.write_str(&names.join(", "))
+        }
     }
 }
 
@@ -194,6 +205,8 @@ pub struct ProfileSpec {
     pub signature_schemes: &'static [T],
     /// Key algorithms the profile admits for keys generated or used under it.
     pub key_algorithms: &'static [S],
+    /// Message authentication codes, for `hmac`; admitted through `admit`, not `resolve`.
+    pub macs: &'static [MacAlgorithm],
 }
 
 impl Profile {
@@ -215,6 +228,7 @@ impl Profile {
 ///
 /// - Versions: TLS 1.3, TLS 1.2. Suites: all nine. Groups: all seven. Schemes: all eleven. Keys:
 ///   all nine (`crypto_profile::algorithm`, each family's `ALL`).
+/// - MACs: every HMAC in the inventory.
 pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -261,6 +275,11 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
         S::Rsa4096Sha384,
         S::Rsa2048Sha384,
     ],
+    macs: &[
+        MacAlgorithm::HmacSha512,
+        MacAlgorithm::HmacSha384,
+        MacAlgorithm::HmacSha256,
+    ],
 };
 
 /// `preferred`: the crate's recommendation. Not a government profile; see `docs/profiles.md`.
@@ -283,6 +302,9 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 ///   4096 (ISM-1765, p. 10); RSA 2048 excluded: ISM-1765, p. 10.
 /// - ECDSA P-521 with SHA-384: ISM-1763, p. 8; SHA-2 output of at least 256 bits, ISM-1767,
 ///   p. 11.
+/// - MACs: HMAC with SHA-2 for IPsec and TLS, ISM-1772 (p. 15), ISM-0998 (p. 16) and ISM-1375
+///   (p. 20); SHA-2 output of at least 224 bits, ISM-1766 (p. 11). HMAC-SHA256 "will not be
+///   approved beyond 2030" (pp. 15-16).
 pub const PREFERRED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384, C::Tls13Aes128GcmSha256],
@@ -312,6 +334,11 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
         S::Rsa3072Sha384,
         S::Rsa4096Sha384,
     ],
+    macs: &[
+        MacAlgorithm::HmacSha512,
+        MacAlgorithm::HmacSha384,
+        MacAlgorithm::HmacSha256,
+    ],
 };
 
 /// `cnsa2`: the CNSA 2.0 algorithm set of CNSSP 15 (December 2024), Annex B, pp. B-1 to B-2, on
@@ -321,12 +348,16 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
 /// - TLS_AES_256_GCM_SHA384: Annex B ¶1 table, p. B-1.
 /// - TLS 1.3 only: ML-KEM-1024 is the set's only key establishment (Annex B ¶1 table, p. B-1);
 ///   TLS 1.2 key exchange is ECDHE or FFDHE (RFC 8422, RFC 7919).
+/// - MACs: hash "SHA-384 or SHA-512", Annex B p. B-1; protocol guidance RFC 9206 and RFC 9151,
+///   ¶8a and fn. 1 (p. 5); RFC 9206 §4 (SHA-384 "for all purposes") and §8 (PRF_HMAC_SHA2_384 or
+///   PRF_HMAC_SHA2_512 only).
 pub const CNSA2: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384],
     kx_groups: &[K::MlKem1024],
     signature_schemes: &[T::MlDsa87],
     key_algorithms: &[S::MlDsa87],
+    macs: &[MacAlgorithm::HmacSha384, MacAlgorithm::HmacSha512],
 };
 
 /// `cnsa1`: the CNSA 1.0 algorithm set of CNSSP 15 (20 October 2016), Annex B (p. B-1), in the
@@ -343,6 +374,8 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
 /// - Keys ECDSA P-384 with SHA-384 (§5.1); RSA 3072 and 4096 (§5.2).
 /// - Not implemented by the stack: TLS_RSA_WITH_AES_256_GCM_SHA384 and
 ///   TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 (§6), ffdhe3072 and ffdhe4096 (§5.3, §7).
+/// - MACs: hash "Use SHA-384", Annex B p. B-1; RFC 9151 §4 (SHA-384 for the TLS 1.2 PRF and the
+///   TLS 1.3 HKDF). `Options::cnsa1_unclassified_nss` adds HMAC-SHA256 under ¶2b (p. B-2).
 pub const CNSA1: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -353,6 +386,7 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
     kx_groups: &[K::Secp384r1],
     signature_schemes: &[T::EcdsaNistp384Sha384, T::RsaPssSha384, T::RsaPkcs1Sha384],
     key_algorithms: &[S::EcdsaP384Sha384, S::Rsa3072Sha384, S::Rsa4096Sha384],
+    macs: &[MacAlgorithm::HmacSha384],
 };
 
 /// `bsi`: BSI TR-02102-2 (TLS) and TR-02102-1, version 2026-01.
@@ -367,6 +401,7 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
 /// - RSA keys excluded: TR-02102-2 Table 12.
 /// - ML-DSA excluded: TR-02102-1 §5.3.4.
 /// - Hybrid groups excluded: TR-02102-2 Table 10 note.
+/// - MACs: HMAC with a Table 4.1 hash (TR-02102-1 §5.2, pp. 49-50; Table 4.1, p. 47).
 pub const BSI: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -387,6 +422,11 @@ pub const BSI: ProfileSpec = ProfileSpec {
         T::RsaPssSha256,
     ],
     key_algorithms: &[S::EcdsaP384Sha384, S::EcdsaP256Sha256, S::EcdsaP521Sha512],
+    macs: &[
+        MacAlgorithm::HmacSha512,
+        MacAlgorithm::HmacSha384,
+        MacAlgorithm::HmacSha256,
+    ],
 };
 
 /// `fips1403`: NIST SP 800-140C r2 and SP 800-140D r2 with the CMVP lists (updated August 21,
@@ -414,6 +454,7 @@ pub const BSI: ProfileSpec = ProfileSpec {
 ///   PKCS#1 v1.5 on TLS 1.2 only, RFC 8446 §4.2.3.
 /// - RSA 2048, 3072, 4096 keys: FIPS 186-5 §5.1; SP 800-131A r2 Table 2.
 /// - ML-DSA-87 scheme and key: SP 800-140C list §6.2.3.1 (FIPS 204).
+/// - MACs: FIPS 198-1 with SHA-2; SP 800-131A r2 Table 8 (p. 18) and Table 9 (p. 20).
 pub const FIPS1403: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -456,6 +497,11 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
         S::Rsa4096Sha384,
         S::Rsa2048Sha384,
     ],
+    macs: &[
+        MacAlgorithm::HmacSha512,
+        MacAlgorithm::HmacSha384,
+        MacAlgorithm::HmacSha256,
+    ],
 };
 
 /// `fips1402`: FIPS 140-2 Annex A and Annex D (2021-10-12 editions), FIPS 186-4, SP 800-131A r2
@@ -472,6 +518,7 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
 /// - ECDSA keys P-384/SHA-384, P-256/SHA-256, P-521/SHA-512, P-521/SHA-384: FIPS 186-4 §6.4
 ///   (pp. 29-30).
 /// - RSA 3072 and 2048 keys: FIPS 186-4 §5.1; RSA 4096: FIPS 140-2 IG A.14 (p. 221).
+/// - MACs: FIPS 140-2 Annex A, Message Authentication 3 (p. 3); SP 800-131A r2 Table 9 (p. 20).
 pub const FIPS1402: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -502,6 +549,11 @@ pub const FIPS1402: ProfileSpec = ProfileSpec {
         S::Rsa3072Sha384,
         S::Rsa4096Sha384,
         S::Rsa2048Sha384,
+    ],
+    macs: &[
+        MacAlgorithm::HmacSha512,
+        MacAlgorithm::HmacSha384,
+        MacAlgorithm::HmacSha256,
     ],
 };
 
@@ -604,6 +656,79 @@ fn select_spec(
     })
 }
 
+/// A profile's non-TLS families narrowed by its options, every entry implemented by the module's
+/// backend, in preference order. Never refused: an empty family means every constructor of that
+/// family refuses under the profile.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdmittedSelection {
+    /// Message authentication codes.
+    pub macs: Vec<MacAlgorithm>,
+    /// Entries unavailable on the module line, in family and preference order.
+    pub excluded: Vec<Algorithm>,
+}
+
+/// The backend-independent half of a backend's `admit`: `profile`'s non-TLS families, narrowed by
+/// `options`, less what `module` lacks. Independent of [`select`].
+pub fn select_admitted(profile: Profile, options: Options, module: Module) -> AdmittedSelection {
+    select_admitted_with(profile, profile.spec(), options, |a| {
+        capability(module, a).available
+    })
+}
+
+fn select_admitted_with(
+    profile: Profile,
+    spec: &ProfileSpec,
+    options: Options,
+    available: impl Fn(Algorithm) -> bool,
+) -> AdmittedSelection {
+    let mut macs = spec.macs.to_vec();
+    if options.cnsa1_unclassified_nss {
+        macs.extend_from_slice(unclassified_nss_macs(profile));
+    }
+    let mut excluded = Vec::new();
+    macs.retain(|m| {
+        let on = available(Algorithm::Mac(*m));
+        if !on {
+            excluded.push(Algorithm::Mac(*m));
+        }
+        on
+    });
+    AdmittedSelection { macs, excluded }
+}
+
+const fn unclassified_nss_macs(p: Profile) -> &'static [MacAlgorithm] {
+    match p {
+        Profile::Cnsa1 => &[MacAlgorithm::HmacSha256],
+        Profile::Unrestricted
+        | Profile::Preferred
+        | Profile::Cnsa2
+        | Profile::Bsi
+        | Profile::Fips1403
+        | Profile::Fips1402 => &[],
+    }
+}
+
+/// The shortest HMAC key, in bits, `profile` admits. 112 is the module's approved minimum: SP
+/// 800-131A r2 §10 Table 9 (p. 20) disallows shorter keys for MAC generation, and the AWS-LC FIPS
+/// 3.1.0 security policies list "Key Length: 112-524288" (Table 5, p. 9). `bsi` takes the 128 of
+/// TR-02102-1 Table 5.2 (p. 50). SP 800-107 r1 §5.3.2 (pp. 13-14): a key "shall have a security
+/// strength that meets or exceeds the security strength required to protect the data".
+pub const fn mac_key_floor_bits(profile: Profile) -> usize {
+    match profile {
+        Profile::Bsi => 128,
+        Profile::Unrestricted
+        | Profile::Preferred
+        | Profile::Cnsa2
+        | Profile::Cnsa1
+        | Profile::Fips1403
+        | Profile::Fips1402 => 112,
+    }
+}
+
+/// The longest HMAC key, in bits, the module was tested with: "Key Length: 112-524288" in the
+/// AWS-LC FIPS 3.1.0 security policies (Table 5, p. 9) and on CAVP certificate A7855.
+pub const MAC_KEY_MAX_BITS: usize = 524_288;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -637,6 +762,7 @@ mod tests {
     const PQ: Options = Options {
         peer_certificates_match_profile: false,
         pq_key_exchange_required: true,
+        cnsa1_unclassified_nss: false,
     };
     const PKCS1: [TlsSignatureScheme; 3] = [
         TlsSignatureScheme::RsaPkcs1Sha256,
@@ -783,6 +909,7 @@ mod tests {
             kx_groups: &[],
             signature_schemes: &[],
             key_algorithms: &[],
+            macs: &[],
         };
         let empty = |category| {
             Err(CryptoError::EmptyProfile {
@@ -1048,14 +1175,16 @@ mod tests {
             Options::default(),
             Options {
                 peer_certificates_match_profile: false,
-                pq_key_exchange_required: false
+                pq_key_exchange_required: false,
+                cnsa1_unclassified_nss: false,
             }
         );
         assert_eq!(Options::default().to_string(), "no options");
         assert_eq!(
             Options {
                 peer_certificates_match_profile: false,
-                pq_key_exchange_required: true
+                pq_key_exchange_required: true,
+                cnsa1_unclassified_nss: false,
             }
             .to_string(),
             "post-quantum key exchange required"
@@ -1076,6 +1205,7 @@ mod tests {
             let options = Options {
                 pq_key_exchange_required: pq,
                 peer_certificates_match_profile: peer,
+                cnsa1_unclassified_nss: false,
             };
             assert_eq!(options.to_string(), display);
             for profile in Profile::ALL {
@@ -1108,5 +1238,114 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn cnsa1_unclassified_nss_names_itself_and_leaves_tls_selection_alone() {
+        let on = Options {
+            cnsa1_unclassified_nss: true,
+            ..Options::default()
+        };
+        assert_eq!(on.to_string(), "cnsa1 UNCLASSIFIED NSS");
+        assert_eq!(
+            Options {
+                pq_key_exchange_required: true,
+                peer_certificates_match_profile: true,
+                cnsa1_unclassified_nss: true,
+            }
+            .to_string(),
+            "post-quantum key exchange required, peer certificates match profile, cnsa1 UNCLASSIFIED NSS"
+        );
+        for profile in Profile::ALL {
+            for module in [M3S, M4S] {
+                for pq in [false, true] {
+                    let off = Options {
+                        pq_key_exchange_required: pq,
+                        ..Options::default()
+                    };
+                    let on = Options {
+                        cnsa1_unclassified_nss: true,
+                        ..off
+                    };
+                    match (select(profile, on, module), select(profile, off, module)) {
+                        (Ok(a), Ok(b)) => assert_eq!(a, b),
+                        (
+                            Err(CryptoError::EmptyProfile {
+                                profile: p,
+                                options: o,
+                                category: f,
+                            }),
+                            Err(CryptoError::EmptyProfile {
+                                profile: ep,
+                                options: eo,
+                                category: ef,
+                            }),
+                        ) => {
+                            assert_eq!((p, f), (ep, ef));
+                            assert_eq!((o, eo), (on, off));
+                        }
+                        (a, b) => panic!("{a:?} != {b:?}"),
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn select_admitted_never_refuses_an_empty_family() {
+        let spec = ProfileSpec { macs: &[], ..BSI };
+        assert_eq!(
+            select_admitted_with(Profile::Bsi, &spec, Options::default(), |_| true),
+            AdmittedSelection {
+                macs: vec![],
+                excluded: vec![],
+            }
+        );
+    }
+
+    #[test]
+    fn select_admitted_records_what_the_module_lacks() {
+        use MacAlgorithm as M;
+        assert_eq!(
+            select_admitted_with(Profile::Fips1403, &FIPS1403, Options::default(), |a| {
+                a != Algorithm::Mac(M::HmacSha384)
+            }),
+            AdmittedSelection {
+                macs: vec![M::HmacSha512, M::HmacSha256],
+                excluded: vec![Algorithm::Mac(M::HmacSha384)],
+            }
+        );
+    }
+
+    #[test]
+    fn the_unclassified_nss_option_adds_hmac_sha256_to_cnsa1_only() {
+        let on = Options {
+            cnsa1_unclassified_nss: true,
+            ..Options::default()
+        };
+        for p in Profile::ALL {
+            let mut want = select_admitted(p, Options::default(), M4S).macs;
+            if p == Profile::Cnsa1 {
+                want.push(MacAlgorithm::HmacSha256);
+            }
+            assert_eq!(select_admitted(p, on, M4S).macs, want, "{p}");
+        }
+    }
+
+    #[test]
+    fn mac_keys_are_bounded_by_the_module_and_by_bsi() {
+        for p in Profile::ALL {
+            let floor = match p {
+                Profile::Bsi => 128,
+                Profile::Unrestricted
+                | Profile::Preferred
+                | Profile::Cnsa2
+                | Profile::Cnsa1
+                | Profile::Fips1403
+                | Profile::Fips1402 => 112,
+            };
+            assert_eq!(mac_key_floor_bits(p), floor, "{p}");
+        }
+        assert_eq!(MAC_KEY_MAX_BITS, 524_288);
     }
 }

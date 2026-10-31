@@ -22,7 +22,10 @@ pub use capability::{
     certificate, ensure_available,
 };
 pub mod profile;
-pub use profile::{GoverningText, Options, ParseProfileError, Profile, ProfileSpec};
+pub use profile::{
+    AdmittedSelection, GoverningText, MAC_KEY_MAX_BITS, Options, ParseProfileError, Profile,
+    ProfileSpec, mac_key_floor_bits, select_admitted,
+};
 #[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod sealbox_wire;

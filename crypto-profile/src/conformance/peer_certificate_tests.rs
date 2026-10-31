@@ -376,7 +376,7 @@ macro_rules! __conformance_peer_certificate_tests {
                 for pq in [false,true] {
                     for strict in [false,true] {
                         let options = Options { peer_certificates_match_profile:strict,
-                            pq_key_exchange_required:pq };
+                            pq_key_exchange_required:pq, cnsa1_unclassified_nss:false };
                         let result = resolve(profile,options);
                         if pq && [P::Cnsa1,P::Bsi,P::Fips1402].contains(&profile) {
                             assert_eq!(result.err(),Some(CryptoError::EmptyProfile {

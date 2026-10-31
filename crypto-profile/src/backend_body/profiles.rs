@@ -160,6 +160,7 @@ mod tests {
     const PQ: Options = Options {
         peer_certificates_match_profile: false,
         pq_key_exchange_required: true,
+        cnsa1_unclassified_nss: false,
     };
 
     fn every_resolved() -> Vec<Resolved> {
@@ -575,6 +576,7 @@ mod peer_certificate_tests {
                 let off = Options {
                     pq_key_exchange_required: pq,
                     peer_certificates_match_profile: false,
+                    cnsa1_unclassified_nss: false,
                 };
                 let on = Options {
                     peer_certificates_match_profile: true,

@@ -204,6 +204,7 @@ mod tests {
                 let o = Options {
                     peer_certificates_match_profile: false,
                     pq_key_exchange_required: g.pq,
+                    cnsa1_unclassified_nss: false,
                 };
                 if let Ok(row) = golden::expected(m, g.profile, o) {
                     assert!(!row.schemes.contains(&0x0906));

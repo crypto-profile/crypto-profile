@@ -328,6 +328,7 @@ mod tests {
         let pq = Options {
             pq_key_exchange_required: true,
             peer_certificates_match_profile: false,
+            cnsa1_unclassified_nss: false,
         };
         let table: [(CryptoError, &str); 5] = [
             (
