@@ -1,4 +1,4 @@
-# 0008: Application identity checks on the crate's verifiers
+# 0009: Application identity checks on the crate's verifiers
 
 - **Status:** Accepted, 2026-10-31
 

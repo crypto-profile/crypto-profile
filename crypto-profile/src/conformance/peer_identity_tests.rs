@@ -601,7 +601,7 @@ macro_rules! __conformance_peer_identity_tests {
                 }
             }
 
-            /// Pins the residual in decision 0008: rustls resumes a server session without
+            /// Pins the residual in decision 0009: rustls resumes a server session without
             /// re-verifying the client, so configurations with different identity checks must not
             /// share session storage. A rustls change that closes this fails here.
             #[test]
@@ -632,7 +632,7 @@ macro_rules! __conformance_peer_identity_tests {
                 }
             }
 
-            /// Pins the residual in decision 0008: resumption reuses an earlier identity decision,
+            /// Pins the residual in decision 0009: resumption reuses an earlier identity decision,
             /// so a check whose answer can change needs a new verifier and configuration, or
             /// resumption disabled.
             #[test]
@@ -677,7 +677,7 @@ macro_rules! __conformance_peer_identity_tests {
                 }
             }
 
-            /// Pins the residual in decision 0008: rustls verifies only a presented client
+            /// Pins the residual in decision 0009: rustls verifies only a presented client
             /// certificate, so with `allow_unauthenticated` a client without one is admitted
             /// without reaching the identity check.
             #[test]
