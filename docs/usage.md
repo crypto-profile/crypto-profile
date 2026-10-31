@@ -119,6 +119,27 @@ Set `Options::peer_certificates_match_profile` to `true` when resolving a profil
 
 The old `tls::client_builder` and `tls::server_builder` refuse a rule-bearing policy with `TlsError::StrictBuilderRequired`. A strict builder refuses an opaque or incompatible handle with `TlsError::IncompatiblePeerVerifier`: both its rule and canonical handshake-scheme set must match the policy. A certificate rule refusal carries `TlsError::PeerCertificate` with the profile and violation.
 
+**Application identity checks.** When the peer is not identified by DNS name, pass a `tls::PeerIdentity` to `with_peer_identity` on either verifier builder ([decision 0008](decisions/0008-peer-identity-check.md)). It runs after the path, EKU, revocation and the policy's peer-certificate rule pass, and can only refuse. On the server verifier it replaces the name check. The strict builders accept the handle exactly as they accept one without a check. `PeerLeaf::uri_names` returns the leaf's URIs, refusing a leaf whose URI entries the crate and rustls-webpki count differently. Compare the whole identity, and refuse more than one when your scheme allows one:
+
+```rust
+#[derive(Debug)]
+struct Workload(&'static str);
+
+impl tls::PeerIdentity for Workload {
+    fn check(&self, leaf: &tls::PeerLeaf<'_>) -> Result<(), rustls::Error> {
+        match leaf.uri_names()?.as_slice() {
+            [one] if *one == self.0 => Ok(()),
+            _ => Err(rustls::Error::General("peer is not the expected workload".into())),
+        }
+    }
+}
+
+let verifier = tls::server_cert_verifier_builder(roots, &policy)?
+    .with_peer_identity(Arc::new(Workload("spiffe://example.org/payments")))
+    .build()
+    .expect("roots are not empty");
+```
+
 `cnsa1` accepts exactly P-384 or RSA-3072/4096 leaves; `cnsa2` accepts only ML-DSA-87. The other profiles use minimum RSA sizes: 3072 for `preferred`, 3000 for `bsi`, and 2048 for `unrestricted`, `fips1403` and `fips1402`; `fips1403` also requires an even RSA bit length. Their allowed key families and chain rules are in [profiles](profiles.md#9-impact-of-peer-certificate-enforcement).
 
 ## 7. Compatibility limits
@@ -159,6 +180,8 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
 - **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5).
+- **Server session resumption and identity checks.** A resumed server session is not re-verified, so a configuration whose client verifier carries an identity check must not share `session_storage` or a `ticketer` with one whose check differs. Default stores are per configuration ([decision 0008](decisions/0008-peer-identity-check.md)).
+- **Unauthenticated clients and identity checks.** With `allow_unauthenticated`, a client that presents no certificate is admitted without the identity check.
 
 ## 10. Which module a build is
 

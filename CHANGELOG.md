@@ -16,6 +16,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `CryptoError::NotInProfile`, for any algorithm outside TLS a profile does not admit, `CryptoError::MacKeyLength` and `CryptoError::MacVerify`;
   - Wycheproof HMAC-SHA256, HMAC-SHA384 and HMAC-SHA512 in the conformance suite.
 
+- `tls::PeerIdentity`, an application check on the peer's end-entity certificate, added with `with_peer_identity` on `ServerVerifierBuilder` (replacing the name check) and `ClientVerifierBuilder`; it runs after every crate check and can only refuse. `tls::PeerLeaf::uri_names` refuses a leaf whose URI entries the crate and rustls-webpki count differently. See [decision 0008](docs/decisions/0008-peer-identity-check.md).
+
 ### Changed
 
 - **Breaking:** `Algorithm` has a new variant, `Algorithm::Mac` (`Algorithm` is not `#[non_exhaustive]`).
