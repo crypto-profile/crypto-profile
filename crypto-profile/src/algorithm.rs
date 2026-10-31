@@ -497,6 +497,50 @@ impl HashAlgorithm {
     }
 }
 
+/// A message authentication code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum MacAlgorithm {
+    /// HMAC with SHA-256 (FIPS 198-1).
+    HmacSha256,
+    /// HMAC with SHA-384 (FIPS 198-1).
+    HmacSha384,
+    /// HMAC with SHA-512 (FIPS 198-1).
+    HmacSha512,
+}
+
+impl MacAlgorithm {
+    /// Every message authentication code.
+    pub const ALL: [MacAlgorithm; 3] = [
+        MacAlgorithm::HmacSha256,
+        MacAlgorithm::HmacSha384,
+        MacAlgorithm::HmacSha512,
+    ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            MacAlgorithm::HmacSha256 => 0,
+            MacAlgorithm::HmacSha384 => 1,
+            MacAlgorithm::HmacSha512 => 2,
+        }
+    }
+
+    /// The hash function the MAC is built on.
+    pub const fn hash(self) -> HashAlgorithm {
+        match self {
+            MacAlgorithm::HmacSha256 => HashAlgorithm::Sha256,
+            MacAlgorithm::HmacSha384 => HashAlgorithm::Sha384,
+            MacAlgorithm::HmacSha512 => HashAlgorithm::Sha512,
+        }
+    }
+
+    /// The full tag length in bytes.
+    pub const fn tag_len(self) -> usize {
+        self.hash().output_len()
+    }
+}
+
 /// A TLS protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TlsVersion {
@@ -543,6 +587,8 @@ pub enum Algorithm {
     Hash(HashAlgorithm),
     /// A TLS version.
     Protocol(TlsVersion),
+    /// A message authentication code.
+    Mac(MacAlgorithm),
 }
 
 impl Algorithm {
@@ -555,6 +601,7 @@ impl Algorithm {
         v.extend(CipherSuite::ALL.map(Algorithm::Cipher));
         v.extend(HashAlgorithm::ALL.map(Algorithm::Hash));
         v.extend(TlsVersion::ALL.map(Algorithm::Protocol));
+        v.extend(MacAlgorithm::ALL.map(Algorithm::Mac));
         v
     }
 }
@@ -741,12 +788,36 @@ mod tests {
             + KxGroup::ALL.len()
             + CipherSuite::ALL.len()
             + HashAlgorithm::ALL.len()
-            + TlsVersion::ALL.len();
+            + TlsVersion::ALL.len()
+            + MacAlgorithm::ALL.len();
         assert_eq!(all.len(), expected);
-        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2);
+        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3);
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
+        assert_eq!(all[all.len() - 3..], MacAlgorithm::ALL.map(Algorithm::Mac));
+    }
+
+    #[test]
+    fn mac_algorithm_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            MacAlgorithm::ALL,
+            [
+                MacAlgorithm::HmacSha256,
+                MacAlgorithm::HmacSha384,
+                MacAlgorithm::HmacSha512
+            ]
+        );
+        assert_eq!(MacAlgorithm::ALL.map(MacAlgorithm::ordinal), [0, 1, 2]);
+    }
+
+    #[test]
+    fn each_mac_names_its_hash_and_a_full_length_tag() {
+        assert_eq!(
+            MacAlgorithm::ALL.map(MacAlgorithm::hash),
+            HashAlgorithm::ALL
+        );
+        assert_eq!(MacAlgorithm::ALL.map(MacAlgorithm::tag_len), [32, 48, 64]);
     }
 
     #[test]

@@ -727,6 +727,7 @@ macro_rules! conformance_tests {
                         assert!(cap.available, "{a:?}");
                         assert_eq!(digest::digest(h, b"").len(), h.output_len());
                     }
+                    Algorithm::Mac(m) => assert!(cap.available, "{m:?}"),
                     Algorithm::Kx(k) => {
                         let p = policy(
                             &[TlsVersion::Tls13],
