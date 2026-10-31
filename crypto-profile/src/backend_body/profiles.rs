@@ -2,7 +2,8 @@
 use crate::signature::KeyPair;
 use crate::tls::{Policy, load_private_key};
 use crate::{
-    Algorithm, Approval, CryptoError, Family, Options, Profile, SignatureAlgorithm, TlsError,
+    Algorithm, Approval, CryptoError, Family, MacAlgorithm, Options, Profile, SignatureAlgorithm,
+    TlsError,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
@@ -146,6 +147,75 @@ fn approves_given(
 pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
     approves_given(aws_lc_rs::try_fips_mode().is_ok(), r, |a| {
         crypto_profile::capability(crate::MODULE, a).approval
+    })
+}
+
+/// A profile's non-TLS families on this backend's module, narrowed by `options`. Independent of
+/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Admitted {
+    /// The profile.
+    pub profile: Profile,
+    /// The options it was narrowed by.
+    pub options: Options,
+    /// The MACs the profile admits, in preference order.
+    pub macs: Vec<MacAlgorithm>,
+    /// Entries unavailable on the module line, in family and preference order.
+    pub excluded: Vec<Algorithm>,
+}
+
+/// `profile`'s non-TLS families on this backend's module, narrowed by `options`. Never refuses: a
+/// family left empty refuses each of its constructors instead.
+pub fn admit(profile: Profile, options: Options) -> Admitted {
+    let s = crypto_profile::select_admitted(profile, options, crate::MODULE);
+    Admitted {
+        profile,
+        options,
+        macs: s.macs,
+        excluded: s.excluded,
+    }
+}
+
+impl Admitted {
+    /// Refuses a MAC the profile does not admit.
+    pub fn admit_mac(&self, m: MacAlgorithm) -> Result<(), CryptoError> {
+        if self.macs.contains(&m) {
+            Ok(())
+        } else {
+            Err(CryptoError::NotInProfile {
+                profile: self.profile,
+                algorithm: Algorithm::Mac(m),
+            })
+        }
+    }
+}
+
+fn admitted_approved_given(
+    fips_mode: bool,
+    a: &Admitted,
+    cell: impl Fn(Algorithm) -> Approval,
+) -> Result<(), CryptoError> {
+    if !fips_mode {
+        return Err(CryptoError::NotFips);
+    }
+    for algorithm in a.macs.iter().map(|m| Algorithm::Mac(*m)) {
+        let approval = cell(algorithm);
+        if !approval.is_approved() {
+            return Err(CryptoError::NotApproved {
+                algorithm,
+                approval,
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Refuses with `CryptoError::NotFips` unless the module is in FIPS mode, and otherwise unless
+/// every algorithm `a` admits is `Approved` for the running module, failing on the first that is
+/// not. An empty family is not a refusal. Independent of `assert_module_approves`.
+pub fn assert_admitted_approved(a: &Admitted) -> Result<(), CryptoError> {
+    admitted_approved_given(aws_lc_rs::try_fips_mode().is_ok(), a, |x| {
+        crypto_profile::capability(crate::MODULE, x).approval
     })
 }
 
@@ -618,5 +688,122 @@ mod peer_certificate_tests {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod admitted_tests {
+    use super::*;
+    use crate::MacAlgorithm as M;
+
+    const ON: Options = Options {
+        peer_certificates_match_profile: false,
+        pq_key_exchange_required: false,
+        cnsa1_unclassified_nss: true,
+    };
+
+    #[test]
+    fn admit_never_refuses_and_carries_its_inputs() {
+        for p in Profile::ALL {
+            for o in [Options::default(), ON] {
+                let a = admit(p, o);
+                assert_eq!((a.profile, a.options), (p, o));
+                assert_eq!(
+                    a.macs,
+                    crypto_profile::select_admitted(p, o, crate::MODULE).macs
+                );
+                assert_eq!(a.excluded, []);
+            }
+        }
+        assert_eq!(
+            admit(Profile::Cnsa2, Options::default()).macs,
+            [M::HmacSha384, M::HmacSha512]
+        );
+        assert_eq!(
+            admit(Profile::Cnsa1, ON).macs,
+            [M::HmacSha384, M::HmacSha256]
+        );
+    }
+
+    #[test]
+    fn admit_mac_admits_exactly_the_profile_macs() {
+        for p in Profile::ALL {
+            for o in [Options::default(), ON] {
+                let a = admit(p, o);
+                for m in MacAlgorithm::ALL {
+                    let want = if a.macs.contains(&m) {
+                        Ok(())
+                    } else {
+                        Err(CryptoError::NotInProfile {
+                            profile: p,
+                            algorithm: Algorithm::Mac(m),
+                        })
+                    };
+                    assert_eq!(a.admit_mac(m), want, "{p} {o} {m:?}");
+                }
+            }
+        }
+        assert_eq!(
+            admit(Profile::Cnsa2, ON).admit_mac(M::HmacSha256),
+            Err(CryptoError::NotInProfile {
+                profile: Profile::Cnsa2,
+                algorithm: Algorithm::Mac(M::HmacSha256),
+            })
+        );
+    }
+
+    #[test]
+    fn admitted_approval_follows_this_modules_cells() {
+        for p in Profile::ALL {
+            let a = admit(p, Options::default());
+            if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                assert_eq!(assert_admitted_approved(&a), Ok(()), "{p}");
+            } else {
+                let first = Algorithm::Mac(a.macs[0]);
+                assert_eq!(
+                    assert_admitted_approved(&a),
+                    Err(CryptoError::NotApproved {
+                        algorithm: first,
+                        approval: crypto_profile::capability(crate::MODULE, first).approval,
+                    }),
+                    "{p}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn admitted_approval_checks_fips_mode_first_and_passes_an_empty_family() {
+        let approved = |_: Algorithm| Approval::Approved { source: "test" };
+        let a = admit(Profile::Cnsa2, Options::default());
+        assert_eq!(
+            admitted_approved_given(false, &a, approved),
+            Err(CryptoError::NotFips)
+        );
+        assert_eq!(admitted_approved_given(true, &a, approved), Ok(()));
+        let sha512 = Algorithm::Mac(M::HmacSha512);
+        assert_eq!(
+            admitted_approved_given(true, &a, |x| if x == sha512 {
+                Approval::Unverified
+            } else {
+                approved(x)
+            }),
+            Err(CryptoError::NotApproved {
+                algorithm: sha512,
+                approval: Approval::Unverified,
+            })
+        );
+        let empty = Admitted {
+            macs: vec![],
+            ..a.clone()
+        };
+        assert_eq!(
+            admitted_approved_given(true, &empty, |_| Approval::Unverified),
+            Ok(())
+        );
+        assert_eq!(
+            admitted_approved_given(false, &empty, approved),
+            Err(CryptoError::NotFips)
+        );
     }
 }

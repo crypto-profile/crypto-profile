@@ -166,20 +166,51 @@ fn child_declaration_text_in_strings_is_refused() {
 }
 
 #[test]
+fn body_index_accepts_the_hmac_module() {
+    let fixture = Fixture::new();
+    fixture.write("hmac.rs", "pub const VALUE: u8 = 1;\n");
+    fixture.write("mod.rs", "pub mod hmac;\n");
+    let (output, _) = modules(&fixture.0, true);
+    assert!(output.contains("hmac"), "{output}");
+}
+
+#[test]
 fn profile_exports_are_exact_and_require_the_module() {
     let fixture = Fixture::new();
-    let exports = "pub use profiles::{Resolved, assert_module_approves, resolve};\n";
-    fixture.write("mod.rs", exports);
-    assert!(std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err());
+    let resolved = "pub use profiles::{Resolved, assert_module_approves, resolve};\n";
+    let admitted = "pub use profiles::{Admitted, admit, assert_admitted_approved};\n";
+    for exports in [resolved, admitted] {
+        fixture.write("mod.rs", exports);
+        assert!(std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err());
+    }
     fixture.write(
         "profiles.rs",
-        "pub struct Resolved; pub fn resolve() {} pub fn assert_module_approves() {}\n",
+        "pub struct Resolved; pub fn resolve() {} pub fn assert_module_approves() {}\npub struct Admitted; pub fn admit() {} pub fn assert_admitted_approved() {}\n",
     );
-    fixture.write("mod.rs", &format!("mod profiles;\n{exports}"));
-    let (output, _) = modules(&fixture.0, true);
-    assert!(output.ends_with(exports));
-    for suffix in [exports, "pub use profiles::*;\n"] {
-        fixture.write("mod.rs", &format!("mod profiles;\n{exports}{suffix}"));
-        assert!(std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err());
+    for (index, emitted) in [
+        (resolved.to_string(), resolved.to_string()),
+        (admitted.to_string(), admitted.to_string()),
+        (
+            format!("{resolved}{admitted}"),
+            format!("{resolved}{admitted}"),
+        ),
+        (
+            format!("{admitted}{resolved}"),
+            format!("{resolved}{admitted}"),
+        ),
+    ] {
+        fixture.write("mod.rs", &format!("mod profiles;\n{index}"));
+        let (output, _) = modules(&fixture.0, true);
+        assert!(output.ends_with(&emitted), "{index}");
+    }
+    for suffix in [resolved, admitted, "pub use profiles::*;\n"] {
+        fixture.write(
+            "mod.rs",
+            &format!("mod profiles;\n{resolved}{admitted}{suffix}"),
+        );
+        assert!(
+            std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err(),
+            "{suffix}"
+        );
     }
 }

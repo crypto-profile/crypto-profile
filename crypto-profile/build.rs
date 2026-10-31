@@ -131,6 +131,11 @@ fn has_exact_child(source: &str) -> bool {
     false
 }
 
+const PROFILE_EXPORTS: [&str; 2] = [
+    "pub use profiles::{Resolved, assert_module_approves, resolve};",
+    "pub use profiles::{Admitted, admit, assert_admitted_approved};",
+];
+
 fn modules(dir: &Path, body: bool) -> (String, bool) {
     let index = dir.join("mod.rs");
     let root = read(&index);
@@ -139,7 +144,7 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
     } else {
         "mod backend {\n    pub(crate) use crate::provider_arms::*;\n}\n"
     };
-    let mut profile_exports = false;
+    let mut profile_exports = [false; PROFILE_EXPORTS.len()];
     let mut has_bridge = false;
     let mut names = BTreeSet::new();
     let mut declarations = Vec::new();
@@ -160,10 +165,10 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
         first = false;
         if body
             && !test_support
-            && !profile_exports
-            && line == "pub use profiles::{Resolved, assert_module_approves, resolve};"
+            && let Some(i) = PROFILE_EXPORTS.iter().position(|e| *e == line)
+            && !profile_exports[i]
         {
-            profile_exports = true;
+            profile_exports[i] = true;
             continue;
         }
         if line == "mod backend {" && !has_bridge {
@@ -196,6 +201,7 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
                     "fips",
                     "tls",
                     "sealbox",
+                    "hmac",
                     "test_support",
                 ]
                 .contains(&name)
@@ -263,11 +269,16 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
         }
         output.push_str(&format!("{visibility}mod {name} {{\n{source}\n}}\n"));
     }
-    if profile_exports {
+    if profile_exports.contains(&true) {
         if !names.contains("profiles") {
             fail(&index, "profile exports require profiles module");
         }
-        output.push_str("pub use profiles::{Resolved, assert_module_approves, resolve};\n");
+        for (line, present) in PROFILE_EXPORTS.iter().zip(profile_exports) {
+            if present {
+                output.push_str(line);
+                output.push('\n');
+            }
+        }
     }
     (output, has_bridge)
 }

@@ -728,7 +728,16 @@ macro_rules! conformance_tests {
                         assert!(cap.available, "{a:?}");
                         assert_eq!(digest::digest(h, b"").len(), h.output_len());
                     }
-                    Algorithm::Mac(m) => assert!(cap.available, "{m:?}"),
+                    Algorithm::Mac(m) => {
+                        assert!(cap.available, "{m:?}");
+                        let key = hmac::Key::new(
+                            &admit(Profile::Unrestricted, Options::default()),
+                            m,
+                            &[7; 32],
+                        )
+                        .unwrap_or_else(|e| panic!("{m:?}: {e}"));
+                        assert_eq!(key.sign(b"").as_ref().len(), m.tag_len(), "{m:?}");
+                    }
                     Algorithm::Kx(k) => {
                         let p = policy(
                             &[TlsVersion::Tls13],

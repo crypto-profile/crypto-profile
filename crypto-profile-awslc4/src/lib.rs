@@ -23,8 +23,10 @@ mod backend_body;
 mod backend_arms;
 #[cfg(any(test, feature = "test-support"))]
 pub use backend_body::test_support;
-pub use backend_body::{Resolved, assert_module_approves, resolve};
-pub use backend_body::{aead, csr, digest, fips, random, sealbox, signature, tls};
+pub use backend_body::{
+    Admitted, Resolved, admit, assert_admitted_approved, assert_module_approves, resolve,
+};
+pub use backend_body::{aead, csr, digest, fips, hmac, random, sealbox, signature, tls};
 
 /// The AWS-LC FIPS module (line and linkage) this build links. Its certificate status is
 /// [`fips::certificate()`]; for 4.x the module is in CMVP review.
