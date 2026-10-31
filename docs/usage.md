@@ -222,6 +222,6 @@ key.verify(message, tag.as_ref())?;
 - **Comparing tags.** `Key::verify` compares in constant time, and refuses a tag of any other length with `CryptoError::MacVerify`, whatever the cause. It is the only constant-time comparison: comparing `Tag::as_ref()` bytes directly is not one, and `Tag` has no `==`.
 - **Full-length tags only.** The crate offers no truncation.
 - **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
-- **`Admitted`'s fields are public,** as `Resolved`'s are. A caller who changes them owns the result; `Key::new` checks what the `Admitted` it is given says.
+- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC the profile does not admit. Read it through `profile()`, `options()`, `macs()` and `excluded()`.
 - **Panics.** `Key::new`, `sign` and `verify` panic only if the module's HMAC context fails, as aws-lc-rs's do.
 

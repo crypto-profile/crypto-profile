@@ -151,17 +151,15 @@ pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
 }
 
 /// A profile's non-TLS families on this backend's module, under `options`. Independent of
-/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs.
+/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs. Built
+/// only by [`admit`], and read-only, so a constructor that takes it checks the profile's own
+/// admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Admitted {
-    /// The profile.
-    pub profile: Profile,
-    /// The options it was admitted under.
-    pub options: Options,
-    /// The MACs the profile admits, in preference order.
-    pub macs: Vec<MacAlgorithm>,
-    /// Entries unavailable on the module line, in family and preference order.
-    pub excluded: Vec<Algorithm>,
+    profile: Profile,
+    options: Options,
+    macs: Vec<MacAlgorithm>,
+    excluded: Vec<Algorithm>,
 }
 
 /// `profile`'s non-TLS families on this backend's module, under `options`. Never refuses: a
@@ -177,6 +175,26 @@ pub fn admit(profile: Profile, options: Options) -> Admitted {
 }
 
 impl Admitted {
+    /// The profile.
+    pub fn profile(&self) -> Profile {
+        self.profile
+    }
+
+    /// The options it was admitted under.
+    pub fn options(&self) -> Options {
+        self.options
+    }
+
+    /// The MACs the profile admits, in preference order.
+    pub fn macs(&self) -> &[MacAlgorithm] {
+        &self.macs
+    }
+
+    /// Entries unavailable on the module line, in family and preference order.
+    pub fn excluded(&self) -> &[Algorithm] {
+        &self.excluded
+    }
+
     /// Refuses a MAC the profile does not admit, and one the module line lacks with
     /// `CryptoError::Unavailable`.
     pub fn admit_mac(&self, m: MacAlgorithm) -> Result<(), CryptoError> {
@@ -710,22 +728,23 @@ mod admitted_tests {
         for p in Profile::ALL {
             for o in [Options::default(), ON] {
                 let a = admit(p, o);
-                assert_eq!((a.profile, a.options), (p, o));
+                assert_eq!((a.profile(), a.options()), (p, o));
                 assert_eq!(
-                    a.macs,
+                    a.macs(),
                     crypto_profile::select_admitted(p, o, crate::MODULE).macs
                 );
-                assert_eq!(a.excluded, []);
+                assert_eq!(a.excluded(), []);
             }
         }
         assert_eq!(
-            admit(Profile::Cnsa2, Options::default()).macs,
+            admit(Profile::Cnsa2, Options::default()).macs(),
             [M::HmacSha384, M::HmacSha512]
         );
         assert_eq!(
-            admit(Profile::Cnsa1, ON).macs,
+            admit(Profile::Cnsa1, ON).macs(),
             [M::HmacSha384, M::HmacSha256]
         );
+        assert_eq!(admit(Profile::Cnsa1, ON).options(), ON);
     }
 
     #[test]
@@ -764,6 +783,7 @@ mod admitted_tests {
             a.admit_mac(M::HmacSha384),
             Err(CryptoError::Unavailable(Algorithm::Mac(M::HmacSha384)))
         );
+        assert_eq!(a.excluded(), [Algorithm::Mac(M::HmacSha384)]);
         assert_eq!(a.admit_mac(M::HmacSha512), Ok(()));
     }
 

@@ -7,6 +7,22 @@ pub use crypto_profile::*;
 pub use rcgen;
 pub use rustls;
 
+/// `Admitted` is built only by `admit`, and its lists are read-only:
+///
+/// ```
+/// use crypto_profile_awslc3::{MacAlgorithm, Options, Profile, admit};
+/// let a = admit(Profile::Cnsa2, Options::default());
+/// assert!(!a.macs().contains(&MacAlgorithm::HmacSha256));
+/// ```
+///
+/// ```compile_fail,E0616
+/// use crypto_profile_awslc3::{MacAlgorithm, Options, Profile, admit};
+/// let mut a = admit(Profile::Cnsa2, Options::default());
+/// a.macs.push(MacAlgorithm::HmacSha256);
+/// ```
+#[allow(dead_code)]
+mod admitted_is_read_only {}
+
 crypto_profile::provider!(crate::provider_arms);
 mod provider_arms;
 

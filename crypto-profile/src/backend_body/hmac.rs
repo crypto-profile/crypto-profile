@@ -26,7 +26,7 @@ pub struct Tag(aws_lc_rs::hmac::Tag);
 impl Key {
     /// A key for `algorithm`. Refuses an algorithm `a`'s profile does not admit or its module line
     /// lacks (`Admitted::admit_mac`), then a key
-    /// outside `mac_key_floor_bits(a.profile)..=MAC_KEY_MAX_BITS`. Panics only if the module
+    /// outside `mac_key_floor_bits(a.profile())..=MAC_KEY_MAX_BITS`. Panics only if the module
     /// fails to initialise the HMAC context.
     pub fn new(a: &Admitted, algorithm: MacAlgorithm, key: &[u8]) -> Result<Key, CryptoError> {
         check(a, algorithm, key)?;
@@ -54,10 +54,10 @@ impl Key {
 
 fn check(a: &Admitted, algorithm: MacAlgorithm, key: &[u8]) -> Result<(), CryptoError> {
     a.admit_mac(algorithm)?;
-    let min_bits = mac_key_floor_bits(a.profile);
+    let min_bits = mac_key_floor_bits(a.profile());
     if key.len() < min_bits.div_ceil(8) || key.len() > MAC_KEY_MAX_BITS / 8 {
         return Err(CryptoError::MacKeyLength {
-            profile: a.profile,
+            profile: a.profile(),
             bytes: key.len(),
             min_bits,
             max_bits: MAC_KEY_MAX_BITS,
