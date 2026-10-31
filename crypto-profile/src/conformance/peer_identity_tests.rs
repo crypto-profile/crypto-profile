@@ -487,6 +487,150 @@ macro_rules! __conformance_peer_identity_tests {
                 test_support::drive_typed(client, server).unwrap();
                 assert_eq!((first.calls(), second.calls()), (0, 1));
             }
+
+            fn connect(
+                client: &Arc<rustls::ClientConfig>,
+                server: &Arc<rustls::ServerConfig>,
+            ) -> Result<rustls::HandshakeKind, rustls::Error> {
+                let mut c =
+                    rustls::ClientConnection::new(client.clone(), "localhost".try_into().unwrap())
+                        .unwrap();
+                let mut s = rustls::ServerConnection::new(server.clone()).unwrap();
+                for _flight in 0..100 {
+                    let mut wire = Vec::new();
+                    c.write_tls(&mut wire).unwrap();
+                    let mut bytes = wire.as_slice();
+                    while !bytes.is_empty() {
+                        s.read_tls(&mut bytes).unwrap();
+                        s.process_new_packets()?;
+                    }
+                    wire.clear();
+                    s.write_tls(&mut wire).unwrap();
+                    let mut bytes = wire.as_slice();
+                    while !bytes.is_empty() {
+                        c.read_tls(&mut bytes).unwrap();
+                        c.process_new_packets()?;
+                    }
+                    if !c.is_handshaking() && !s.is_handshaking() && wire.is_empty() {
+                        return Ok(s.handshake_kind().unwrap());
+                    }
+                }
+                panic!("handshake stalled");
+            }
+
+            #[test]
+            fn client_resumption_is_bound_to_the_verifier_handle() {
+                let pki = leaf(vec![uri(A)], server_side());
+                let accepts = ExactUri::new(A);
+                let refuses = ExactUri::new(B);
+                let (mut ca, s) =
+                    server_identity_configs(&policy(false), &pki, &pki, Some(accepts.clone()))
+                        .unwrap();
+                let (mut cb, _) =
+                    server_identity_configs(&policy(false), &pki, &pki, Some(refuses.clone()))
+                        .unwrap();
+                let store = rustls::client::Resumption::in_memory_sessions(8);
+                ca.resumption = store.clone();
+                cb.resumption = store;
+                cb.client_auth_cert_resolver = ca.client_auth_cert_resolver.clone();
+                let (ca, cb, s) = (Arc::new(ca), Arc::new(cb), Arc::new(s));
+                assert_eq!(connect(&ca, &s).unwrap(), rustls::HandshakeKind::Full);
+                assert_eq!(connect(&ca, &s).unwrap(), rustls::HandshakeKind::Resumed);
+                assert_eq!(connect(&cb, &s).unwrap_err(), refusal(B));
+                assert_eq!(refuses.calls(), 1);
+            }
+
+            #[test]
+            fn server_resumption_does_not_cross_default_session_stores() {
+                let host = host();
+                let pki = leaf(vec![uri(A)], client_side());
+                let refuses = ExactUri::new(B);
+                let (c, sa) = client_identity_configs(
+                    &policy(false),
+                    &host,
+                    &pki,
+                    &pki,
+                    Some(ExactUri::new(A)),
+                )
+                .unwrap();
+                let (_, sb) = client_identity_configs(
+                    &policy(false),
+                    &host,
+                    &pki,
+                    &pki,
+                    Some(refuses.clone()),
+                )
+                .unwrap();
+                let (c, sa, sb) = (Arc::new(c), Arc::new(sa), Arc::new(sb));
+                assert_eq!(connect(&c, &sa).unwrap(), rustls::HandshakeKind::Full);
+                assert_eq!(connect(&c, &sa).unwrap(), rustls::HandshakeKind::Resumed);
+                assert_eq!(connect(&c, &sb).unwrap_err(), refusal(B));
+                assert_eq!(refuses.calls(), 1);
+            }
+
+            /// Pins the residual in decision 0008: rustls resumes a server session without
+            /// re-verifying the client, so configurations with different identity checks must not
+            /// share session storage. A rustls change that closes this fails here.
+            #[test]
+            fn shared_server_session_storage_skips_the_identity_check() {
+                let host = host();
+                let pki = leaf(vec![uri(A)], client_side());
+                let refuses = ExactUri::new(B);
+                let (c, sa) = client_identity_configs(
+                    &policy(false),
+                    &host,
+                    &pki,
+                    &pki,
+                    Some(ExactUri::new(A)),
+                )
+                .unwrap();
+                let (_, mut sb) = client_identity_configs(
+                    &policy(false),
+                    &host,
+                    &pki,
+                    &pki,
+                    Some(refuses.clone()),
+                )
+                .unwrap();
+                sb.session_storage = sa.session_storage.clone();
+                let (c, sa, sb) = (Arc::new(c), Arc::new(sa), Arc::new(sb));
+                assert_eq!(connect(&c, &sa).unwrap(), rustls::HandshakeKind::Full);
+                assert_eq!(connect(&c, &sb).unwrap(), rustls::HandshakeKind::Resumed);
+                assert_eq!(refuses.calls(), 0);
+            }
+
+            /// Pins the residual in decision 0008: rustls verifies only a presented client
+            /// certificate, so with `allow_unauthenticated` a client without one is admitted
+            /// without reaching the identity check.
+            #[test]
+            fn an_unauthenticated_client_skips_the_identity_check_when_allowed() {
+                let host = host();
+                let check = ExactUri::new(A);
+                let verifier =
+                    tls::client_cert_verifier_builder(Arc::new(host.roots.clone()), &policy(false))
+                        .unwrap()
+                        .allow_unauthenticated()
+                        .with_peer_identity(check.clone())
+                        .build()
+                        .unwrap();
+                let server = tls::server_builder(&policy(false))
+                    .unwrap()
+                    .with_client_cert_verifier(verifier)
+                    .with_single_cert(host.chain.clone(), host.key.clone_key())
+                    .unwrap();
+                let to_host =
+                    tls::server_cert_verifier_builder(Arc::new(host.roots.clone()), &policy(false))
+                        .unwrap()
+                        .build()
+                        .unwrap();
+                let client = tls::client_builder(&policy(false))
+                    .unwrap()
+                    .dangerous()
+                    .with_custom_certificate_verifier(to_host)
+                    .with_no_client_auth();
+                test_support::drive_typed(client, server).unwrap();
+                assert_eq!(check.calls(), 0);
+            }
         }
     };
 }
