@@ -24,7 +24,8 @@ pub struct Key {
 pub struct Tag(aws_lc_rs::hmac::Tag);
 
 impl Key {
-    /// A key for `algorithm`. Refuses an algorithm `a`'s profile does not admit, then a key
+    /// A key for `algorithm`. Refuses an algorithm `a`'s profile does not admit or its module line
+    /// lacks (`Admitted::admit_mac`), then a key
     /// outside `mac_key_floor_bits(a.profile)..=MAC_KEY_MAX_BITS`. Panics only if the module
     /// fails to initialise the HMAC context.
     pub fn new(a: &Admitted, algorithm: MacAlgorithm, key: &[u8]) -> Result<Key, CryptoError> {
