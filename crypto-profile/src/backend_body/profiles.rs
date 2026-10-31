@@ -150,13 +150,13 @@ pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
     })
 }
 
-/// A profile's non-TLS families on this backend's module, narrowed by `options`. Independent of
+/// A profile's non-TLS families on this backend's module, under `options`. Independent of
 /// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Admitted {
     /// The profile.
     pub profile: Profile,
-    /// The options it was narrowed by.
+    /// The options it was admitted under.
     pub options: Options,
     /// The MACs the profile admits, in preference order.
     pub macs: Vec<MacAlgorithm>,
@@ -164,7 +164,7 @@ pub struct Admitted {
     pub excluded: Vec<Algorithm>,
 }
 
-/// `profile`'s non-TLS families on this backend's module, narrowed by `options`. Never refuses: a
+/// `profile`'s non-TLS families on this backend's module, under `options`. Never refuses: a
 /// family left empty refuses each of its constructors instead.
 pub fn admit(profile: Profile, options: Options) -> Admitted {
     let s = crypto_profile::select_admitted(profile, options, crate::MODULE);
@@ -177,10 +177,13 @@ pub fn admit(profile: Profile, options: Options) -> Admitted {
 }
 
 impl Admitted {
-    /// Refuses a MAC the profile does not admit.
+    /// Refuses a MAC the profile does not admit, and one the module line lacks with
+    /// `CryptoError::Unavailable`.
     pub fn admit_mac(&self, m: MacAlgorithm) -> Result<(), CryptoError> {
         if self.macs.contains(&m) {
             Ok(())
+        } else if self.excluded.contains(&Algorithm::Mac(m)) {
+            Err(CryptoError::Unavailable(Algorithm::Mac(m)))
         } else {
             Err(CryptoError::NotInProfile {
                 profile: self.profile,
@@ -750,6 +753,18 @@ mod admitted_tests {
                 algorithm: Algorithm::Mac(M::HmacSha256),
             })
         );
+    }
+
+    #[test]
+    fn a_mac_the_module_lacks_is_unavailable() {
+        let mut a = admit(Profile::Fips1403, Options::default());
+        a.macs.retain(|m| *m != M::HmacSha384);
+        a.excluded.push(Algorithm::Mac(M::HmacSha384));
+        assert_eq!(
+            a.admit_mac(M::HmacSha384),
+            Err(CryptoError::Unavailable(Algorithm::Mac(M::HmacSha384)))
+        );
+        assert_eq!(a.admit_mac(M::HmacSha512), Ok(()));
     }
 
     #[test]

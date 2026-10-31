@@ -11,8 +11,9 @@ const fn alg(m: MacAlgorithm) -> aws_lc_rs::hmac::Algorithm {
     }
 }
 
-/// An HMAC key whose algorithm and length the profile admits. Its key material is held only
-/// inside the module's HMAC context, which the module clears on drop.
+/// An HMAC key whose algorithm and length the profile admits. Its key material is held in the
+/// module's HMAC context, which the module clears on drop. Its methods panic only if that context
+/// fails.
 pub struct Key {
     key: aws_lc_rs::hmac::Key,
     algorithm: MacAlgorithm,

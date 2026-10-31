@@ -344,26 +344,6 @@ pub const MAC_GOLDEN: [(Profile, &[MacAlgorithm], &[MacAlgorithm]); 7] = {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn select_admitted_agrees_with_the_mac_golden_rows_on_every_module() {
-        for (i, p) in Profile::ALL.into_iter().enumerate() {
-            assert_eq!(MAC_GOLDEN[i].0, p);
-        }
-        for m in [M3S, M3D, M4S, M4D] {
-            for (p, off, on) in MAC_GOLDEN {
-                for (unclassified, want) in [(false, off), (true, on)] {
-                    let o = Options {
-                        cnsa1_unclassified_nss: unclassified,
-                        ..Options::default()
-                    };
-                    let s = crate::profile::select_admitted(p, o, m);
-                    assert_eq!(s.macs, want, "{m:?} {p} {unclassified}");
-                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
-                }
-            }
-        }
-    }
     use crate::capability::{Linkage, ModuleLine};
     use crate::error::Family;
     use crate::profile::select;
@@ -385,6 +365,26 @@ mod tests {
         line: ModuleLine::AwsLcFips4,
         linkage: Linkage::Dynamic,
     };
+
+    #[test]
+    fn select_admitted_agrees_with_the_mac_golden_rows_on_every_module() {
+        for (i, p) in Profile::ALL.into_iter().enumerate() {
+            assert_eq!(MAC_GOLDEN[i].0, p);
+        }
+        for m in [M3S, M3D, M4S, M4D] {
+            for (p, off, on) in MAC_GOLDEN {
+                for (unclassified, want) in [(false, off), (true, on)] {
+                    let o = Options {
+                        cnsa1_unclassified_nss: unclassified,
+                        ..Options::default()
+                    };
+                    let s = crate::profile::select_admitted(p, o, m);
+                    assert_eq!(s.macs, want, "{m:?} {p} {unclassified}");
+                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                }
+            }
+        }
+    }
     const PQ: Options = Options {
         peer_certificates_match_profile: false,
         pq_key_exchange_required: true,

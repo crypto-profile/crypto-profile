@@ -153,7 +153,8 @@ impl FromStr for Profile {
     }
 }
 
-/// Narrowing applied on top of any profile. The default narrows nothing.
+/// Options applied on top of any profile. The default changes nothing; `cnsa1_unclassified_nss`
+/// widens `cnsa1`'s MACs, and the others narrow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Options {
     /// Keep only post-quantum key exchange (pure ML-KEM and hybrid groups), and so remove TLS 1.2,
@@ -656,7 +657,7 @@ fn select_spec(
     })
 }
 
-/// A profile's non-TLS families narrowed by its options, every entry implemented by the module's
+/// A profile's non-TLS families under its options, every entry implemented by the module's
 /// backend, in preference order. Never refused: an empty family means every constructor of that
 /// family refuses under the profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -667,7 +668,7 @@ pub struct AdmittedSelection {
     pub excluded: Vec<Algorithm>,
 }
 
-/// The backend-independent half of a backend's `admit`: `profile`'s non-TLS families, narrowed by
+/// The backend-independent half of a backend's `admit`: `profile`'s non-TLS families, under
 /// `options`, less what `module` lacks. Independent of [`select`].
 pub fn select_admitted(profile: Profile, options: Options, module: Module) -> AdmittedSelection {
     select_admitted_with(profile, profile.spec(), options, |a| {
