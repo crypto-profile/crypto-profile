@@ -1,6 +1,6 @@
 # Conformance vector sources
 
-Every file in this directory is byte-for-byte as retrieved, except `ed25519_rfc8032.json`, which transcribes RFC text. Retrieved 2026-10-28.
+Every file in this directory is byte-for-byte as retrieved, except `ed25519_rfc8032.json`, which transcribes RFC text. Retrieved 2026-10-28; the three `hmac_*` files 2026-10-31, from the same commit.
 
 ## Wycheproof
 
@@ -19,6 +19,9 @@ Each file was fetched from `https://raw.githubusercontent.com/C2SP/wycheproof/d1
 | `rsa_signature_3072_sha384_test.json` | `73499ee649d8fb703b3f0f455fa36f7682fde677c590a736958ebce05ab27dae` |
 | `rsa_signature_4096_sha384_test.json` | `bc26f16b9fc9a90628864d3d1111ef48a4bd00b9d4870bfab88ff326e309e073` |
 | `mldsa_87_verify_test.json` | `54adffe10f6dad7941ffd97f77ad4e5c85cb3a54d44cf5ce1c95cb1757b9ba14` |
+| `hmac_sha256_test.json` | `2d201cfa61d1bf95e6f5d07d96634b4a348b31e8eaa277ad7c8d09677b7a743f` |
+| `hmac_sha384_test.json` | `28b9776e979dd755d852ca471043ea6cedce8b15f7a28abdf6ea9efd982b43c0` |
+| `hmac_sha512_test.json` | `b6c90477bdb4a6fc8ee3d1f7b2c0b69a8dfffab34718abaa6cabd71cc2ba1207` |
 
 ## RFC 8032
 

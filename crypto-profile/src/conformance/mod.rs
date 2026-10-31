@@ -278,6 +278,34 @@ mod tests {
     }
 
     #[test]
+    fn mac_cases_carry_their_group_tag_size() {
+        assert!(__wycheproof_mac_cases("not json").is_empty());
+        let mac = __wycheproof_mac_cases(vectors::HMAC_SHA384);
+        assert_eq!(mac.len(), 174);
+        let first = &mac[0];
+        assert_eq!(
+            (
+                first.tc_id,
+                first.tag_bits,
+                first.key.len(),
+                first.msg.len(),
+                first.tag.len()
+            ),
+            (1, 384, 48, 0, 48)
+        );
+        assert_eq!(first.result, "valid");
+        let mut sizes: Vec<u64> = mac.iter().map(|c| c.tag_bits).collect();
+        sizes.dedup();
+        sizes.sort_unstable();
+        sizes.dedup();
+        assert_eq!(sizes, [192, 384]);
+        assert!(
+            mac.iter()
+                .all(|c| c.tag.len() as u64 * 8 == c.tag_bits || c.result == "invalid")
+        );
+    }
+
+    #[test]
     fn aead_cases_keep_only_the_named_sizes() {
         let file = r#"{"testGroups":[
             {"keySize":128,"ivSize":96,"tagSize":128,"tests":[{"tcId":1,"key":"00","iv":"00","aad":"","msg":"","ct":"","tag":"00","result":"valid"}]},
@@ -298,6 +326,46 @@ mod tests {
             }]
         );
     }
+}
+
+/// One Wycheproof MAC test.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct MacCase {
+    /// The key.
+    pub key: Vec<u8>,
+    /// The message.
+    pub msg: Vec<u8>,
+    /// The expected tag, of `tag_bits` bits.
+    pub tag: Vec<u8>,
+    /// The group's tag size in bits.
+    pub tag_bits: u64,
+    /// `valid`, `invalid` or `acceptable`.
+    pub result: String,
+    /// The Wycheproof test-case id.
+    pub tc_id: u64,
+}
+
+/// Every case of a Wycheproof MAC file, each carrying its group's tag size.
+#[doc(hidden)]
+pub fn __wycheproof_mac_cases(file: &str) -> Vec<MacCase> {
+    let v: serde_json::Value = serde_json::from_str(file).unwrap_or_default();
+    let d = |x: &serde_json::Value| hex::decode(x.as_str().unwrap_or_default()).unwrap_or_default();
+    let mut out = Vec::new();
+    for g in v["testGroups"].as_array().into_iter().flatten() {
+        let tag_bits = g["tagSize"].as_u64().unwrap_or_default();
+        for t in g["tests"].as_array().into_iter().flatten() {
+            out.push(MacCase {
+                key: d(&t["key"]),
+                msg: d(&t["msg"]),
+                tag: d(&t["tag"]),
+                tag_bits,
+                result: t["result"].as_str().unwrap_or_default().to_string(),
+                tc_id: t["tcId"].as_u64().unwrap_or_default(),
+            });
+        }
+    }
+    out
 }
 
 /// Known-answer data every backend's conformance run checks.
@@ -324,6 +392,12 @@ pub mod vectors {
     pub const ML_DSA_87: &str = include_str!("vectors/mldsa_87_verify_test.json");
     /// Wycheproof AES-GCM.
     pub const AES_GCM: &str = include_str!("vectors/aes_gcm_test.json");
+    /// Wycheproof HMAC-SHA256.
+    pub const HMAC_SHA256: &str = include_str!("vectors/hmac_sha256_test.json");
+    /// Wycheproof HMAC-SHA384.
+    pub const HMAC_SHA384: &str = include_str!("vectors/hmac_sha384_test.json");
+    /// Wycheproof HMAC-SHA512.
+    pub const HMAC_SHA512: &str = include_str!("vectors/hmac_sha512_test.json");
     /// NIST CAVP SHA-256 short messages.
     pub const SHA256_SHORT: &str = include_str!("vectors/SHA256ShortMsg.rsp");
     /// NIST CAVP SHA-384 short messages.
@@ -678,6 +752,95 @@ macro_rules! conformance_tests {
                 }
             }
             assert_eq!((valid, invalid), (39, 27));
+        }
+
+        #[test]
+        fn conformance_wycheproof_hmac() {
+            let a = admit(Profile::Unrestricted, Options::default());
+            for (m, file) in [
+                (MacAlgorithm::HmacSha256, vectors::HMAC_SHA256),
+                (MacAlgorithm::HmacSha384, vectors::HMAC_SHA384),
+                (MacAlgorithm::HmacSha512, vectors::HMAC_SHA512),
+            ] {
+                let cases = $crate::conformance::__wycheproof_mac_cases(file);
+                assert_eq!(cases.len(), 174, "{m:?}");
+                let (mut valid, mut invalid, mut truncated) = (0, 0, 0);
+                for c in &cases {
+                    let k = hmac::Key::new(&a, m, &c.key)
+                        .unwrap_or_else(|e| panic!("{m:?} tcId {}: {e}", c.tc_id));
+                    let tag = k.sign(&c.msg);
+                    let verified = k.verify(&c.msg, &c.tag);
+                    if c.tag_bits == 8 * m.tag_len() as u64 {
+                        match c.result.as_str() {
+                            "valid" => {
+                                valid += 1;
+                                assert_eq!(
+                                    tag.as_ref(),
+                                    c.tag.as_slice(),
+                                    "{m:?} tcId {}",
+                                    c.tc_id
+                                );
+                                assert_eq!(verified, Ok(()), "{m:?} tcId {}", c.tc_id);
+                            }
+                            "invalid" => {
+                                invalid += 1;
+                                assert_eq!(
+                                    verified,
+                                    Err(CryptoError::MacVerify),
+                                    "{m:?} tcId {}",
+                                    c.tc_id
+                                );
+                            }
+                            other => panic!("{m:?} tcId {}: unknown result {other:?}", c.tc_id),
+                        }
+                    } else {
+                        truncated += 1;
+                        assert_eq!(
+                            verified,
+                            Err(CryptoError::MacVerify),
+                            "{m:?} tcId {}",
+                            c.tc_id
+                        );
+                        if c.result == "valid" {
+                            assert_eq!(
+                                &tag.as_ref()[..c.tag.len()],
+                                c.tag.as_slice(),
+                                "{m:?} tcId {}",
+                                c.tc_id
+                            );
+                        }
+                    }
+                }
+                assert_eq!((valid, invalid, truncated), (33, 54, 87), "{m:?}");
+            }
+        }
+
+        #[test]
+        fn conformance_hmac_refusal_matrix() {
+            for (p, off, on) in $crate::conformance::golden::MAC_GOLDEN {
+                for (unclassified, admitted) in [(false, off), (true, on)] {
+                    let o = Options {
+                        cnsa1_unclassified_nss: unclassified,
+                        ..Options::default()
+                    };
+                    let a = admit(p, o);
+                    for m in MacAlgorithm::ALL {
+                        let want = if admitted.contains(&m) {
+                            Ok(m)
+                        } else {
+                            Err(CryptoError::NotInProfile {
+                                profile: p,
+                                algorithm: Algorithm::Mac(m),
+                            })
+                        };
+                        assert_eq!(
+                            hmac::Key::new(&a, m, &[7; 32]).map(|k| k.algorithm()),
+                            want,
+                            "{p} {o} {m:?}"
+                        );
+                    }
+                }
+            }
         }
 
         #[test]
