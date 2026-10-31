@@ -201,6 +201,26 @@ pub enum CryptoError {
         /// Its approval.
         approval: Approval,
     },
+    /// An algorithm, outside TLS, the profile does not admit.
+    NotInProfile {
+        /// The profile.
+        profile: Profile,
+        /// The refused algorithm.
+        algorithm: Algorithm,
+    },
+    /// An HMAC key whose length is outside the profile's range.
+    MacKeyLength {
+        /// The profile.
+        profile: Profile,
+        /// The key's length in bytes.
+        bytes: usize,
+        /// The shortest key the profile admits, in bits.
+        min_bits: usize,
+        /// The longest key the module admits, in bits.
+        max_bits: usize,
+    },
+    /// A MAC did not verify.
+    MacVerify,
 }
 
 impl fmt::Display for CryptoError {
@@ -269,6 +289,19 @@ impl fmt::Display for CryptoError {
                     "{algorithm:?} is not approved by the running module: {approval:?}"
                 )
             }
+            CryptoError::NotInProfile { profile, algorithm } => {
+                write!(f, "the {profile} profile does not admit {algorithm:?}")
+            }
+            CryptoError::MacKeyLength {
+                profile,
+                bytes,
+                min_bits,
+                max_bits,
+            } => write!(
+                f,
+                "a {bytes}-byte HMAC key is outside the {profile} profile's {min_bits}-{max_bits} bit range"
+            ),
+            CryptoError::MacVerify => f.write_str("the MAC did not verify"),
         }
     }
 }
@@ -278,7 +311,9 @@ impl std::error::Error for CryptoError {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::algorithm::{Algorithm, KxGroup, SignatureAlgorithm, TlsSignatureScheme};
+    use crate::algorithm::{
+        Algorithm, KxGroup, MacAlgorithm, SignatureAlgorithm, TlsSignatureScheme,
+    };
     use crate::capability::Approval;
     use crate::profile::{Options, Profile};
 
@@ -330,7 +365,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 5] = [
+        let table: [(CryptoError, &str); 8] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -368,6 +403,23 @@ mod tests {
                 },
                 "Signature(MlDsa87) is not approved by the running module: AlgorithmTested { cavp: \"A7855 (x)\" }",
             ),
+            (
+                CryptoError::NotInProfile {
+                    profile: Profile::Cnsa2,
+                    algorithm: Algorithm::Mac(MacAlgorithm::HmacSha256),
+                },
+                "the cnsa2 profile does not admit Mac(HmacSha256)",
+            ),
+            (
+                CryptoError::MacKeyLength {
+                    profile: Profile::Bsi,
+                    bytes: 15,
+                    min_bits: 128,
+                    max_bits: 524_288,
+                },
+                "a 15-byte HMAC key is outside the bsi profile's 128-524288 bit range",
+            ),
+            (CryptoError::MacVerify, "the MAC did not verify"),
         ];
         for (e, text) in table {
             assert_eq!(e.to_string(), text);
