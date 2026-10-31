@@ -11,8 +11,8 @@ macro_rules! __conformance_peer_identity_tests {
             use $b::test_support::{self, IdentityPki};
             use $b::tls::{self, Policy};
             use $b::{
-                CryptoError, KxGroup as K, Options, PeerCertificateViolation, PeerKey,
-                Profile as P, SignatureAlgorithm as S, TlsError, TlsSignatureScheme as T,
+                CipherSuite as C, CryptoError, KxGroup as K, Options, PeerCertificateViolation,
+                PeerKey, Profile as P, SignatureAlgorithm as S, TlsError, TlsSignatureScheme as T,
                 TlsVersion as V, resolve,
             };
 
@@ -92,6 +92,24 @@ macro_rules! __conformance_peer_identity_tests {
                 p.kx_groups = vec![K::Secp384r1];
                 p.signature_schemes = vec![T::EcdsaNistp384Sha384];
                 p
+            }
+
+            fn tls12() -> Policy {
+                let mut p = resolve(P::Unrestricted, Options::default()).unwrap().tls;
+                p.versions = vec![V::Tls12];
+                p.cipher_suites.retain(|s| {
+                    matches!(
+                        s,
+                        C::Tls12EcdheEcdsaAes256GcmSha384 | C::Tls12EcdheEcdsaAes128GcmSha256
+                    )
+                });
+                p.kx_groups = vec![K::Secp384r1];
+                p.signature_schemes = vec![T::EcdsaNistp384Sha384];
+                p
+            }
+
+            fn both_versions() -> [(V, Policy); 2] {
+                [(V::Tls13, policy(false)), (V::Tls12, tls12())]
             }
 
             fn cnsa1_rsa() -> Policy {
@@ -521,51 +539,59 @@ macro_rules! __conformance_peer_identity_tests {
             #[test]
             fn client_resumption_is_bound_to_the_verifier_handle() {
                 let pki = leaf(vec![uri(A)], server_side());
-                let accepts = ExactUri::new(A);
-                let refuses = ExactUri::new(B);
-                let (mut ca, s) =
-                    server_identity_configs(&policy(false), &pki, &pki, Some(accepts.clone()))
-                        .unwrap();
-                let (mut cb, _) =
-                    server_identity_configs(&policy(false), &pki, &pki, Some(refuses.clone()))
-                        .unwrap();
-                let store = rustls::client::Resumption::in_memory_sessions(8);
-                ca.resumption = store.clone();
-                cb.resumption = store;
-                cb.client_auth_cert_resolver = ca.client_auth_cert_resolver.clone();
-                let (ca, cb, s) = (Arc::new(ca), Arc::new(cb), Arc::new(s));
-                assert_eq!(connect(&ca, &s).unwrap(), rustls::HandshakeKind::Full);
-                assert_eq!(connect(&ca, &s).unwrap(), rustls::HandshakeKind::Resumed);
-                assert_eq!(connect(&cb, &s).unwrap_err(), refusal(B));
-                assert_eq!(refuses.calls(), 1);
+                for (version, p) in both_versions() {
+                    let accepts = ExactUri::new(A);
+                    let refuses = ExactUri::new(B);
+                    let (mut ca, s) =
+                        server_identity_configs(&p, &pki, &pki, Some(accepts.clone())).unwrap();
+                    let (mut cb, _) =
+                        server_identity_configs(&p, &pki, &pki, Some(refuses.clone())).unwrap();
+                    let store = rustls::client::Resumption::in_memory_sessions(8);
+                    ca.resumption = store.clone();
+                    cb.resumption = store;
+                    cb.client_auth_cert_resolver = ca.client_auth_cert_resolver.clone();
+                    let (ca, cb, s) = (Arc::new(ca), Arc::new(cb), Arc::new(s));
+                    assert_eq!(
+                        connect(&ca, &s).unwrap(),
+                        rustls::HandshakeKind::Full,
+                        "{version:?}"
+                    );
+                    assert_eq!(
+                        connect(&ca, &s).unwrap(),
+                        rustls::HandshakeKind::Resumed,
+                        "{version:?}"
+                    );
+                    assert_eq!(connect(&cb, &s).unwrap_err(), refusal(B), "{version:?}");
+                    assert_eq!(refuses.calls(), 1, "{version:?}");
+                }
             }
 
             #[test]
             fn server_resumption_does_not_cross_default_session_stores() {
                 let host = host();
                 let pki = leaf(vec![uri(A)], client_side());
-                let refuses = ExactUri::new(B);
-                let (c, sa) = client_identity_configs(
-                    &policy(false),
-                    &host,
-                    &pki,
-                    &pki,
-                    Some(ExactUri::new(A)),
-                )
-                .unwrap();
-                let (_, sb) = client_identity_configs(
-                    &policy(false),
-                    &host,
-                    &pki,
-                    &pki,
-                    Some(refuses.clone()),
-                )
-                .unwrap();
-                let (c, sa, sb) = (Arc::new(c), Arc::new(sa), Arc::new(sb));
-                assert_eq!(connect(&c, &sa).unwrap(), rustls::HandshakeKind::Full);
-                assert_eq!(connect(&c, &sa).unwrap(), rustls::HandshakeKind::Resumed);
-                assert_eq!(connect(&c, &sb).unwrap_err(), refusal(B));
-                assert_eq!(refuses.calls(), 1);
+                for (version, p) in both_versions() {
+                    let refuses = ExactUri::new(B);
+                    let (c, sa) =
+                        client_identity_configs(&p, &host, &pki, &pki, Some(ExactUri::new(A)))
+                            .unwrap();
+                    let (_, sb) =
+                        client_identity_configs(&p, &host, &pki, &pki, Some(refuses.clone()))
+                            .unwrap();
+                    let (c, sa, sb) = (Arc::new(c), Arc::new(sa), Arc::new(sb));
+                    assert_eq!(
+                        connect(&c, &sa).unwrap(),
+                        rustls::HandshakeKind::Full,
+                        "{version:?}"
+                    );
+                    assert_eq!(
+                        connect(&c, &sa).unwrap(),
+                        rustls::HandshakeKind::Resumed,
+                        "{version:?}"
+                    );
+                    assert_eq!(connect(&c, &sb).unwrap_err(), refusal(B), "{version:?}");
+                    assert_eq!(refuses.calls(), 1, "{version:?}");
+                }
             }
 
             /// Pins the residual in decision 0008: rustls resumes a server session without
@@ -575,28 +601,28 @@ macro_rules! __conformance_peer_identity_tests {
             fn shared_server_session_storage_skips_the_identity_check() {
                 let host = host();
                 let pki = leaf(vec![uri(A)], client_side());
-                let refuses = ExactUri::new(B);
-                let (c, sa) = client_identity_configs(
-                    &policy(false),
-                    &host,
-                    &pki,
-                    &pki,
-                    Some(ExactUri::new(A)),
-                )
-                .unwrap();
-                let (_, mut sb) = client_identity_configs(
-                    &policy(false),
-                    &host,
-                    &pki,
-                    &pki,
-                    Some(refuses.clone()),
-                )
-                .unwrap();
-                sb.session_storage = sa.session_storage.clone();
-                let (c, sa, sb) = (Arc::new(c), Arc::new(sa), Arc::new(sb));
-                assert_eq!(connect(&c, &sa).unwrap(), rustls::HandshakeKind::Full);
-                assert_eq!(connect(&c, &sb).unwrap(), rustls::HandshakeKind::Resumed);
-                assert_eq!(refuses.calls(), 0);
+                for (version, p) in both_versions() {
+                    let refuses = ExactUri::new(B);
+                    let (c, sa) =
+                        client_identity_configs(&p, &host, &pki, &pki, Some(ExactUri::new(A)))
+                            .unwrap();
+                    let (_, mut sb) =
+                        client_identity_configs(&p, &host, &pki, &pki, Some(refuses.clone()))
+                            .unwrap();
+                    sb.session_storage = sa.session_storage.clone();
+                    let (c, sa, sb) = (Arc::new(c), Arc::new(sa), Arc::new(sb));
+                    assert_eq!(
+                        connect(&c, &sa).unwrap(),
+                        rustls::HandshakeKind::Full,
+                        "{version:?}"
+                    );
+                    assert_eq!(
+                        connect(&c, &sb).unwrap(),
+                        rustls::HandshakeKind::Resumed,
+                        "{version:?}"
+                    );
+                    assert_eq!(refuses.calls(), 0, "{version:?}");
+                }
             }
 
             /// Pins the residual in decision 0008: rustls verifies only a presented client

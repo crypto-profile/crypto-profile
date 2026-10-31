@@ -508,9 +508,10 @@ impl<'a> PeerLeaf<'a> {
 
     /// The subjectAltName URIs, in certificate order, as rustls-webpki parses them.
     ///
-    /// Refuses with `CertificateError::BadEncoding` when the crate's own count of URI entries
-    /// differs from rustls-webpki's, so an entry rustls-webpki skips (not UTF-8, or undecodable)
-    /// is a refusal, not an omission.
+    /// Refuses with `CertificateError::BadEncoding` when the subjectAltName carries an entry
+    /// rustls-webpki cannot decode (rustls-webpki stops reading there), when the crate's count of
+    /// URI entries differs from rustls-webpki's list (rustls-webpki drops a URI that is not
+    /// UTF-8), or when the extension cannot be read.
     pub fn uri_names(&self) -> Result<Vec<&'a str>, rustls::Error> {
         let names: Vec<&'a str> = self.cert.valid_uri_names().collect();
         match super::peer_certificates::uri_name_count(self.der) {
@@ -522,8 +523,9 @@ impl<'a> PeerLeaf<'a> {
 
 /// An application's check of the peer's identity, run after every crate check has passed.
 ///
-/// It can only refuse: its `Ok` is the verifier's own `Ok`, and its `Err` is returned unchanged.
-/// A panic inside it fails the handshake.
+/// On the client verifier it can only refuse. On the server verifier it replaces the name check,
+/// so it is the only identity decision: its `Ok` admits the peer whatever server name the client
+/// connected with. Its `Err` is returned unchanged. A panic inside it fails the handshake.
 pub trait PeerIdentity: std::fmt::Debug + Send + Sync {
     /// Refuses `leaf` unless it carries the expected identity.
     fn check(&self, leaf: &PeerLeaf<'_>) -> Result<(), rustls::Error>;
@@ -798,6 +800,9 @@ impl ServerVerifierBuilder {
     /// `identity` runs after the path, EKU, revocation and the policy's peer-certificate rule
     /// pass; the name the client connects with is then not checked. A second call replaces the
     /// first.
+    ///
+    /// The check does not see the server name the client connected with, so a verifier handle,
+    /// and the client configuration built on it, expect one identity; use one per expected peer.
     pub fn with_peer_identity(mut self, identity: Arc<dyn PeerIdentity>) -> Self {
         self.config.peer_identity = Some(identity);
         self
@@ -1195,6 +1200,31 @@ mod tests {
         let mut names = vec![0x86, 22];
         names.extend_from_slice(b"spiffe://example.org/a");
         names.extend_from_slice(&[0x86, 1, 0xff]);
+        let mut general_names = vec![0x30, names.len() as u8];
+        general_names.extend(names);
+        let der = self_signed(
+            vec![],
+            vec![rcgen::CustomExtension::from_oid_content(
+                &[2, 5, 29, 17],
+                general_names,
+            )],
+        );
+        assert_eq!(
+            uri_names_of(&der),
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::BadEncoding
+            ))
+        );
+    }
+
+    #[test]
+    fn uri_names_refuses_an_entry_that_stops_webpki() {
+        let mut second = vec![0x16, 22];
+        second.extend_from_slice(b"spiffe://example.org/b");
+        let mut names = vec![0x86, 22];
+        names.extend_from_slice(b"spiffe://example.org/a");
+        names.extend_from_slice(&[0xa6, second.len() as u8]);
+        names.extend(second);
         let mut general_names = vec![0x30, names.len() as u8];
         general_names.extend(names);
         let der = self_signed(

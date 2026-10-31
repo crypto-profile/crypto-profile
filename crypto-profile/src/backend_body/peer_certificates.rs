@@ -209,7 +209,8 @@ fn leaf_key(cert: &CertificateDer<'_>) -> Result<PeerKey, PeerCertificateViolati
 const SUBJECT_ALT_NAME: &[u8] = &[0x55, 0x1d, 0x11];
 
 /// Counts the URI entries (`[6]`) in the certificate's subjectAltName extension; 0 without one.
-/// A duplicate subjectAltName extension is malformed.
+/// A duplicate subjectAltName extension, or a GeneralName form rustls-webpki does not decode,
+/// is malformed.
 pub(crate) fn uri_name_count(cert: &CertificateDer<'_>) -> Result<usize, PeerCertificateViolation> {
     let mut certificate = sequence(cert.as_ref())?;
     let mut tbs = Der(certificate.value(0x30)?);
@@ -248,8 +249,10 @@ pub(crate) fn uri_name_count(cert: &CertificateDer<'_>) -> Result<usize, PeerCer
             while !names.0.is_empty() {
                 let tag = *names.0.first().ok_or(Malformed)?;
                 names.value(tag)?;
-                if tag == 0x86 {
-                    n += 1;
+                match tag {
+                    0x86 => n += 1,
+                    0xa0 | 0x81 | 0x82 | 0xa3 | 0xa4 | 0xa5 | 0x87 | 0x88 => {}
+                    _ => return Err(Malformed),
                 }
             }
             uris = Some(n);
@@ -563,6 +566,49 @@ mod tests {
             Err(Malformed)
         );
         assert_eq!(count(vec![0x30, 0x00]), Err(Malformed));
+    }
+
+    #[test]
+    fn uri_name_count_refuses_a_name_form_webpki_cannot_decode() {
+        let constructed_uri = tlv(0x16, b"spiffe://example.org/b");
+        let undecodable: [(u8, &[u8]); 3] =
+            [(0xa6, &constructed_uri), (0x89, &[]), (0x9f, &[0x05])];
+        let counts = undecodable.map(|(tag, body)| {
+            let names = general_names(&[(0x86, b"spiffe://example.org/a"), (tag, body)]);
+            (
+                tag,
+                count(san_certificate(false, Some(extension(SAN, false, &names)))),
+            )
+        });
+        assert_eq!(
+            counts,
+            [
+                (0xa6, Err(Malformed)),
+                (0x89, Err(Malformed)),
+                (0x9f, Err(Malformed))
+            ]
+        );
+    }
+
+    #[test]
+    fn uri_name_count_admits_every_name_form_webpki_decodes() {
+        let other_name = [tlv(6, &[0x2b, 6, 1]), tlv(0xa0, &tlv(0x0c, b"x"))].concat();
+        let directory = tlv(0x30, &[]);
+        let names = general_names(&[
+            (0xa0, &other_name),
+            (0x81, b"a@example.org"),
+            (0x82, b"a.example"),
+            (0xa3, &tlv(0x30, &[])),
+            (0xa4, &directory),
+            (0xa5, &tlv(0x30, &[])),
+            (0x86, b"spiffe://example.org/a"),
+            (0x87, &[127, 0, 0, 1]),
+            (0x88, &[0x2a, 0x03]),
+        ]);
+        assert_eq!(
+            count(san_certificate(false, Some(extension(SAN, false, &names)))),
+            Ok(1)
+        );
     }
 
     fn spki(oid: &[u8], params: &[u8], key: &[u8]) -> Vec<u8> {
