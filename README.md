@@ -16,6 +16,7 @@ One reviewed place for an application's cryptographic choices:
   - hashing;
   - random bytes;
   - AEAD with module-chosen nonces;
+  - HMAC under a profile, admitted with `admit` outside TLS and keyed through `hmac::Key`;
   - a sealed box;
   - signature keys, signing and verification;
   - certificate-request generation.

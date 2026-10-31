@@ -174,6 +174,8 @@ The crate holds secret material in zeroizing buffers that are sized at allocatio
 
 - **Keys handed to rustls.** A `PrivateKeyDer` passed to `tls::load_private_key`, or to a rustls configuration, is rustls's to hold and drop; so is the copy of a `KeyPair`'s PKCS#8 encoding that `Resolved::certified_key` loads.
 
+HMAC keys are held only inside the module's HMAC context, which `HMAC_CTX_cleanup` clears with `OPENSSL_cleanse` when the key drops (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hmac/hmac.c:331-334`; 0.13.17 `:310-313`). The crate keeps no copy of the key bytes; the slice passed to `hmac::Key::new` stays the caller's.
+
 A further residual holds no secret material:
 
 - **Per-set verifier tables and key providers.** rustls takes both by `'static` reference, so each distinct set of signature schemes leaks one verification-algorithm table and one key provider, cached for the life of the process (`crypto-profile/src/backend_body/tls.rs`, `tables`). The cache is keyed by the set, not the list, so it holds one entry per distinct non-empty set of signature schemes, at most 2^n − 1 for the n schemes in the inventory (2,047 for today's eleven), however many policies an application builds (test `retained_cache_state_is_bounded_by_the_distinct_scheme_sets`).
@@ -193,6 +195,7 @@ The conformance suite (`crypto-profile/src/conformance/`, run by every backend) 
 | RSA PKCS#1 v1.5 SHA-384 verification | Wycheproof at 2048, 3072 and 4096 bits |
 | ML-DSA-87 verification | Wycheproof, the cases with an empty context only; the backend verifies under the empty context |
 | AES-256-GCM | Wycheproof, 256-bit keys with 96-bit nonces and 128-bit tags, opening only |
+| HMAC-SHA256, HMAC-SHA384, HMAC-SHA512 | Wycheproof: full-length tags sign and verify, or are refused when invalid; truncated tags are refused, and the valid ones match the leading bytes of the full tag |
 | SHA-256, SHA-384, SHA-512 | NIST CAVP byte-oriented short messages |
 | Sealed box | a version-1 known-answer blob from an independent implementation, which must open unchanged |
 
@@ -203,3 +206,23 @@ Gaps, and what covers them instead:
 - **ML-DSA** has no 3.x known answers: every ML-DSA operation is refused as unavailable.
 - **RSA-PSS** is verified through TLS handshakes over the three PSS schemes, not through Wycheproof. `signature::verify` checks PKCS#1 v1.5, the scheme this crate's RSA keys sign CSRs with.
 - **AES-GCM sealing** has no known answers, because sealing never takes a caller's nonce: the module chooses it (`crypto-profile/src/backend_body/aead.rs`). Round trips and refusals cover sealing.
+
+## 13. HMAC under a profile
+
+```rust
+use crypto_profile_awslc4::{MacAlgorithm, Options, Profile, admit, assert_admitted_approved, hmac};
+
+let admitted = admit(Profile::Cnsa2, Options::default());
+assert_admitted_approved(&admitted)?; // refuses on 4.x today; see profiles.md §10
+let key = hmac::Key::new(&admitted, MacAlgorithm::HmacSha384, &key_bytes)?;
+let tag = key.sign(message);
+key.verify(message, tag.as_ref())?;
+```
+
+- **Admission.** `admit` gives the profile's MACs on the module, independently of `resolve`, and never refuses. `hmac::Key::new` refuses a MAC the profile does not admit with `CryptoError::NotInProfile`, then a key outside the profile's range with `CryptoError::MacKeyLength` ([`profiles.md`](profiles.md) §10). `cnsa2` refuses HMAC-SHA256.
+- **Comparing tags.** `Key::verify` compares in constant time, and refuses a tag of any other length with `CryptoError::MacVerify`, whatever the cause. It is the only constant-time comparison: comparing `Tag::as_ref()` bytes directly is not one, and `Tag` has no `==`.
+- **Full-length tags only.** The crate offers no truncation.
+- **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
+- **`Admitted`'s fields are public,** as `Resolved`'s are. A caller who changes them owns the result; `Key::new` checks what the `Admitted` it is given says.
+- **A panic.** `Key::new` panics only if the module fails to initialise the HMAC context, as `aws_lc_rs::hmac::Key::new` does.
+

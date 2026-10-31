@@ -6,6 +6,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- HMAC under a profile (#31), the first family governed outside TLS (decision 0008):
+  - `MacAlgorithm` (HMAC-SHA256, HMAC-SHA384, HMAC-SHA512), with `hash()` and `tag_len()`;
+  - capability cells: `Approved` on the 3.x line (Table 5 of each certificate's security policy), `AlgorithmTested` on A7855 on the 4.x dynamic build, `Unverified` on the 4.x static build;
+  - `admit(profile, options)`, which never refuses, and `Admitted`, both independent of `resolve`; `Admitted::admit_mac`; `assert_admitted_approved`, separate from `assert_module_approves`; in the core crate, `select_admitted` and `AdmittedSelection`;
+  - `hmac::Key` and `hmac::Tag`: `Key::new` refuses a MAC the profile does not admit and a key outside `mac_key_floor_bits(profile)` (112 bits, 128 under `bsi`) to `MAC_KEY_MAX_BITS` (524288); `Key::verify` is constant time and takes full-length tags only;
+  - `CryptoError::NotInProfile`, for any algorithm outside TLS a profile does not admit, `CryptoError::MacKeyLength` and `CryptoError::MacVerify`;
+  - Wycheproof HMAC-SHA256, HMAC-SHA384 and HMAC-SHA512 in the conformance suite.
+
+### Changed
+
+- **Breaking:** `Algorithm` has a new variant, `Algorithm::Mac` (`Algorithm` is not `#[non_exhaustive]`).
+- **Breaking:** `ProfileSpec` has a new field, `macs`, and `Options` a new field, `cnsa1_unclassified_nss`, which admits HMAC-SHA256 under `cnsa1` under CNSSP 15 (2016) Annex B ¶2b, for UNCLASSIFIED NSS data and community-of-interest separation only. Struct literals must supply them, or use `..Options::default()`.
+- `Options`' `Display` names each option set, joined with ", "; the existing strings are unchanged.
+
 ## [0.9.0] - 2026-10-30
 
 ### Added
