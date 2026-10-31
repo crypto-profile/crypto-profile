@@ -727,3 +727,74 @@ fn peer_selected_path(bad_first: bool) -> Result<PeerCertificatePki, String> {
         crls,
     })
 }
+
+static IDENTITY_CAS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// A path for identity-check tests: a fresh P-384 CA and a leaf with serial 42.
+pub struct IdentityPki {
+    /// The CA alone.
+    pub roots: rustls::RootCertStore,
+    /// The leaf, then the CA.
+    pub chain: Vec<CertificateDer<'static>>,
+    /// The leaf's key.
+    pub key: rustls::pki_types::PrivateKeyDer<'static>,
+    /// One CRL from the CA, revoking serial 42 when asked.
+    pub crls: Vec<rustls::pki_types::CertificateRevocationListDer<'static>>,
+}
+
+/// A leaf whose key is `leaf`, carrying exactly `sans` and `ekus` (no EKU extension when empty).
+/// Each call's CA has a distinct name.
+pub fn identity_pki(
+    leaf: SignatureAlgorithm,
+    sans: Vec<rcgen::SanType>,
+    ekus: Vec<rcgen::ExtendedKeyUsagePurpose>,
+    revoked: bool,
+) -> Result<IdentityPki, String> {
+    let ca_key = KeyPair::generate(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
+    let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
+    let n = IDENTITY_CAS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    ca_params.distinguished_name.push(
+        rcgen::DnType::CommonName,
+        format!("crypto-profile identity CA {n}"),
+    );
+    ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
+    ca_params.key_usages = vec![
+        rcgen::KeyUsagePurpose::KeyCertSign,
+        rcgen::KeyUsagePurpose::CrlSign,
+    ];
+    let ca_cert = ca_params.self_signed(&ca_key).map_err(e)?;
+    let issuer = rcgen::Issuer::new(ca_params, &ca_key);
+    let leaf_key = KeyPair::generate(leaf).map_err(e)?;
+    let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
+    params.subject_alt_names = sans;
+    params.extended_key_usages = ekus;
+    params.serial_number = Some(rcgen::SerialNumber::from(42));
+    let leaf_cert = params.signed_by(&leaf_key, &issuer).map_err(e)?;
+    let crl = rcgen::CertificateRevocationListParams {
+        this_update: rcgen::date_time_ymd(2020, 1, 1),
+        next_update: rcgen::date_time_ymd(2040, 1, 1),
+        crl_number: rcgen::SerialNumber::from(1),
+        issuing_distribution_point: None,
+        revoked_certs: if revoked {
+            vec![rcgen::RevokedCertParams {
+                serial_number: rcgen::SerialNumber::from(42),
+                revocation_time: rcgen::date_time_ymd(2020, 1, 1),
+                reason_code: None,
+                invalidity_date: None,
+            }]
+        } else {
+            vec![]
+        },
+        key_identifier_method: rcgen::KeyIdMethod::Sha256,
+    }
+    .signed_by(&issuer)
+    .map_err(e)?;
+    let mut roots = rustls::RootCertStore::empty();
+    roots.add(ca_cert.der().clone()).map_err(e)?;
+    Ok(IdentityPki {
+        roots,
+        chain: vec![leaf_cert.der().clone(), ca_cert.der().clone()],
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into()),
+        crls: vec![crl.der().clone()],
+    })
+}

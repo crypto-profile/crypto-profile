@@ -6,6 +6,7 @@ macro_rules! __conformance_profile_tests {
         mod peer_certificates {
             $crate::__conformance_peer_certificate_tests!($b);
         }
+        $crate::__conformance_peer_identity_tests!($b);
         use std::sync::Arc;
         use $b::signature::KeyPair;
         use $b::test_support::{Negotiated, handshake, handshake_certified, handshake_with_ca};

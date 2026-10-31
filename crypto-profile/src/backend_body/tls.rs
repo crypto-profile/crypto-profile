@@ -415,6 +415,7 @@ struct VerifierConfig {
     expiration: webpki::ExpirationPolicy,
     algorithms: WebPkiSupportedAlgorithms,
     identity: PeerVerifierIdentity,
+    peer_identity: Option<Arc<dyn PeerIdentity>>,
 }
 
 impl VerifierConfig {
@@ -428,6 +429,7 @@ impl VerifierConfig {
             expiration: webpki::ExpirationPolicy::Ignore,
             algorithms: provider.signature_verification_algorithms,
             identity: identity(p)?,
+            peer_identity: None,
         })
     }
 
@@ -558,7 +560,7 @@ impl ProfileVerifier {
                 None,
             )
             .map_err(pki_error)?;
-        if let Some(name) = name {
+        if let Some(name) = name.filter(|_| self.config.peer_identity.is_none()) {
             cert.verify_is_valid_for_subject_name(name)
                 .map_err(pki_error)?;
         }
@@ -570,6 +572,12 @@ impl ProfileVerifier {
                     .map_err(certificate_error)?;
             }
             PeerVerifierIdentity::Owned { rule: None, .. } | PeerVerifierIdentity::Opaque => {}
+        }
+        if let Some(identity) = &self.config.peer_identity {
+            identity.check(&PeerLeaf {
+                der: leaf,
+                cert: &cert,
+            })?;
         }
         Ok(())
     }
@@ -785,6 +793,15 @@ impl ServerVerifierBuilder {
         self.config.expiration = webpki::ExpirationPolicy::Enforce;
         self
     }
+    /// Replaces the server-name check with `identity`.
+    ///
+    /// `identity` runs after the path, EKU, revocation and the policy's peer-certificate rule
+    /// pass; the name the client connects with is then not checked. A second call replaces the
+    /// first.
+    pub fn with_peer_identity(mut self, identity: Arc<dyn PeerIdentity>) -> Self {
+        self.config.peer_identity = Some(identity);
+        self
+    }
     /// Builds an owned verifier, refusing empty roots or invalid CRLs.
     pub fn build(self) -> Result<Arc<ServerVerifierHandle>, rustls::server::VerifierBuilderError> {
         Ok(Arc::new(ServerVerifierHandle {
@@ -841,6 +858,16 @@ impl ClientVerifierBuilder {
     /// Offers client authentication but permits clients without a certificate.
     pub fn allow_unauthenticated(mut self) -> Self {
         self.mandatory = false;
+        self
+    }
+    /// Adds `identity`, run after the path, EKU, revocation and the policy's peer-certificate
+    /// rule pass. A second call replaces the first.
+    ///
+    /// rustls verifies only a certificate the client presents: with
+    /// [`allow_unauthenticated`](Self::allow_unauthenticated), a client that presents none is
+    /// admitted without reaching `identity`.
+    pub fn with_peer_identity(mut self, identity: Arc<dyn PeerIdentity>) -> Self {
+        self.config.peer_identity = Some(identity);
         self
     }
     /// Builds an owned verifier, refusing empty roots or invalid CRLs.
