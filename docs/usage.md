@@ -224,4 +224,3 @@ key.verify(message, tag.as_ref())?;
 - **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
 - **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC the profile does not admit. Read it through `profile()`, `options()`, `macs()` and `excluded()`.
 - **Panics.** `Key::new`, `sign` and `verify` panic only if the module's HMAC context fails, as aws-lc-rs's do.
-
