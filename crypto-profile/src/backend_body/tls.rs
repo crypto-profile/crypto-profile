@@ -526,6 +526,10 @@ impl<'a> PeerLeaf<'a> {
 /// On the client verifier it can only refuse. On the server verifier it replaces the name check,
 /// so it is the only identity decision: its `Ok` admits the peer whatever server name the client
 /// connected with. Its `Err` is returned unchanged. A panic inside it fails the handshake.
+///
+/// A resumed session does not call it again: rustls reuses the earlier decision. A check whose
+/// answer can change needs a new verifier and configuration when it changes, or resumption
+/// disabled.
 pub trait PeerIdentity: std::fmt::Debug + Send + Sync {
     /// Refuses `leaf` unless it carries the expected identity.
     fn check(&self, leaf: &PeerLeaf<'_>) -> Result<(), rustls::Error>;
@@ -1200,7 +1204,7 @@ mod tests {
         let mut names = vec![0x86, 22];
         names.extend_from_slice(b"spiffe://example.org/a");
         names.extend_from_slice(&[0x86, 1, 0xff]);
-        let mut general_names = vec![0x30, names.len() as u8];
+        let mut general_names = vec![0x30, u8::try_from(names.len()).unwrap()];
         general_names.extend(names);
         let der = self_signed(
             vec![],
@@ -1223,9 +1227,9 @@ mod tests {
         second.extend_from_slice(b"spiffe://example.org/b");
         let mut names = vec![0x86, 22];
         names.extend_from_slice(b"spiffe://example.org/a");
-        names.extend_from_slice(&[0xa6, second.len() as u8]);
+        names.extend_from_slice(&[0xa6, u8::try_from(second.len()).unwrap()]);
         names.extend(second);
-        let mut general_names = vec![0x30, names.len() as u8];
+        let mut general_names = vec![0x30, u8::try_from(names.len()).unwrap()];
         general_names.extend(names);
         let der = self_signed(
             vec![],

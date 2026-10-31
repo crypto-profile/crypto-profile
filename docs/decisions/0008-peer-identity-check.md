@@ -18,7 +18,8 @@ This is the pattern of Go's `tls.Config.VerifyConnection` and of Envoy's subject
 
 ## Consequences
 
-- **Client resumption is safe by construction.** rustls resumes a client session only under the same verifier object (`rustls-0.23.46/src/msgs/persist.rs`, `compatible_config`), and the check lives in the verifier.
+- **Client resumption is bound to the verifier object.** rustls resumes a client session only under the same verifier object (`rustls-0.23.46/src/msgs/persist.rs`, `compatible_config`), and the check lives in the verifier, so a session never crosses to a verifier with another check.
+- **Resumption reuses an earlier identity decision, as a residual over time.** A resumed session, client or server, does not call the check again. A check whose answer can change, such as a revocable allow-list, needs a new verifier and configuration when it changes, or resumption disabled. The test `a_resumed_connection_reuses_the_earlier_identity_decision` pins the residual.
 - **Server resumption is a residual, as in decision 0007.** rustls resumes a server session after checking the suite, EMS and SNI, and does not re-verify the client. Default stores are per configuration, so isolation holds unless an application shares `session_storage` or a `ticketer` between configurations with different identity checks. Never share them. The test `shared_server_session_storage_skips_the_identity_check` pins the residual.
 - The check sees only the leaf the crate validated, never an intermediate.
 - The check does not see the server name the client connected with, so a verifier handle, and the client configuration built on it, expect one identity; use one per expected peer.

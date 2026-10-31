@@ -509,7 +509,7 @@ macro_rules! __conformance_peer_identity_tests {
             fn connect(
                 client: &Arc<rustls::ClientConfig>,
                 server: &Arc<rustls::ServerConfig>,
-            ) -> Result<rustls::HandshakeKind, rustls::Error> {
+            ) -> Result<(rustls::HandshakeKind, rustls::ProtocolVersion), rustls::Error> {
                 let mut c =
                     rustls::ClientConnection::new(client.clone(), "localhost".try_into().unwrap())
                         .unwrap();
@@ -530,10 +530,17 @@ macro_rules! __conformance_peer_identity_tests {
                         c.process_new_packets()?;
                     }
                     if !c.is_handshaking() && !s.is_handshaking() && wire.is_empty() {
-                        return Ok(s.handshake_kind().unwrap());
+                        return Ok((s.handshake_kind().unwrap(), s.protocol_version().unwrap()));
                     }
                 }
                 panic!("handshake stalled");
+            }
+
+            fn protocol(version: V) -> rustls::ProtocolVersion {
+                match version {
+                    V::Tls13 => rustls::ProtocolVersion::TLSv1_3,
+                    V::Tls12 => rustls::ProtocolVersion::TLSv1_2,
+                }
             }
 
             #[test]
@@ -553,12 +560,12 @@ macro_rules! __conformance_peer_identity_tests {
                     let (ca, cb, s) = (Arc::new(ca), Arc::new(cb), Arc::new(s));
                     assert_eq!(
                         connect(&ca, &s).unwrap(),
-                        rustls::HandshakeKind::Full,
+                        (rustls::HandshakeKind::Full, protocol(version)),
                         "{version:?}"
                     );
                     assert_eq!(
                         connect(&ca, &s).unwrap(),
-                        rustls::HandshakeKind::Resumed,
+                        (rustls::HandshakeKind::Resumed, protocol(version)),
                         "{version:?}"
                     );
                     assert_eq!(connect(&cb, &s).unwrap_err(), refusal(B), "{version:?}");
@@ -581,12 +588,12 @@ macro_rules! __conformance_peer_identity_tests {
                     let (c, sa, sb) = (Arc::new(c), Arc::new(sa), Arc::new(sb));
                     assert_eq!(
                         connect(&c, &sa).unwrap(),
-                        rustls::HandshakeKind::Full,
+                        (rustls::HandshakeKind::Full, protocol(version)),
                         "{version:?}"
                     );
                     assert_eq!(
                         connect(&c, &sa).unwrap(),
-                        rustls::HandshakeKind::Resumed,
+                        (rustls::HandshakeKind::Resumed, protocol(version)),
                         "{version:?}"
                     );
                     assert_eq!(connect(&c, &sb).unwrap_err(), refusal(B), "{version:?}");
@@ -613,15 +620,60 @@ macro_rules! __conformance_peer_identity_tests {
                     let (c, sa, sb) = (Arc::new(c), Arc::new(sa), Arc::new(sb));
                     assert_eq!(
                         connect(&c, &sa).unwrap(),
-                        rustls::HandshakeKind::Full,
+                        (rustls::HandshakeKind::Full, protocol(version)),
                         "{version:?}"
                     );
                     assert_eq!(
                         connect(&c, &sb).unwrap(),
-                        rustls::HandshakeKind::Resumed,
+                        (rustls::HandshakeKind::Resumed, protocol(version)),
                         "{version:?}"
                     );
                     assert_eq!(refuses.calls(), 0, "{version:?}");
+                }
+            }
+
+            /// Pins the residual in decision 0008: resumption reuses an earlier identity decision,
+            /// so a check whose answer can change needs a new verifier and configuration, or
+            /// resumption disabled.
+            #[test]
+            fn a_resumed_connection_reuses_the_earlier_identity_decision() {
+                #[derive(Debug)]
+                struct Revocable {
+                    allowed: std::sync::Mutex<Vec<&'static str>>,
+                    calls: AtomicUsize,
+                }
+                impl tls::PeerIdentity for Revocable {
+                    fn check(&self, leaf: &tls::PeerLeaf<'_>) -> Result<(), rustls::Error> {
+                        self.calls.fetch_add(1, Ordering::SeqCst);
+                        let allowed = self.allowed.lock().unwrap();
+                        match leaf.uri_names()?.as_slice() {
+                            [one] if allowed.contains(one) => Ok(()),
+                            _ => Err(rustls::Error::General("peer is revoked".into())),
+                        }
+                    }
+                }
+                let pki = leaf(vec![uri(A)], server_side());
+                for (version, p) in both_versions() {
+                    let check = Arc::new(Revocable {
+                        allowed: std::sync::Mutex::new(vec![A]),
+                        calls: AtomicUsize::new(0),
+                    });
+                    let (c, s) =
+                        server_identity_configs(&p, &pki, &pki, Some(check.clone())).unwrap();
+                    let (c, s) = (Arc::new(c), Arc::new(s));
+                    assert_eq!(
+                        connect(&c, &s).unwrap(),
+                        (rustls::HandshakeKind::Full, protocol(version)),
+                        "{version:?}"
+                    );
+                    assert_eq!(check.calls.load(Ordering::SeqCst), 1, "{version:?}");
+                    check.allowed.lock().unwrap().clear();
+                    assert_eq!(
+                        connect(&c, &s).unwrap(),
+                        (rustls::HandshakeKind::Resumed, protocol(version)),
+                        "{version:?}"
+                    );
+                    assert_eq!(check.calls.load(Ordering::SeqCst), 1, "{version:?}");
                 }
             }
 

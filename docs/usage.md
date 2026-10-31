@@ -181,6 +181,7 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
 - **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5).
 - **Server session resumption and identity checks.** A resumed server session is not re-verified, so a configuration whose client verifier carries an identity check must not share `session_storage` or a `ticketer` with one whose check differs. Default stores are per configuration ([decision 0008](decisions/0008-peer-identity-check.md)).
+- **Identity checks that change over time.** A resumed session does not call the check again, so a check whose answer can change, such as a revocable allow-list, needs a new verifier and configuration when it changes, or resumption disabled ([decision 0008](decisions/0008-peer-identity-check.md)).
 - **Unauthenticated clients and identity checks.** With `allow_unauthenticated`, a client that presents no certificate is admitted without the identity check.
 
 ## 10. Which module a build is
