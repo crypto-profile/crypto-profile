@@ -3,8 +3,8 @@
 //! with the option) specify the refusal `resolve` gives; their lists are never compared with a
 //! resolved profile.
 use crate::{
-    Algorithm, CryptoError, Family, Module, ModuleLine, Options, Profile, SignatureAlgorithm,
-    TlsSignatureScheme,
+    Algorithm, CryptoError, Family, MacAlgorithm, Module, ModuleLine, Options, Profile,
+    SignatureAlgorithm, TlsSignatureScheme,
 };
 
 /// One profile's lists, with or without the option.
@@ -321,6 +321,26 @@ pub fn expected(module: Module, profile: Profile, options: Options) -> Result<Go
     Ok(g)
 }
 
+/// Each profile's MACs with the `cnsa1_unclassified_nss` option off and on, in preference order.
+/// Every MAC cell is available on every module line, so these hold on each one.
+#[doc(hidden)]
+pub const MAC_GOLDEN: [(Profile, &[MacAlgorithm], &[MacAlgorithm]); 7] = {
+    use MacAlgorithm::{HmacSha256 as H256, HmacSha384 as H384, HmacSha512 as H512};
+    [
+        (
+            Profile::Unrestricted,
+            &[H512, H384, H256],
+            &[H512, H384, H256],
+        ),
+        (Profile::Preferred, &[H512, H384, H256], &[H512, H384, H256]),
+        (Profile::Cnsa2, &[H384, H512], &[H384, H512]),
+        (Profile::Cnsa1, &[H384], &[H384, H256]),
+        (Profile::Bsi, &[H512, H384, H256], &[H512, H384, H256]),
+        (Profile::Fips1403, &[H512, H384, H256], &[H512, H384, H256]),
+        (Profile::Fips1402, &[H512, H384, H256], &[H512, H384, H256]),
+    ]
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,9 +365,30 @@ mod tests {
         line: ModuleLine::AwsLcFips4,
         linkage: Linkage::Dynamic,
     };
+
+    #[test]
+    fn select_admitted_agrees_with_the_mac_golden_rows_on_every_module() {
+        for (i, p) in Profile::ALL.into_iter().enumerate() {
+            assert_eq!(MAC_GOLDEN[i].0, p);
+        }
+        for m in [M3S, M3D, M4S, M4D] {
+            for (p, off, on) in MAC_GOLDEN {
+                for (unclassified, want) in [(false, off), (true, on)] {
+                    let o = Options {
+                        cnsa1_unclassified_nss: unclassified,
+                        ..Options::default()
+                    };
+                    let s = crate::profile::select_admitted(p, o, m);
+                    assert_eq!(s.macs, want, "{m:?} {p} {unclassified}");
+                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                }
+            }
+        }
+    }
     const PQ: Options = Options {
         peer_certificates_match_profile: false,
         pq_key_exchange_required: true,
+        cnsa1_unclassified_nss: false,
     };
 
     type Lists = (
@@ -382,6 +423,7 @@ mod tests {
                     let o = Options {
                         peer_certificates_match_profile: false,
                         pq_key_exchange_required: pq,
+                        cnsa1_unclassified_nss: false,
                     };
                     let got: Result<Lists, CryptoError> = select(p, o, m).map(|s| {
                         (

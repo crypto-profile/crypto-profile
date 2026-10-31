@@ -21,6 +21,7 @@ macro_rules! __conformance_profile_tests {
         const PQ: Options = Options {
             peer_certificates_match_profile: false,
             pq_key_exchange_required: true,
+            cnsa1_unclassified_nss: false,
         };
         const NO_GROUP: &str = "peer is incompatible: NoKxGroupsInCommon";
         const NO_SUITE: &str = "peer is incompatible: NoCipherSuitesInCommon";
@@ -165,6 +166,7 @@ macro_rules! __conformance_profile_tests {
                     let options = Options {
                         peer_certificates_match_profile: false,
                         pq_key_exchange_required: pq,
+                        cnsa1_unclassified_nss: false,
                     };
                     let got = resolve(p, options);
                     match expected(MODULE, p, options) {
@@ -225,6 +227,7 @@ macro_rules! __conformance_profile_tests {
                             Options {
                                 peer_certificates_match_profile: false,
                                 pq_key_exchange_required: g.pq,
+                                cnsa1_unclassified_nss: false,
                             },
                         )
                         .is_ok()
@@ -476,6 +479,7 @@ macro_rules! __conformance_profile_tests {
                     let o = Options {
                         pq_key_exchange_required: pq,
                         peer_certificates_match_profile: peer,
+                        cnsa1_unclassified_nss: false,
                     };
                     if let Some(r) = admitted(p, o) {
                         assert_eq!(tls::crypto_provider(&r.tls).err(), None, "{p} {o}");

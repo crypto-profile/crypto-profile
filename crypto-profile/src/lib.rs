@@ -11,8 +11,8 @@ pub use peer_certificate::{
 };
 
 pub use algorithm::{
-    Algorithm, CipherSuite, HashAlgorithm, KxGroup, ParseAlgorithmError, SignatureAlgorithm,
-    TlsSignatureScheme, TlsVersion,
+    Algorithm, CipherSuite, HashAlgorithm, KxGroup, MacAlgorithm, ParseAlgorithmError,
+    SignatureAlgorithm, TlsSignatureScheme, TlsVersion,
 };
 pub use error::{CryptoError, CsrError, Family, PeerVerifierIdentity, TlsError};
 
@@ -22,7 +22,10 @@ pub use capability::{
     certificate, ensure_available,
 };
 pub mod profile;
-pub use profile::{GoverningText, Options, ParseProfileError, Profile, ProfileSpec};
+pub use profile::{
+    AdmittedSelection, GoverningText, MAC_KEY_MAX_BITS, Options, ParseProfileError, Profile,
+    ProfileSpec, mac_key_floor_bits, select_admitted,
+};
 #[cfg(feature = "conformance")]
 pub mod conformance;
 pub mod sealbox_wire;

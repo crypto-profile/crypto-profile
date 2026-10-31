@@ -211,6 +211,11 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
             TlsVersion::Tls12 => (true, yes),
             TlsVersion::Tls13 => (true, Approval::Unverified),
         },
+        Algorithm::Mac(m) => match m {
+            MacAlgorithm::HmacSha256 | MacAlgorithm::HmacSha384 | MacAlgorithm::HmacSha512 => {
+                (true, yes)
+            }
+        },
     };
     Capability {
         available,
@@ -318,6 +323,11 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
         },
         Algorithm::Protocol(v) => match v {
             TlsVersion::Tls12 | TlsVersion::Tls13 => Approval::Unverified,
+        },
+        Algorithm::Mac(m) => match m {
+            MacAlgorithm::HmacSha256 => tested("A7855 (HMAC-SHA2-256: MAC 256, key 112-524288)"),
+            MacAlgorithm::HmacSha384 => tested("A7855 (HMAC-SHA2-384: MAC 384, key 112-524288)"),
+            MacAlgorithm::HmacSha512 => tested("A7855 (HMAC-SHA2-512: MAC 512, key 112-524288)"),
         },
     }
 }
@@ -429,7 +439,7 @@ mod tests {
         use SignatureAlgorithm as S;
         use TlsSignatureScheme as T;
         use TlsVersion as V;
-        let expected: [(Algorithm, Option<&'static str>); 41] = [
+        let expected: [(Algorithm, Option<&'static str>); 44] = [
             (
                 A::Signature(S::MlDsa87),
                 Some("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)"),
@@ -538,13 +548,25 @@ mod tests {
             (A::Hash(H::Sha512), Some("A7855 (SHA2-512)")),
             (A::Protocol(V::Tls12), None),
             (A::Protocol(V::Tls13), None),
+            (
+                A::Mac(MacAlgorithm::HmacSha256),
+                Some("A7855 (HMAC-SHA2-256: MAC 256, key 112-524288)"),
+            ),
+            (
+                A::Mac(MacAlgorithm::HmacSha384),
+                Some("A7855 (HMAC-SHA2-384: MAC 384, key 112-524288)"),
+            ),
+            (
+                A::Mac(MacAlgorithm::HmacSha512),
+                Some("A7855 (HMAC-SHA2-512: MAC 512, key 112-524288)"),
+            ),
         ];
         assert!(
             Algorithm::all()
                 .iter()
                 .all(|a| expected.iter().any(|(b, _)| b == a))
         );
-        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 22);
+        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 25);
         for (a, cavp) in expected {
             let approval = match cavp {
                 Some(cavp) => Approval::AlgorithmTested { cavp },
@@ -587,6 +609,7 @@ mod tests {
         assert!(approved(A::Kx(KxGroup::Secp384r1)));
         assert!(approved(A::Cipher(CipherSuite::Tls13Aes128GcmSha256)));
         assert!(approved(A::Hash(HashAlgorithm::Sha512)));
+        assert!(approved(A::Mac(MacAlgorithm::HmacSha384)));
         assert!(approved(A::Protocol(TlsVersion::Tls12)));
         for a in [
             A::Signature(SignatureAlgorithm::MlDsa87),
@@ -636,7 +659,7 @@ mod tests {
             Unverified,
         }
         use K::{Approved as Y, NotApproved as N, Unverified as U};
-        let expected: [(Algorithm, bool, K); 41] = [
+        let expected: [(Algorithm, bool, K); 44] = [
             (A::Signature(S::MlDsa87), false, N),
             (A::Signature(S::EcdsaP256Sha256), true, Y),
             (A::Signature(S::EcdsaP384Sha384), true, Y),
@@ -702,6 +725,9 @@ mod tests {
             (A::Hash(HashAlgorithm::Sha512), true, Y),
             (A::Protocol(TlsVersion::Tls12), true, Y),
             (A::Protocol(TlsVersion::Tls13), true, U),
+            (A::Mac(MacAlgorithm::HmacSha256), true, Y),
+            (A::Mac(MacAlgorithm::HmacSha384), true, Y),
+            (A::Mac(MacAlgorithm::HmacSha512), true, Y),
         ];
         assert_eq!(expected.len(), Algorithm::all().len());
         for m in [M3S, M3D] {
