@@ -14,6 +14,14 @@ const fn alg(k: KdfAlgorithm) -> aws_lc_rs::hkdf::Algorithm {
 
 const ZERO_SALT: [u8; 64] = [0; 64];
 
+const _: () = {
+    let mut i = 0;
+    while i < KdfAlgorithm::ALL.len() {
+        assert!(KdfAlgorithm::ALL[i].hash().output_len() <= ZERO_SALT.len());
+        i += 1;
+    }
+};
+
 struct Len(usize);
 
 impl aws_lc_rs::hkdf::KeyType for Len {
