@@ -612,6 +612,7 @@ macro_rules! conformance_tests {
                 | CipherSuite::Tls12EcdheEcdsaChacha20Poly1305Sha256 => {
                     SignatureAlgorithm::EcdsaP384Sha384
                 }
+                _ => panic!("{c:?}: no conformance key for this suite"),
             }
         }
 
@@ -641,6 +642,7 @@ macro_rules! conformance_tests {
                     (SignatureAlgorithm::Rsa2048Sha384, rsa12.0, rsa12.1)
                 }
                 TlsSignatureScheme::MlDsa87 => (SignatureAlgorithm::MlDsa87, t13.0, t13.1),
+                _ => panic!("{t:?}: no conformance setup for this scheme"),
             }
         }
 
@@ -686,10 +688,11 @@ macro_rules! conformance_tests {
                 let want = match h {
                     HashAlgorithm::Sha256 => 65,
                     HashAlgorithm::Sha384 | HashAlgorithm::Sha512 => 129,
+                    _ => panic!("{h:?}: no CAVP file"),
                 };
                 assert_eq!(cases.len(), want, "{h:?}");
                 for (m, d) in cases {
-                    assert_eq!(digest::digest(h, &m), d, "{h:?}");
+                    assert_eq!(digest::digest(h, &m), Ok(d), "{h:?}");
                 }
             }
         }
@@ -817,6 +820,7 @@ macro_rules! conformance_tests {
                 | SignatureAlgorithm::EcdsaP521Sha384
                 | SignatureAlgorithm::EcdsaP521Sha512
                 | SignatureAlgorithm::Ed25519 => None,
+                _ => panic!("{a}: no expected RSA key length"),
             }
         }
 
@@ -1157,7 +1161,7 @@ macro_rules! conformance_tests {
                     },
                     Algorithm::Hash(h) => {
                         assert!(cap.available, "{a:?}");
-                        assert_eq!(digest::digest(h, b"").len(), h.output_len());
+                        assert_eq!(digest::digest(h, b"").map(|d| d.len()), Ok(h.output_len()));
                     }
                     Algorithm::Mac(m) => {
                         assert!(cap.available, "{m:?}");
@@ -1272,6 +1276,7 @@ macro_rules! conformance_tests {
                             );
                         }
                     }
+                    _ => panic!("{a:?}: no capability check for this family"),
                 }
             }
         }

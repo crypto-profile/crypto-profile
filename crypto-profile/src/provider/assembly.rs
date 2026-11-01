@@ -45,9 +45,11 @@ impl KeyProvider for Keys {
 pub(crate) static RNG: Rng = Rng;
 pub(crate) static KEYS: Keys = Keys;
 
-pub(crate) fn group(k: crypto_profile::KxGroup) -> &'static dyn SupportedKxGroup {
+pub(crate) fn group(
+    k: crypto_profile::KxGroup,
+) -> Result<&'static dyn SupportedKxGroup, crypto_profile::CryptoError> {
     use crypto_profile::KxGroup as K;
-    match k {
+    Ok(match k {
         K::MlKem1024 => super::kx::MLKEM1024,
         K::Secp384r1MlKem1024 => super::kx::SECP384R1MLKEM1024,
         K::X25519MlKem768 => super::kx::X25519MLKEM768,
@@ -55,12 +57,19 @@ pub(crate) fn group(k: crypto_profile::KxGroup) -> &'static dyn SupportedKxGroup
         K::Secp384r1 => super::kx::SECP384R1,
         K::Secp256r1 => super::kx::SECP256R1,
         K::X25519 => super::kx::X25519,
-    }
+        _ => {
+            return Err(crypto_profile::CryptoError::Unavailable(
+                crypto_profile::Algorithm::Kx(k),
+            ));
+        }
+    })
 }
 
-pub(crate) fn suite(c: crypto_profile::CipherSuite) -> rustls::SupportedCipherSuite {
+pub(crate) fn suite(
+    c: crypto_profile::CipherSuite,
+) -> Result<rustls::SupportedCipherSuite, crypto_profile::CryptoError> {
     use crypto_profile::CipherSuite as C;
-    match c {
+    Ok(match c {
         C::Tls13Aes256GcmSha384 => super::tls13::TLS13_AES_256_GCM_SHA384,
         C::Tls13Aes128GcmSha256 => super::tls13::TLS13_AES_128_GCM_SHA256,
         C::Tls13Chacha20Poly1305Sha256 => super::tls13::TLS13_CHACHA20_POLY1305_SHA256,
@@ -74,7 +83,12 @@ pub(crate) fn suite(c: crypto_profile::CipherSuite) -> rustls::SupportedCipherSu
         C::Tls12EcdheRsaChacha20Poly1305Sha256 => {
             super::tls12::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256
         }
-    }
+        _ => {
+            return Err(crypto_profile::CryptoError::Unavailable(
+                crypto_profile::Algorithm::Cipher(c),
+            ));
+        }
+    })
 }
 
 type Mapping = (
@@ -100,11 +114,11 @@ pub(crate) fn full() -> CryptoProvider {
     CryptoProvider {
         cipher_suites: crypto_profile::CipherSuite::ALL
             .into_iter()
-            .map(suite)
+            .filter_map(|c| suite(c).ok())
             .collect(),
         kx_groups: crypto_profile::KxGroup::ALL
             .into_iter()
-            .map(group)
+            .filter_map(|k| group(k).ok())
             .collect(),
         signature_verification_algorithms: verification(),
         secure_random: &RNG,
@@ -135,7 +149,11 @@ mod tests {
         ];
         assert_eq!(table.len(), K::ALL.len());
         for (k, cp) in table {
-            assert_eq!(u16::from_be_bytes(group(k).name().to_array()), cp, "{k:?}");
+            assert_eq!(
+                u16::from_be_bytes(group(k).unwrap().name().to_array()),
+                cp,
+                "{k:?}"
+            );
         }
     }
 
@@ -155,7 +173,11 @@ mod tests {
         ];
         assert_eq!(table.len(), C::ALL.len());
         for (c, cp) in table {
-            assert_eq!(u16::from_be_bytes(suite(c).suite().to_array()), cp, "{c:?}");
+            assert_eq!(
+                u16::from_be_bytes(suite(c).unwrap().suite().to_array()),
+                cp,
+                "{c:?}"
+            );
         }
     }
 
@@ -234,14 +256,14 @@ mod tests {
                 .iter()
                 .map(|s| u16::from_be_bytes(s.suite().to_array()))
                 .collect::<Vec<_>>(),
-            C::ALL.map(|c| u16::from_be_bytes(suite(c).suite().to_array()))
+            C::ALL.map(|c| u16::from_be_bytes(suite(c).unwrap().suite().to_array()))
         );
         assert_eq!(
             p.kx_groups
                 .iter()
                 .map(|g| u16::from_be_bytes(g.name().to_array()))
                 .collect::<Vec<_>>(),
-            K::ALL.map(|k| u16::from_be_bytes(group(k).name().to_array()))
+            K::ALL.map(|k| u16::from_be_bytes(group(k).unwrap().name().to_array()))
         );
         assert_eq!(
             ids(p.signature_verification_algorithms.all),

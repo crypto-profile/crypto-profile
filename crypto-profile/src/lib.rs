@@ -52,5 +52,59 @@ pub mod __test_data {
 /// ```
 #[allow(dead_code)]
 mod options_are_built_from_their_default {}
+/// The algorithm enums, `Algorithm` and `Profile` are `#[non_exhaustive]` (decision 0012), so a
+/// new variant is not a breaking change. A `match` outside this crate needs a `_` arm:
+///
+/// ```
+/// use crypto_profile::{Algorithm, MacAlgorithm};
+/// fn outside_tls(a: Algorithm) -> Option<bool> {
+///     match a {
+///         Algorithm::Signature(_) | Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
+///         Algorithm::Cipher(_) | Algorithm::Hash(_) | Algorithm::Protocol(_) => Some(false),
+///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) => Some(true),
+///         _ => None,
+///     }
+/// }
+/// assert_eq!(outside_tls(Algorithm::Mac(MacAlgorithm::HmacSha256)), Some(true));
+/// ```
+///
+/// ```compile_fail,E0004
+/// use crypto_profile::{Algorithm, MacAlgorithm};
+/// fn outside_tls(a: Algorithm) -> Option<bool> {
+///     match a {
+///         Algorithm::Signature(_) | Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
+///         Algorithm::Cipher(_) | Algorithm::Hash(_) | Algorithm::Protocol(_) => Some(false),
+///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) => Some(true),
+///     }
+/// }
+/// assert_eq!(outside_tls(Algorithm::Mac(MacAlgorithm::HmacSha256)), Some(true));
+/// ```
+///
+/// ```
+/// use crypto_profile::Profile;
+/// fn government(p: Profile) -> Option<bool> {
+///     match p {
+///         Profile::Unrestricted | Profile::Preferred => Some(false),
+///         Profile::Cnsa2 | Profile::Cnsa1 | Profile::Bsi => Some(true),
+///         Profile::Fips1403 | Profile::Fips1402 => Some(true),
+///         _ => None,
+///     }
+/// }
+/// assert_eq!(government(Profile::Bsi), Some(true));
+/// ```
+///
+/// ```compile_fail,E0004
+/// use crypto_profile::Profile;
+/// fn government(p: Profile) -> Option<bool> {
+///     match p {
+///         Profile::Unrestricted | Profile::Preferred => Some(false),
+///         Profile::Cnsa2 | Profile::Cnsa1 | Profile::Bsi => Some(true),
+///         Profile::Fips1403 | Profile::Fips1402 => Some(true),
+///     }
+/// }
+/// assert_eq!(government(Profile::Bsi), Some(true));
+/// ```
+#[allow(dead_code)]
+mod matches_outside_the_crate_need_a_wildcard {}
 include!(concat!(env!("OUT_DIR"), "/provider.rs"));
 include!(concat!(env!("OUT_DIR"), "/backend_body.rs"));

@@ -1,13 +1,14 @@
 //! HMAC (FIPS 198-1) under a profile.
 use crate::{Admitted, CryptoError};
-use crypto_profile::{MAC_KEY_MAX_BITS, MacAlgorithm, mac_key_floor_bits};
+use crypto_profile::{Algorithm, MAC_KEY_MAX_BITS, MacAlgorithm, mac_key_floor_bits};
 use std::fmt;
 
-const fn alg(m: MacAlgorithm) -> aws_lc_rs::hmac::Algorithm {
+fn alg(m: MacAlgorithm) -> Result<aws_lc_rs::hmac::Algorithm, CryptoError> {
     match m {
-        MacAlgorithm::HmacSha256 => aws_lc_rs::hmac::HMAC_SHA256,
-        MacAlgorithm::HmacSha384 => aws_lc_rs::hmac::HMAC_SHA384,
-        MacAlgorithm::HmacSha512 => aws_lc_rs::hmac::HMAC_SHA512,
+        MacAlgorithm::HmacSha256 => Ok(aws_lc_rs::hmac::HMAC_SHA256),
+        MacAlgorithm::HmacSha384 => Ok(aws_lc_rs::hmac::HMAC_SHA384),
+        MacAlgorithm::HmacSha512 => Ok(aws_lc_rs::hmac::HMAC_SHA512),
+        _ => Err(CryptoError::Unavailable(Algorithm::Mac(m))),
     }
 }
 
@@ -31,7 +32,7 @@ impl Key {
     pub fn new(a: &Admitted, algorithm: MacAlgorithm, key: &[u8]) -> Result<Key, CryptoError> {
         check(a, algorithm, key)?;
         Ok(Key {
-            key: aws_lc_rs::hmac::Key::new(alg(algorithm), key),
+            key: aws_lc_rs::hmac::Key::new(alg(algorithm)?, key),
             algorithm,
         })
     }

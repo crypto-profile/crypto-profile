@@ -84,6 +84,7 @@ fn version(v: V) -> &'static rustls::SupportedProtocolVersion {
     match v {
         V::Tls12 => &rustls::version::TLS12,
         V::Tls13 => &rustls::version::TLS13,
+        _ => panic!("{v:?}: no rustls version"),
     }
 }
 

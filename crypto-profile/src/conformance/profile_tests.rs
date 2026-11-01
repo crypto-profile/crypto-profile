@@ -567,6 +567,7 @@ macro_rules! __conformance_profile_tests {
                     | Profile::Bsi
                     | Profile::Fips1403
                     | Profile::Fips1402 => true,
+                    _ => panic!("{p}: no expected FIPS classification"),
                 };
                 let cfg = client_builder(&r.tls)
                     .unwrap()

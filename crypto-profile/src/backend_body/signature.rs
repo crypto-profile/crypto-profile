@@ -46,8 +46,8 @@ enum Kind {
     MlDsa87,
 }
 
-fn kind(a: S) -> Kind {
-    match a {
+fn kind(a: S) -> Result<Kind, CryptoError> {
+    Ok(match a {
         S::MlDsa87 => Kind::MlDsa87,
         S::EcdsaP256Sha256 => Kind::Ecdsa {
             signing: &sig::ECDSA_P256_SHA256_ASN1_SIGNING,
@@ -89,7 +89,8 @@ fn kind(a: S) -> Kind {
             bits: 4096,
             public_len: 526,
         },
-    }
+        _ => return Err(CryptoError::Unavailable(Algorithm::Signature(a))),
+    })
 }
 
 pub(crate) fn rcgen_alg(a: S) -> Result<&'static rcgen::SignatureAlgorithm, CryptoError> {
@@ -101,13 +102,15 @@ pub(crate) fn rcgen_alg(a: S) -> Result<&'static rcgen::SignatureAlgorithm, Cryp
         S::EcdsaP521Sha512 => &rcgen::PKCS_ECDSA_P521_SHA512,
         S::Ed25519 => &rcgen::PKCS_ED25519,
         S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => &rcgen::PKCS_RSA_SHA384,
+        _ => return Err(CryptoError::Unavailable(Algorithm::Signature(a))),
     })
 }
 
 /// A pure check that a parsed SubjectPublicKeyInfo is exactly this algorithm's key shape.
 /// For RSA it checks the encoded length of the `RSAPublicKey`, not the exact modulus bit
 /// length; the length assumes the public exponent 65537. [`KeyPair::from_pkcs8_der`] and
-/// [`verify`] check the exact bit length and the exponent.
+/// [`verify`] check the exact bit length and the exponent. False for an algorithm this backend
+/// does not implement.
 pub fn matches_spki(
     a: S,
     alg_oid: &str,
@@ -117,22 +120,23 @@ pub fn matches_spki(
 ) -> bool {
     unused_bits == 0
         && match kind(a) {
-            Kind::Ecdsa {
+            Ok(Kind::Ecdsa {
                 curve, public_len, ..
-            } => {
+            }) => {
                 alg_oid == ID_EC_PUBLIC_KEY
                     && *params == SpkiParams::NamedCurve(curve.to_string())
                     && key_len == public_len
             }
-            Kind::Ed25519 => {
+            Ok(Kind::Ed25519) => {
                 alg_oid == ID_ED25519 && *params == SpkiParams::Absent && key_len == 32
             }
-            Kind::Rsa { public_len, .. } => {
+            Ok(Kind::Rsa { public_len, .. }) => {
                 alg_oid == ID_RSA_ENCRYPTION && *params == SpkiParams::Null && key_len == public_len
             }
-            Kind::MlDsa87 => {
+            Ok(Kind::MlDsa87) => {
                 alg_oid == ID_ML_DSA_87 && *params == SpkiParams::Absent && key_len == 2592
             }
+            Err(_) => false,
         }
 }
 
@@ -155,7 +159,7 @@ impl KeyPair {
     pub fn generate(a: S) -> Result<KeyPair, CryptoError> {
         ensure(Algorithm::Signature(a))?;
         let fail = |_| CryptoError::KeyGeneration(Algorithm::Signature(a));
-        let pkcs8 = match kind(a) {
+        let pkcs8 = match kind(a)? {
             Kind::Ecdsa { signing, .. } => {
                 let doc = sig::EcdsaKeyPair::generate_pkcs8(signing, &SystemRandom::new())
                     .map_err(fail)?;
@@ -188,7 +192,7 @@ impl KeyPair {
     fn load(a: S, pkcs8: Zeroizing<Vec<u8>>) -> Result<KeyPair, CryptoError> {
         let der = pkcs8.as_slice();
         let bad = |_| CryptoError::PrivateKey;
-        let public = match kind(a) {
+        let public = match kind(a)? {
             Kind::Ecdsa { signing, .. } => sig::EcdsaKeyPair::from_pkcs8(signing, der)
                 .map_err(bad)?
                 .public_key()
@@ -237,7 +241,7 @@ impl KeyPair {
         let rng = SystemRandom::new();
         let key = |_| CryptoError::PrivateKey;
         let fail = |_| CryptoError::Sign;
-        match kind(self.alg) {
+        match kind(self.alg)? {
             Kind::Ecdsa { signing, .. } => {
                 let k = sig::EcdsaKeyPair::from_pkcs8(signing, &self.pkcs8).map_err(key)?;
                 Ok(k.sign(&rng, msg).map_err(fail)?.as_ref().to_vec())
@@ -286,7 +290,7 @@ fn rsa_public_key_is(public_key: &[u8], bits: u32) -> bool {
 /// is not 65537.
 pub fn verify(a: S, public_key: &[u8], msg: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
     ensure(Algorithm::Signature(a))?;
-    let v: &dyn sig::VerificationAlgorithm = match kind(a) {
+    let v: &dyn sig::VerificationAlgorithm = match kind(a)? {
         Kind::Ecdsa { verifying, .. } => verifying,
         Kind::Ed25519 => &sig::ED25519,
         Kind::Rsa { bits, .. } => {

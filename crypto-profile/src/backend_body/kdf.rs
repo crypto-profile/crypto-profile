@@ -1,6 +1,6 @@
 //! Key derivation under a profile: HKDF (RFC 5869; SP 800-56C Rev. 2 §5).
 use crate::{Admitted, CryptoError};
-use crypto_profile::{HashAlgorithm, KdfAlgorithm, kdf_info_may_be_empty};
+use crypto_profile::{Algorithm, HashAlgorithm, KdfAlgorithm, kdf_info_may_be_empty};
 use std::fmt;
 use zeroize::Zeroizing;
 
@@ -12,6 +12,7 @@ fn alg(k: KdfAlgorithm) -> Result<aws_lc_rs::hkdf::Algorithm, CryptoError> {
         KdfAlgorithm::OneStepSha256 | KdfAlgorithm::OneStepSha384 | KdfAlgorithm::OneStepSha512 => {
             Err(CryptoError::KdfSpecMismatch { algorithm: k })
         }
+        _ => Err(CryptoError::Unavailable(Algorithm::Kdf(k))),
     }
 }
 

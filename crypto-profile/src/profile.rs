@@ -13,6 +13,7 @@ use std::str::FromStr;
 /// A named profile. Each one that is named for a regime follows that regime's published text, in
 /// the edition [`Profile::governing_text`] names, and changes only when a new edition is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Profile {
     /// Every algorithm in the inventory, post-quantum key exchange first. Not a government profile.
     Unrestricted,
@@ -35,6 +36,7 @@ pub enum Profile {
 
 /// The text a profile follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GoverningText {
     /// The crate's own recommendation, following no published text.
     CrateRecommendation,
@@ -133,6 +135,7 @@ impl fmt::Display for Profile {
 /// A name that is not one of the crate's profiles. Names are matched exactly: no trimming and no
 /// case folding.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParseProfileError(pub String);
 
 impl fmt::Display for ParseProfileError {

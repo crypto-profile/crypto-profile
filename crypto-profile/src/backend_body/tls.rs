@@ -35,9 +35,9 @@ pub struct Policy {
 pub(crate) use crate::provider::assembly::group as rustls_group;
 pub(crate) use crate::provider::assembly::suite as rustls_suite;
 
-fn rustls_scheme(t: T) -> rustls::SignatureScheme {
+fn rustls_scheme(t: T) -> Result<rustls::SignatureScheme, CryptoError> {
     use rustls::SignatureScheme as R;
-    match t {
+    Ok(match t {
         T::EcdsaNistp256Sha256 => R::ECDSA_NISTP256_SHA256,
         T::EcdsaNistp384Sha384 => R::ECDSA_NISTP384_SHA384,
         T::EcdsaNistp521Sha512 => R::ECDSA_NISTP521_SHA512,
@@ -49,13 +49,15 @@ fn rustls_scheme(t: T) -> rustls::SignatureScheme {
         T::RsaPkcs1Sha384 => R::RSA_PKCS1_SHA384,
         T::RsaPkcs1Sha512 => R::RSA_PKCS1_SHA512,
         T::MlDsa87 => R::ML_DSA_87,
-    }
+        _ => return Err(CryptoError::Unavailable(Algorithm::Scheme(t))),
+    })
 }
 
-fn rustls_version(v: V) -> &'static rustls::SupportedProtocolVersion {
+fn rustls_version(v: V) -> Result<&'static rustls::SupportedProtocolVersion, CryptoError> {
     match v {
-        V::Tls12 => &rustls::version::TLS12,
-        V::Tls13 => &rustls::version::TLS13,
+        V::Tls12 => Ok(&rustls::version::TLS12),
+        V::Tls13 => Ok(&rustls::version::TLS13),
+        _ => Err(CryptoError::Unavailable(Algorithm::Protocol(v))),
     }
 }
 
@@ -75,8 +77,9 @@ fn select_schemes(
     schemes
         .iter()
         .map(|t| {
+            let scheme = rustls_scheme(*t)?;
             base.iter()
-                .find(|(s, _)| *s == rustls_scheme(*t))
+                .find(|(s, _)| *s == scheme)
                 .copied()
                 .ok_or(CryptoError::Unavailable(Algorithm::Scheme(*t)))
         })
@@ -206,6 +209,11 @@ fn cached_tables(
     let base = base_provider();
     let verify = base.signature_verification_algorithms;
     let mapping = select_schemes(verify.mapping, &set.ordered)?;
+    let schemes: Vec<_> = set
+        .ordered
+        .iter()
+        .map(|t| rustls_scheme(*t))
+        .collect::<Result<_, _>>()?;
     let t = Tables {
         verification: Box::leak(Box::new(WebPkiSupportedAlgorithms {
             all: verify.all,
@@ -213,7 +221,7 @@ fn cached_tables(
         })),
         keys: Box::leak(Box::new(PolicyKeyProvider {
             base: base.key_provider,
-            schemes: Box::leak(set.ordered.iter().map(|t| rustls_scheme(*t)).collect()),
+            schemes: Box::leak(schemes.into_boxed_slice()),
         })),
     };
     cache.insert(key, t);
@@ -278,7 +286,7 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
         .iter()
         .filter(|c| p.versions.contains(&c.version()))
         .map(|c| rustls_suite(*c))
-        .collect();
+        .collect::<Result<_, _>>()?;
     if suites.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::CipherSuite));
     }
@@ -310,14 +318,18 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     let tables = tables_for_rule(&schemes, p.peer_certificate_rule)?;
     Ok(CryptoProvider {
         cipher_suites: suites,
-        kx_groups: p.kx_groups.iter().map(|k| rustls_group(*k)).collect(),
+        kx_groups: p
+            .kx_groups
+            .iter()
+            .map(|k| rustls_group(*k))
+            .collect::<Result<_, _>>()?,
         signature_verification_algorithms: *tables.verification,
         key_provider: tables.keys,
         ..base_provider()
     })
 }
 
-fn versions(p: &Policy) -> Vec<&'static rustls::SupportedProtocolVersion> {
+fn versions(p: &Policy) -> Result<Vec<&'static rustls::SupportedProtocolVersion>, CryptoError> {
     p.versions.iter().map(|v| rustls_version(*v)).collect()
 }
 
@@ -332,7 +344,7 @@ pub fn client_builder(
         }));
     }
     rustls::ClientConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
-        .with_protocol_versions(&versions(p))
+        .with_protocol_versions(&versions(p)?)
         .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))
 }
 
@@ -347,7 +359,7 @@ pub fn server_builder(
         }));
     }
     rustls::ServerConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
-        .with_protocol_versions(&versions(p))
+        .with_protocol_versions(&versions(p)?)
         .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))
 }
 
@@ -980,7 +992,7 @@ pub fn strict_client_builder(
     };
     Ok(
         rustls::ClientConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
-            .with_protocol_versions(&versions(p))
+            .with_protocol_versions(&versions(p)?)
             .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))?
             .dangerous()
             .with_custom_certificate_verifier(verifier),
@@ -1010,7 +1022,7 @@ pub fn strict_server_builder(
     };
     Ok(
         rustls::ServerConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
-            .with_protocol_versions(&versions(p))
+            .with_protocol_versions(&versions(p)?)
             .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))?
             .with_client_cert_verifier(verifier),
     )
@@ -2564,16 +2576,28 @@ mod tests {
     #[test]
     fn every_mapping_carries_its_registry_codepoint() {
         for c in C::ALL {
-            assert_eq!(cp(rustls_suite(c).suite().to_array()), c.iana(), "{c:?}");
+            assert_eq!(
+                cp(rustls_suite(c).unwrap().suite().to_array()),
+                c.iana(),
+                "{c:?}"
+            );
         }
         for k in K::ALL {
-            assert_eq!(cp(rustls_group(k).name().to_array()), k.iana(), "{k:?}");
+            assert_eq!(
+                cp(rustls_group(k).unwrap().name().to_array()),
+                k.iana(),
+                "{k:?}"
+            );
         }
         for t in T::ALL {
-            assert_eq!(cp(rustls_scheme(t).to_array()), t.iana(), "{t:?}");
+            assert_eq!(cp(rustls_scheme(t).unwrap().to_array()), t.iana(), "{t:?}");
         }
         for v in V::ALL {
-            assert_eq!(cp(rustls_version(v).version.to_array()), v.iana(), "{v:?}");
+            assert_eq!(
+                cp(rustls_version(v).unwrap().version.to_array()),
+                v.iana(),
+                "{v:?}"
+            );
         }
     }
 
@@ -2860,6 +2884,7 @@ mod tests {
                 | C::Tls12EcdheEcdsaAes256GcmSha384
                 | C::Tls12EcdheEcdsaAes128GcmSha256
                 | C::Tls12EcdheEcdsaChacha20Poly1305Sha256 => S::EcdsaP384Sha384,
+                _ => panic!("{s:?}: no key for this suite"),
             };
             let p = policy(&[s.version()], &[s], &[K::Secp384r1], &T::ALL);
             let n = handshake(&p, &p, key).unwrap_or_else(|e| panic!("{s:?}: {e}"));
@@ -2871,6 +2896,7 @@ mod tests {
                 | S::EcdsaP521Sha384
                 | S::EcdsaP521Sha512
                 | S::Ed25519 => key.tls_scheme(),
+                _ => panic!("{key}: no expected scheme"),
             };
             assert_eq!(
                 n,
@@ -2906,6 +2932,7 @@ mod tests {
                 | S::EcdsaP521Sha384
                 | S::EcdsaP521Sha512
                 | S::Ed25519 => a.tls_scheme(),
+                _ => panic!("{a}: no expected scheme"),
             };
             assert_eq!(n.scheme, full_offer, "{a}");
         }
@@ -2966,7 +2993,7 @@ mod tests {
     fn chosen(p: &Policy, a: S, offered: &[T]) -> Option<u16> {
         let key = crate::signature::KeyPair::generate(a).unwrap();
         let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into());
-        let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t)).collect();
+        let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t).unwrap()).collect();
         load_private_key(p, der)
             .unwrap()
             .choose_scheme(&offered)
@@ -3176,7 +3203,7 @@ mod tests {
             ] {
                 assert_eq!(
                     k.usable_in(v),
-                    rustls_group(k).usable_for_version(wire),
+                    rustls_group(k).unwrap().usable_for_version(wire),
                     "{k:?} {v:?}"
                 );
             }
@@ -3187,8 +3214,10 @@ mod tests {
     fn suite_signing_matches_the_provider() {
         for c in C::ALL {
             for t in T::ALL {
-                let provider = match rustls_suite(c) {
-                    rustls::SupportedCipherSuite::Tls12(s) => s.sign.contains(&rustls_scheme(t)),
+                let provider = match rustls_suite(c).unwrap() {
+                    rustls::SupportedCipherSuite::Tls12(s) => {
+                        s.sign.contains(&rustls_scheme(t).unwrap())
+                    }
                     rustls::SupportedCipherSuite::Tls13(_) => {
                         !matches!(t, T::RsaPkcs1Sha256 | T::RsaPkcs1Sha384 | T::RsaPkcs1Sha512)
                     }
@@ -3405,7 +3434,7 @@ mod tests {
                         .collect::<Vec<_>>(),
                     set.ordered
                         .iter()
-                        .map(|s| rustls_scheme(*s))
+                        .map(|s| rustls_scheme(*s).unwrap())
                         .collect::<Vec<_>>()
                 );
             }

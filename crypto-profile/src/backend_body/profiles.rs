@@ -397,6 +397,7 @@ mod tests {
                     S::Rsa3072Sha384,
                     S::Rsa4096Sha384,
                 ],
+                _ => panic!("{p}: no expected key list"),
             };
             for o in [Options::default(), pq()] {
                 let Ok(r) = resolve(p, o) else { continue };
@@ -689,6 +690,7 @@ mod tests {
                 Profile::Unrestricted | Profile::Preferred | Profile::Cnsa2 | Profile::Fips1403 => {
                     false
                 }
+                _ => panic!("{p}: no expected post-quantum result"),
             };
             let want = if empty_with_pq {
                 Err(CryptoError::EmptyProfile {

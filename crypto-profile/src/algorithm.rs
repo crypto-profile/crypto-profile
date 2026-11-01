@@ -5,6 +5,7 @@ use std::str::FromStr;
 
 /// A signature key algorithm: what a key is generated as, and what its CSR is signed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SignatureAlgorithm {
     /// ML-DSA-87 (FIPS 204).
     MlDsa87,
@@ -116,6 +117,7 @@ impl SignatureAlgorithm {
 
 /// A name that is not one of the crate's algorithms of the type parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParseAlgorithmError(pub String);
 
 impl fmt::Display for ParseAlgorithmError {
@@ -144,6 +146,7 @@ impl fmt::Display for SignatureAlgorithm {
 
 /// A TLS handshake signature scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TlsSignatureScheme {
     /// `ecdsa_secp256r1_sha256`.
     EcdsaNistp256Sha256,
@@ -259,6 +262,7 @@ impl TlsSignatureScheme {
 
 /// A TLS cipher suite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CipherSuite {
     /// `TLS_AES_256_GCM_SHA384`.
     Tls13Aes256GcmSha384,
@@ -375,6 +379,7 @@ impl CipherSuite {
 
 /// A TLS key-exchange group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KxGroup {
     /// ML-KEM-1024 (FIPS 203).
     MlKem1024,
@@ -460,6 +465,7 @@ impl KxGroup {
 
 /// A hash function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HashAlgorithm {
     /// SHA-256.
     Sha256,
@@ -499,6 +505,7 @@ impl HashAlgorithm {
 
 /// A message authentication code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MacAlgorithm {
     /// HMAC with SHA-256 (FIPS 198-1).
     HmacSha256,
@@ -543,6 +550,7 @@ impl MacAlgorithm {
 
 /// A key-derivation function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KdfAlgorithm {
     /// HKDF with SHA-256 (RFC 5869; SP 800-56C Rev. 2 §5).
     HkdfSha256,
@@ -611,6 +619,7 @@ impl KdfAlgorithm {
 /// A key-agreement algorithm outside TLS: Diffie-Hellman on a curve (SP 800-56A Rev. 3; RFC
 /// 7748). TLS key exchange is [`KxGroup`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KeyAgreementAlgorithm {
     /// ECDH on P-256 (SP 800-56A Rev. 3, SP 800-186).
     EcdhP256,
@@ -671,6 +680,7 @@ impl fmt::Display for KeyAgreementAlgorithm {
 
 /// A TLS protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TlsVersion {
     /// TLS 1.2.
     Tls12,
@@ -702,6 +712,7 @@ impl TlsVersion {
 
 /// Any algorithm the capability table has a cell for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Algorithm {
     /// A signature key algorithm.
     Signature(SignatureAlgorithm),

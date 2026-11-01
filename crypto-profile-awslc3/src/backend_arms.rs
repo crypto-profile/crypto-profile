@@ -57,6 +57,7 @@ pub(crate) fn csr_oracle(
         SignatureAlgorithm::Rsa2048Sha384
         | SignatureAlgorithm::Rsa3072Sha384
         | SignatureAlgorithm::Rsa4096Sha384 => crate::provider::verify::RSA_PKCS1_2048_8192_SHA384,
+        _ => return Err(CryptoError::Unavailable(Algorithm::Signature(a))),
     })
 }
 

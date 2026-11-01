@@ -528,6 +528,7 @@ macro_rules! __conformance_peer_identity_tests {
                 match version {
                     V::Tls13 => rustls::ProtocolVersion::TLSv1_3,
                     V::Tls12 => rustls::ProtocolVersion::TLSv1_2,
+                    _ => panic!("{version:?}: no protocol version"),
                 }
             }
 
