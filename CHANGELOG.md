@@ -27,10 +27,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 ### Changed
 
 - **Breaking:** `Algorithm` has a new variant, `Algorithm::Mac` (`Algorithm` is not `#[non_exhaustive]`).
-- **Breaking:** `ProfileSpec` has a new field, `macs`, and `Options` a new field, `cnsa1_unclassified_nss`, which admits HMAC-SHA256 under `cnsa1` under CNSSP 15 (2016) Annex B ¶2b, for UNCLASSIFIED NSS data and community-of-interest separation only. Struct literals must supply them, or use `..Options::default()`.
+- **Breaking:** `ProfileSpec` has a new field, `macs`, and `Options` a new field, `cnsa1_unclassified_nss`, which admits HMAC-SHA256 and HKDF-SHA256 under `cnsa1` under CNSSP 15 (2016) Annex B ¶2b, for UNCLASSIFIED NSS data and community-of-interest separation only. Struct literals must supply them, or use `..Options::default()`.
 - **Breaking:** `Algorithm` has a new variant, `Algorithm::Kdf`, and `ProfileSpec` a new field, `kdfs`.
 - `AdmittedSelection` has a new field, `kdfs` (the type is unreleased).
-- `Options::cnsa1_unclassified_nss` also admits HKDF-SHA256 under `cnsa1` (decision 0008, amended).
 - `Options`' `Display` names each option set, joined with ", "; the existing strings are unchanged.
 
 ## [0.9.0] - 2026-10-30

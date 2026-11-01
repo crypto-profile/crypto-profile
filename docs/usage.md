@@ -220,7 +220,7 @@ The conformance suite (`crypto-profile/src/conformance/`, run by every backend) 
 | ML-DSA-87 verification | Wycheproof, the cases with an empty context only; the backend verifies under the empty context |
 | AES-256-GCM | Wycheproof, 256-bit keys with 96-bit nonces and 128-bit tags, opening only |
 | HMAC-SHA256, HMAC-SHA384, HMAC-SHA512 | Wycheproof: full-length tags sign and verify, or are refused when invalid; truncated tags are refused, and the valid ones match the leading bytes of the full tag |
-| HKDF-SHA256, HKDF-SHA384, HKDF-SHA512 | RFC 5869 Appendix A cases 1-3 (SHA-256); Wycheproof: every valid case derives under `unrestricted`, empty-`info` cases are refused under every other profile, and outputs over 255 × HashLen are refused |
+| HKDF-SHA256, HKDF-SHA384, HKDF-SHA512 | RFC 5869 Appendix A cases 1-3 (SHA-256); Wycheproof: every valid case derives under `unrestricted`, and under every other profile that admits the hash when `info` is non-empty (empty-`info` cases are refused with `KdfInfoEmpty`), and outputs over 255 × HashLen are refused |
 | SHA-256, SHA-384, SHA-512 | NIST CAVP byte-oriented short messages |
 | Sealed box | a version-1 known-answer blob from an independent implementation, which must open unchanged |
 
