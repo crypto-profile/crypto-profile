@@ -1,6 +1,6 @@
 # Conformance vector sources
 
-Every file in this directory is byte-for-byte as retrieved, except `ed25519_rfc8032.json`, which transcribes RFC text. Retrieved 2026-10-28; the three `hmac_*` files 2026-10-31, from the same commit.
+Every file in this directory is byte-for-byte as retrieved, except `ed25519_rfc8032.json` and `hkdf_rfc5869.json`, which transcribe RFC text. Retrieved 2026-10-28; the three `hmac_*` files 2026-10-31 and the three `hkdf_sha*` files 2026-11-01, from the same commit.
 
 ## Wycheproof
 
@@ -22,6 +22,9 @@ Each file was fetched from `https://raw.githubusercontent.com/C2SP/wycheproof/d1
 | `hmac_sha256_test.json` | `2d201cfa61d1bf95e6f5d07d96634b4a348b31e8eaa277ad7c8d09677b7a743f` |
 | `hmac_sha384_test.json` | `28b9776e979dd755d852ca471043ea6cedce8b15f7a28abdf6ea9efd982b43c0` |
 | `hmac_sha512_test.json` | `b6c90477bdb4a6fc8ee3d1f7b2c0b69a8dfffab34718abaa6cabd71cc2ba1207` |
+| `hkdf_sha256_test.json` | `bb2b462a38b251cb52a2aede706d6d4b62b26864f4e80c95497507ddb07c5f1e` |
+| `hkdf_sha384_test.json` | `69ff6ea3657bb9c1b8cdffbbb4e7832353d08fd15c0d9997b03f7a6b180e3678` |
+| `hkdf_sha512_test.json` | `bb9a21f4e86041caf5d7792b030349f8ff289087f195b2fbc0fc0afc39deca6f` |
 
 ## RFC 8032
 
@@ -30,6 +33,14 @@ Each file was fetched from `https://raw.githubusercontent.com/C2SP/wycheproof/d1
 | File | SHA-256 |
 |---|---|
 | `ed25519_rfc8032.json` | `203979671b0827a9a60dd792edd7f86b32f91ee7b9a46d191e6737f54de489c9` |
+
+## RFC 5869
+
+`hkdf_rfc5869.json` holds Test Cases 1, 2 and 3 of RFC 5869 Appendix A (SHA-256: IKM, salt, info, L and OKM; the PRK is not used, because the crate exposes no extract), copied from `https://www.rfc-editor.org/rfc/rfc5869.txt` (SHA-256 of the text as retrieved: `7a40eb3835b35fc947eb12a2ed614db079d43b26e50dbc537c31fba16397089c`). Test Cases 4 to 7 use SHA-1, which no profile offers. Licence: IETF Trust; the test vectors are code components under the Revised BSD licence (BCP 78).
+
+| File | SHA-256 |
+|---|---|
+| `hkdf_rfc5869.json` | `1121ba5b84fefa7956a1ebdcbcb91b14af108b5482d328a0daed46011fa4a511` |
 
 ## NIST CAVP
 
