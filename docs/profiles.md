@@ -254,7 +254,7 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** It is not checked against any profile; `Resolved::certified_key` checks it.
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Call `Resolved::admit_key` where a key is generated or a certificate request is made.
 - **Certificate requests.** `csr::generate_csr` generates a key of any algorithm it is asked for and signs the request with it.
-- **`aead`, `digest` and `sealbox`.** No profile governs them. `aead` is AES-256-GCM. `digest` hashes with SHA-256, SHA-384 or SHA-512, whichever is asked for. `sealbox` is fixed at P-384 ECDH, HKDF-SHA384 and AES-256-GCM, so it uses none of `cnsa2`'s algorithms for key establishment.
+- **`aead`, `digest` and `sealbox`.** No profile governs them. `aead` is AES-256-GCM. `digest` hashes with SHA-256, SHA-384 or SHA-512, whichever is asked for. `sealbox` is fixed at P-384 ECDH, HKDF-SHA384 and AES-256-GCM, so it uses none of `cnsa2`'s algorithms for key establishment. It refuses an empty `domain`, its HKDF salt, with `CryptoError::SealDomainEmpty`.
 
 ## 6. Module approval and `AlgorithmTested`
 

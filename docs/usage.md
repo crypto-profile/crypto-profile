@@ -17,7 +17,7 @@ Cargo resolves one aws-lc-rs 1.x per lockfile, so a single crate cannot offer bo
 
 Call `crypto::awslc_version()` for the exact runtime-linked AWS-LC release. This is separate from `certificate(MODULE)`, which reports the certified release and status.
 
-Every backend exposes the same module paths (`aead`, `csr`, `digest`, `fips`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
+Every backend exposes the same module paths (`aead`, `csr`, `digest`, `fips`, `hkdf`, `hmac`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
 
 ML-DSA is available only on the 4.x backend: aws-lc-rs 1.17.4 compiles its `pqdsa` module out under `fips` (`aws-lc-rs-1.17.4/src/lib.rs:283-284`), while 1.18.2 exposes `signature::ML_DSA_87_SIGNING` unconditionally (`aws-lc-rs-1.18.2/src/signature.rs:1177`). The capability table marks ML-DSA unavailable on 3.x, so the 3.x backend refuses it with `CryptoError::Unavailable` (`crypto-profile/src/capability.rs`, `three_x` and `ensure_available`).
 
@@ -179,7 +179,7 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile/src/backend_body/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
-- **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5).
+- **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5). `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`: the domain is the box's HKDF salt, and the module does not mark an HKDF call with an empty salt approved.
 - **Server session resumption and identity checks.** A resumed server session is not re-verified, so a configuration whose client verifier carries an identity check must not share `session_storage` or a `ticketer` with one whose check differs. Default stores are per configuration ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Identity checks that change over time.** A resumed session does not call the check again, so a check whose answer can change, such as a revocable allow-list, needs a new verifier and configuration when it changes, or resumption disabled ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Unauthenticated clients and identity checks.** With `allow_unauthenticated`, a client that presents no certificate is admitted without the identity check.

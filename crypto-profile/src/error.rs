@@ -164,6 +164,9 @@ pub enum CryptoError {
     AeadOpen,
     /// A sealed-box plaintext is empty.
     SealPlaintext,
+    /// A sealed-box domain is empty. The domain is the HKDF salt, and the module does not mark an
+    /// HKDF call with an empty salt approved.
+    SealDomainEmpty,
     /// A sealed blob is shorter than a header, one byte and a tag.
     SealBlob,
     /// A sealed blob carries an unknown version.
@@ -274,6 +277,7 @@ impl fmt::Display for CryptoError {
             CryptoError::AeadSeal => f.write_str("AEAD sealing failed"),
             CryptoError::AeadOpen => f.write_str("the AEAD ciphertext does not authenticate"),
             CryptoError::SealPlaintext => f.write_str("the sealed plaintext is empty"),
+            CryptoError::SealDomainEmpty => f.write_str("the sealed-box domain is empty"),
             CryptoError::SealBlob => f.write_str("the sealed blob is too short"),
             CryptoError::SealVersion => f.write_str("the sealed blob has an unknown version"),
             CryptoError::SealEphemeralKey => {
@@ -487,7 +491,7 @@ mod tests {
 
     #[test]
     fn every_other_display_text_is_pinned() {
-        let table: [(CryptoError, &str); 16] = [
+        let table: [(CryptoError, &str); 17] = [
             (
                 CryptoError::PolicyDrift,
                 "the provider does not carry exactly the policy's algorithms",
@@ -506,6 +510,10 @@ mod tests {
                 "the AEAD ciphertext does not authenticate",
             ),
             (CryptoError::SealPlaintext, "the sealed plaintext is empty"),
+            (
+                CryptoError::SealDomainEmpty,
+                "the sealed-box domain is empty",
+            ),
             (CryptoError::SealBlob, "the sealed blob is too short"),
             (
                 CryptoError::SealVersion,
