@@ -52,6 +52,16 @@ exports the private profile module’s API in both modes. When present, its priv
 `crate::backend_arms::*`; macro emission replaces that bridge with its argument import.
 Both indices reject duplicate or invalid names, arbitrary attributes and items, missing
 files, and unlisted files or directories. The complete source trees trigger regeneration.
+*(Amended 2026-11-01: "the ten backend modules" and the list of public declarations above
+are out of date; the list also omitted `peer_certificates`, which the index has always
+permitted. After #31 and #32 the body index, `crypto-profile/src/backend_body/mod.rs`,
+declares thirteen modules: eleven public (`aead`, `csr`, `digest`, `fips`, `hkdf`, `hmac`,
+`peer_certificates`, `random`, `sealbox`, `signature`, `tls`), `test_support` behind its
+`cfg` pairing, and the private `profiles`. It also permits a second exact export line,
+`pub use profiles::{Admitted, admit, assert_admitted_approved};` (#31). Each export line
+may appear at most once, and they are emitted with the `Resolved` line first; backends
+re-export `Admitted`, `admit` and `assert_admitted_approved` at their root beside
+`Resolved`.)*
 
 The nested body file `sealbox.rs` contains exactly one `mod keys;`. The emitter validates
 `sealbox/` contains only `keys.rs` and inlines that child at its declaration. Other
