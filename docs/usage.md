@@ -280,7 +280,8 @@ let key_bytes: &[u8] = key.as_bytes();
 
 0.10.0 is the last release that breaks the API on purpose ([decision 0012](decisions/0012-api-coherence-and-non-exhaustive.md)). Coming from 0.9.0:
 
-- **A `match` on the crate's enums needs a `_` arm.** The algorithm enums, `Algorithm`, `Profile` and `GoverningText` are `#[non_exhaustive]`. Refuse in the `_` arm; do not map it to a default algorithm.
+- **A `match` on the crate's enums needs a `_` arm.** The algorithm enums, `Algorithm`, `Profile`, `GoverningText`, the peer-certificate types (`PeerCertificateRuleId`, `RsaSizeRule`, `PeerCurve`, `PeerKey`, `CertificateSignature`, `PeerCertificateViolation`) and `csr::KeyUsage` and `csr::ExtendedKeyUsage` are `#[non_exhaustive]`. Refuse in the `_` arm; do not map it to a default algorithm or accept the certificate. A pattern on `CryptoError::EmptyProfile` needs `..`.
+- **`ALL` is a slice.** Every `ALL` (each algorithm enum's, and `Profile::ALL`) is a `&'static [T]`. Iterate it with `for &a in X::ALL`; replace `X::ALL.map(f)` with `X::ALL.iter().copied().map(f).collect::<Vec<_>>()`, and do not depend on its length.
 - **Build `Options` from its default.** A struct expression, with or without `..Options::default()`, no longer compiles:
 
   ```rust
@@ -288,7 +289,8 @@ let key_bytes: &[u8] = key.as_bytes();
   options.pq_key_exchange_required = true;
   ```
 
-  `tls::Policy` likewise: `Policy::default()`, then set its fields. `Resolved` comes only from `resolve`; its fields can be reassigned. `ProfileSpec` and `Selection` can be read but not built.
+  `tls::Policy` and `csr::CsrParams` likewise: `::default()`, then set the fields. `Resolved` comes only from `resolve`; its fields can be reassigned. `ProfileSpec`, `Selection`, `PeerCertificateRule` and `PeerKeyRule` can be read but not built.
+- **Peer verifier identity.** `PeerVerifierIdentity::Owned`'s `handshake_schemes` is a `u64`; widen any `u16` you stored it in.
 - **Signature keys.** `KeyPair::from_pkcs8(a, der)` is `KeyPair::from_pkcs8_der(a, der)`, `key.pkcs8_der()` is `key.to_pkcs8_der()`, and `key.public_key()` returns `&[u8]`: call `.to_vec()` where you kept the `Vec`.
 - **Hashing.** `digest::digest(h, data)` and `digest::Hasher::new(h)` return a `Result`; a hash the backend does not implement is refused with `CryptoError::Unavailable`.
 - **Parse errors.** `ParseAlgorithmError` and `ParseProfileError` are `#[non_exhaustive]` tuple structs: read the message with `.0`, and do not construct or destructure one.
