@@ -324,13 +324,22 @@ mod tests {
             (1, 22, 13, 10, 42, 42)
         );
         assert_eq!(first.result, "valid");
-        let invalid: Vec<&KdfCase> = kdf.iter().filter(|c| c.result == "invalid").collect();
-        assert_eq!(invalid.len(), 3);
-        assert!(
-            invalid
-                .iter()
-                .all(|c| c.size == 8161 && c.okm.is_empty() && !c.info.is_empty())
-        );
+        for (file, total, too_large) in [
+            (vectors::HKDF_SHA256, 86, 8161),
+            (vectors::HKDF_SHA384, 83, 12241),
+            (vectors::HKDF_SHA512, 83, 16321),
+        ] {
+            let kdf = __wycheproof_kdf_cases(file);
+            assert_eq!(kdf.len(), total);
+            let invalid: Vec<&KdfCase> = kdf.iter().filter(|c| c.result == "invalid").collect();
+            assert_eq!(invalid.len(), 3, "{too_large}");
+            assert!(
+                invalid
+                    .iter()
+                    .all(|c| c.size == too_large && c.okm.is_empty() && !c.info.is_empty()),
+                "{too_large}"
+            );
+        }
     }
 
     #[test]
@@ -969,18 +978,41 @@ macro_rules! conformance_tests {
                 cnsa1_unclassified_nss: true,
                 ..Options::default()
             };
-            for (k, file, total, valid, empty_info) in [
-                (KdfAlgorithm::HkdfSha256, vectors::HKDF_SHA256, 86, 83, 31),
-                (KdfAlgorithm::HkdfSha384, vectors::HKDF_SHA384, 83, 80, 30),
-                (KdfAlgorithm::HkdfSha512, vectors::HKDF_SHA512, 83, 80, 30),
+            for (k, file, total, valid, empty_info, profiles) in [
+                (
+                    KdfAlgorithm::HkdfSha256,
+                    vectors::HKDF_SHA256,
+                    86,
+                    83,
+                    31,
+                    6,
+                ),
+                (
+                    KdfAlgorithm::HkdfSha384,
+                    vectors::HKDF_SHA384,
+                    83,
+                    80,
+                    30,
+                    7,
+                ),
+                (
+                    KdfAlgorithm::HkdfSha512,
+                    vectors::HKDF_SHA512,
+                    83,
+                    80,
+                    30,
+                    6,
+                ),
             ] {
                 let cases = $crate::conformance::__wycheproof_kdf_cases(file);
                 assert_eq!(cases.len(), total, "{k:?}");
+                let mut exercised = 0;
                 for p in Profile::ALL {
                     let a = admit(p, on);
                     if !a.kdfs().contains(&k) {
                         continue;
                     }
+                    exercised += 1;
                     let (mut derived, mut refused_info, mut too_long) = (0, 0, 0);
                     for c in &cases {
                         let got = hkdf::derive(&a, k, &c.ikm, Some(&c.salt), &c.info, c.size)
@@ -1022,6 +1054,7 @@ macro_rules! conformance_tests {
                     };
                     assert_eq!((derived, refused_info, too_long), want, "{p} {k:?}");
                 }
+                assert_eq!(exercised, profiles, "{k:?}");
             }
         }
 
