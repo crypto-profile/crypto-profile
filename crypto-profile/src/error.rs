@@ -21,6 +21,12 @@ pub enum Family {
     SignatureScheme,
     /// Key algorithms.
     KeyAlgorithm,
+    /// Message authentication codes, outside TLS.
+    Mac,
+    /// Key-derivation functions, outside TLS.
+    Kdf,
+    /// Key agreement, outside TLS.
+    KeyAgreement,
 }
 
 /// Why a certificate signing request could not be produced.
@@ -243,7 +249,8 @@ pub enum CryptoError {
         profile: Profile,
     },
     /// A profile that admits an empty KDF `info`, which the module does not approve; refused by
-    /// `assert_admitted_approved` when the profile admits any KDF.
+    /// `assert_admitted_approved` when the caller names `Family::Kdf` and the profile admits any
+    /// KDF.
     KdfInfoMayBeEmpty {
         /// The profile.
         profile: Profile,
@@ -263,6 +270,9 @@ pub enum CryptoError {
         /// The key-agreement algorithm.
         algorithm: KeyAgreementAlgorithm,
     },
+    /// A family `assert_admitted_approved` does not check: a TLS family, which
+    /// `assert_module_approves` checks, or one this backend does not walk.
+    FamilyNotAdmitted(Family),
 }
 
 impl fmt::Display for CryptoError {
@@ -370,6 +380,10 @@ impl fmt::Display for CryptoError {
             CryptoError::KeyAgreementPrivateKey { algorithm } => {
                 write!(f, "the {algorithm} private key was refused")
             }
+            CryptoError::FamilyNotAdmitted(family) => write!(
+                f,
+                "assert_admitted_approved does not check the {family:?} family; assert_module_approves checks the TLS families"
+            ),
         }
     }
 }
@@ -405,6 +419,10 @@ mod tests {
             "the TLS policy names no KxGroup"
         );
         assert_eq!(
+            [Family::Mac, Family::Kdf, Family::KeyAgreement].map(|f| format!("{f:?}")),
+            ["Mac", "Kdf", "KeyAgreement"]
+        );
+        assert_eq!(
             CryptoError::PolicyVersionUnusable {
                 version: TlsVersion::Tls12,
                 family: Family::KxGroup
@@ -434,7 +452,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 15] = [
+        let table: [(CryptoError, &str); 16] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -527,6 +545,10 @@ mod tests {
                     algorithm: KeyAgreementAlgorithm::X25519,
                 },
                 "the x25519 private key was refused",
+            ),
+            (
+                CryptoError::FamilyNotAdmitted(Family::CipherSuite),
+                "assert_admitted_approved does not check the CipherSuite family; assert_module_approves checks the TLS families",
             ),
         ];
         for (e, text) in table {

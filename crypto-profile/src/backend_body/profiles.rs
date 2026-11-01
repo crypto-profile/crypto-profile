@@ -214,6 +214,16 @@ impl Admitted {
         self.admit_one(self.kdfs.contains(&k), Algorithm::Kdf(k))
     }
 
+    fn cells(&self, family: Family) -> Result<Vec<Algorithm>, CryptoError> {
+        match family {
+            Family::Mac => Ok(self.macs.iter().map(|m| Algorithm::Mac(*m)).collect()),
+            Family::Kdf => Ok(self.kdfs.iter().map(|k| Algorithm::Kdf(*k)).collect()),
+            // No key agreement is admitted until #33's ECDH change.
+            Family::KeyAgreement => Ok(Vec::new()),
+            _ => Err(CryptoError::FamilyNotAdmitted(family)),
+        }
+    }
+
     fn admit_one(&self, admitted: bool, algorithm: Algorithm) -> Result<(), CryptoError> {
         if admitted {
             Ok(())
@@ -231,38 +241,49 @@ impl Admitted {
 fn admitted_approved_given(
     fips_mode: bool,
     a: &Admitted,
+    families: &[Family],
     cell: impl Fn(Algorithm) -> Approval,
 ) -> Result<(), CryptoError> {
     if !fips_mode {
         return Err(CryptoError::NotFips);
     }
-    if crypto_profile::kdf_info_may_be_empty(a.profile) && !a.kdfs.is_empty() {
+    for f in families {
+        a.cells(*f)?;
+    }
+    if families.contains(&Family::Kdf)
+        && crypto_profile::kdf_info_may_be_empty(a.profile)
+        && !a.kdfs.is_empty()
+    {
         return Err(CryptoError::KdfInfoMayBeEmpty { profile: a.profile });
     }
-    let cells = a
-        .macs
-        .iter()
-        .map(|m| Algorithm::Mac(*m))
-        .chain(a.kdfs.iter().map(|k| Algorithm::Kdf(*k)));
-    for algorithm in cells {
-        let approval = cell(algorithm);
-        if !approval.is_approved() {
-            return Err(CryptoError::NotApproved {
-                algorithm,
-                approval,
-            });
+    for f in [Family::Mac, Family::Kdf, Family::KeyAgreement] {
+        if !families.contains(&f) {
+            continue;
+        }
+        for algorithm in a.cells(f)? {
+            let approval = cell(algorithm);
+            if !approval.is_approved() {
+                return Err(CryptoError::NotApproved {
+                    algorithm,
+                    approval,
+                });
+            }
         }
     }
     Ok(())
 }
 
-/// Refuses with `CryptoError::NotFips` unless the module is in FIPS mode; then with
-/// `CryptoError::KdfInfoMayBeEmpty` when `a`'s profile admits KDFs and an empty `info`, which the
-/// module does not approve (`unrestricted`); then unless every algorithm `a` admits is `Approved`
-/// for the running module, MACs first, then KDFs, failing on the first that is not. An empty
-/// family is not a refusal. Independent of `assert_module_approves`.
-pub fn assert_admitted_approved(a: &Admitted) -> Result<(), CryptoError> {
-    admitted_approved_given(aws_lc_rs::try_fips_mode().is_ok(), a, |x| {
+/// Checks the families the caller uses from `a`. Refuses with `CryptoError::NotFips` unless the
+/// module is in FIPS mode; then with `CryptoError::FamilyNotAdmitted` for the first TLS family in
+/// `families`, which `assert_module_approves` checks instead; then, when `families` names
+/// `Family::Kdf`, with `CryptoError::KdfInfoMayBeEmpty` if `a`'s profile admits KDFs and an empty
+/// `info`, which the module does not approve (`unrestricted`); then unless every algorithm `a`
+/// admits in each named family is `Approved` for the running module, walking `Family::Mac`,
+/// `Family::Kdf`, then `Family::KeyAgreement`, and failing on the first that is not. Asserting
+/// nothing approves nothing: an empty `families`, or a named family `a` admits nothing in, is not a
+/// refusal. Independent of `assert_module_approves`.
+pub fn assert_admitted_approved(a: &Admitted, families: &[Family]) -> Result<(), CryptoError> {
+    admitted_approved_given(aws_lc_rs::try_fips_mode().is_ok(), a, families, |x| {
         crypto_profile::capability(crate::MODULE, x).approval
     })
 }
@@ -867,134 +888,222 @@ mod admitted_tests {
         assert_eq!(a.admit_mac(M::HmacSha384), Ok(()));
     }
 
+    const NON_TLS: [Family; 3] = [Family::Mac, Family::Kdf, Family::KeyAgreement];
+    const TLS: [Family; 5] = [
+        Family::Version,
+        Family::CipherSuite,
+        Family::KxGroup,
+        Family::SignatureScheme,
+        Family::KeyAlgorithm,
+    ];
+
+    fn approved(_: Algorithm) -> Approval {
+        Approval::Approved { source: "test" }
+    }
+
+    fn all_but(x: Algorithm) -> impl Fn(Algorithm) -> Approval {
+        move |y| {
+            if y == x {
+                Approval::Unverified
+            } else {
+                approved(y)
+            }
+        }
+    }
+
     #[test]
-    fn admitted_approval_walks_the_kdf_cells_after_the_macs() {
-        let approved = |_: Algorithm| Approval::Approved { source: "test" };
+    fn admitted_approval_walks_macs_then_kdfs_whatever_the_order_named() {
         let a = admit(Profile::Cnsa2, Options::default());
+        let m384 = Algorithm::Mac(M::HmacSha384);
         let k512 = Algorithm::Kdf(Kd::HkdfSha512);
-        assert_eq!(
-            admitted_approved_given(true, &a, |x| if x == k512 {
+        let both = |x: Algorithm| {
+            if x == m384 || x == k512 {
                 Approval::Unverified
             } else {
                 approved(x)
-            }),
+            }
+        };
+        for families in [[Family::Mac, Family::Kdf], [Family::Kdf, Family::Mac]] {
+            assert_eq!(
+                admitted_approved_given(true, &a, &families, both),
+                Err(CryptoError::NotApproved {
+                    algorithm: m384,
+                    approval: Approval::Unverified,
+                }),
+                "{families:?}"
+            );
+        }
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Kdf], both),
             Err(CryptoError::NotApproved {
                 algorithm: k512,
                 approval: Approval::Unverified,
             })
         );
-        let m384 = Algorithm::Mac(M::HmacSha384);
         assert_eq!(
-            admitted_approved_given(true, &a, |x| if x == m384 || x == k512 {
-                Approval::Unverified
-            } else {
-                approved(x)
-            }),
-            Err(CryptoError::NotApproved {
-                algorithm: m384,
-                approval: Approval::Unverified,
-            })
-        );
-        let kdf_only = Admitted {
-            macs: vec![],
-            ..a.clone()
-        };
-        let first = Algorithm::Kdf(kdf_only.kdfs[0]);
-        let want = if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+            admitted_approved_given(true, &a, &[Family::Mac], all_but(k512)),
             Ok(())
-        } else {
-            Err(CryptoError::NotApproved {
-                algorithm: first,
-                approval: crypto_profile::capability(crate::MODULE, first).approval,
-            })
-        };
-        assert_eq!(assert_admitted_approved(&kdf_only), want);
+        );
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Kdf], all_but(m384)),
+            Ok(())
+        );
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Mac, Family::Mac], all_but(k512)),
+            Ok(())
+        );
     }
 
     #[test]
-    fn a_profile_that_admits_an_empty_kdf_info_is_not_approved() {
-        let approved = |_: Algorithm| Approval::Approved { source: "test" };
+    fn a_tls_family_is_refused_after_fips_mode_and_before_everything_else() {
+        let u = admit(Profile::Unrestricted, Options::default());
+        for f in TLS {
+            assert_eq!(
+                admitted_approved_given(true, &u, &[f], approved),
+                Err(CryptoError::FamilyNotAdmitted(f)),
+                "{f:?}"
+            );
+            assert_eq!(
+                admitted_approved_given(true, &u, &[Family::Kdf, Family::Mac, f], |_| {
+                    Approval::Unverified
+                }),
+                Err(CryptoError::FamilyNotAdmitted(f)),
+                "{f:?}"
+            );
+            assert_eq!(
+                admitted_approved_given(false, &u, &[f], approved),
+                Err(CryptoError::NotFips),
+                "{f:?}"
+            );
+        }
+        assert_eq!(
+            admitted_approved_given(true, &u, &[Family::KxGroup, Family::Version], approved),
+            Err(CryptoError::FamilyNotAdmitted(Family::KxGroup))
+        );
+    }
+
+    #[test]
+    fn asserting_nothing_approves_nothing() {
+        for p in Profile::ALL {
+            let a = admit(p, Options::default());
+            assert_eq!(
+                admitted_approved_given(true, &a, &[], |_| Approval::Unverified),
+                Ok(()),
+                "{p}"
+            );
+            assert_eq!(assert_admitted_approved(&a, &[]), Ok(()), "{p}");
+            assert_eq!(
+                admitted_approved_given(true, &a, &[Family::KeyAgreement], |_| {
+                    Approval::Unverified
+                }),
+                Ok(()),
+                "{p}"
+            );
+            assert_eq!(
+                admitted_approved_given(false, &a, &[], approved),
+                Err(CryptoError::NotFips),
+                "{p}"
+            );
+        }
+        let empty = Admitted {
+            macs: vec![],
+            kdfs: vec![],
+            ..admit(Profile::Cnsa2, Options::default())
+        };
+        assert_eq!(
+            admitted_approved_given(true, &empty, &NON_TLS, |_| Approval::Unverified),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_profile_that_admits_an_empty_kdf_info_is_refused_only_when_kdf_is_named() {
         let refused = Err(CryptoError::KdfInfoMayBeEmpty {
             profile: Profile::Unrestricted,
         });
         let u = admit(Profile::Unrestricted, Options::default());
         assert!(!u.kdfs.is_empty());
-        assert_eq!(admitted_approved_given(true, &u, approved), refused);
+        for families in [&[Family::Kdf][..], &[Family::Mac, Family::Kdf], &NON_TLS] {
+            assert_eq!(
+                admitted_approved_given(true, &u, families, approved),
+                refused,
+                "{families:?}"
+            );
+            assert_eq!(
+                admitted_approved_given(true, &u, families, |_| Approval::Unverified),
+                refused,
+                "{families:?}"
+            );
+        }
         assert_eq!(
-            admitted_approved_given(true, &u, |_| Approval::Unverified),
-            refused
+            admitted_approved_given(true, &u, &[Family::Mac], approved),
+            Ok(())
         );
         assert_eq!(
-            admitted_approved_given(false, &u, approved),
-            Err(CryptoError::NotFips)
+            admitted_approved_given(true, &u, &[Family::Mac, Family::KeyAgreement], approved),
+            Ok(())
         );
         let no_kdfs = Admitted {
             kdfs: vec![],
             ..u.clone()
         };
-        assert_eq!(admitted_approved_given(true, &no_kdfs, approved), Ok(()));
-        let no_macs = Admitted {
-            macs: vec![],
-            ..u.clone()
-        };
-        assert_eq!(admitted_approved_given(true, &no_macs, approved), refused);
+        assert_eq!(
+            admitted_approved_given(true, &no_kdfs, &NON_TLS, approved),
+            Ok(())
+        );
         let bsi = admit(Profile::Bsi, Options::default());
         assert!(!bsi.kdfs.is_empty());
-        assert_eq!(admitted_approved_given(true, &bsi, approved), Ok(()));
+        assert_eq!(
+            admitted_approved_given(true, &bsi, &NON_TLS, approved),
+            Ok(())
+        );
     }
 
     #[test]
     fn admitted_approval_follows_this_modules_cells() {
         for p in Profile::ALL {
             let a = admit(p, Options::default());
-            let want = if p == Profile::Unrestricted {
-                Err(CryptoError::KdfInfoMayBeEmpty { profile: p })
-            } else if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
-                Ok(())
-            } else {
-                let first = Algorithm::Mac(a.macs[0]);
-                Err(CryptoError::NotApproved {
-                    algorithm: first,
-                    approval: crypto_profile::capability(crate::MODULE, first).approval,
-                })
-            };
-            assert_eq!(assert_admitted_approved(&a), want, "{p}");
+            for (families, first) in [
+                (
+                    &[Family::Mac][..],
+                    a.macs.first().map(|m| Algorithm::Mac(*m)),
+                ),
+                (
+                    &[Family::Kdf][..],
+                    a.kdfs.first().map(|k| Algorithm::Kdf(*k)),
+                ),
+                (
+                    &[Family::Mac, Family::Kdf][..],
+                    a.macs.first().map(|m| Algorithm::Mac(*m)),
+                ),
+            ] {
+                let want = if p == Profile::Unrestricted && families.contains(&Family::Kdf) {
+                    Err(CryptoError::KdfInfoMayBeEmpty { profile: p })
+                } else if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                    Ok(())
+                } else {
+                    let first = first.unwrap_or_else(|| panic!("{p}: nothing admitted"));
+                    Err(CryptoError::NotApproved {
+                        algorithm: first,
+                        approval: crypto_profile::capability(crate::MODULE, first).approval,
+                    })
+                };
+                assert_eq!(
+                    assert_admitted_approved(&a, families),
+                    want,
+                    "{p} {families:?}"
+                );
+            }
+            assert_eq!(
+                assert_admitted_approved(&a, &[Family::KeyAgreement]),
+                Ok(()),
+                "{p}"
+            );
+            assert_eq!(
+                assert_admitted_approved(&a, &[Family::Version]),
+                Err(CryptoError::FamilyNotAdmitted(Family::Version)),
+                "{p}"
+            );
         }
-    }
-
-    #[test]
-    fn admitted_approval_checks_fips_mode_first_and_passes_an_empty_family() {
-        let approved = |_: Algorithm| Approval::Approved { source: "test" };
-        let a = admit(Profile::Cnsa2, Options::default());
-        assert_eq!(
-            admitted_approved_given(false, &a, approved),
-            Err(CryptoError::NotFips)
-        );
-        assert_eq!(admitted_approved_given(true, &a, approved), Ok(()));
-        let sha512 = Algorithm::Mac(M::HmacSha512);
-        assert_eq!(
-            admitted_approved_given(true, &a, |x| if x == sha512 {
-                Approval::Unverified
-            } else {
-                approved(x)
-            }),
-            Err(CryptoError::NotApproved {
-                algorithm: sha512,
-                approval: Approval::Unverified,
-            })
-        );
-        let empty = Admitted {
-            macs: vec![],
-            kdfs: vec![],
-            ..a.clone()
-        };
-        assert_eq!(
-            admitted_approved_given(true, &empty, |_| Approval::Unverified),
-            Ok(())
-        );
-        assert_eq!(
-            admitted_approved_given(false, &empty, approved),
-            Err(CryptoError::NotFips)
-        );
     }
 }
