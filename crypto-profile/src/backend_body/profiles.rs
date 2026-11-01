@@ -275,8 +275,9 @@ fn admitted_approved_given(
 }
 
 /// Checks the families the caller uses from `a`. Refuses with `CryptoError::NotFips` unless the
-/// module is in FIPS mode; then with `CryptoError::FamilyNotAdmitted` for the first TLS family in
-/// `families`, which `assert_module_approves` checks instead; then, when `families` names
+/// module is in FIPS mode; then with `CryptoError::FamilyNotAdmitted` for the first family in
+/// `families` that is not walked here (every TLS family, which `assert_module_approves` checks
+/// instead, and any family this backend does not walk); then, when `families` names
 /// `Family::Kdf`, with `CryptoError::KdfInfoMayBeEmpty` if `a`'s profile admits KDFs and an empty
 /// `info`, which the module does not approve (`unrestricted`); then unless every algorithm `a`
 /// admits in each named family is `Approved` for the running module, walking `Family::Mac`,

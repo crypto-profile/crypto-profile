@@ -62,6 +62,8 @@ without amending this record. After #31 and #32 the body index,
 admit, assert_admitted_approved};` (#31). Each export line may appear at most once, and
 they are emitted with the `Resolved` line first; backends re-export `Admitted`, `admit`
 and `assert_admitted_approved` at their root beside `Resolved`.)*
+*(Amended 2026-11-01, #33: `hkdf` is now `kdf`; the thirteen modules and the export lines
+are otherwise unchanged.)*
 
 The nested body file `sealbox.rs` contains exactly one `mod keys;`. The emitter validates
 `sealbox/` contains only `keys.rs` and inlines that child at its declaration. Other

@@ -17,7 +17,7 @@ Cargo resolves one aws-lc-rs 1.x per lockfile, so a single crate cannot offer bo
 
 Call `crypto::awslc_version()` for the exact runtime-linked AWS-LC release. This is separate from `certificate(MODULE)`, which reports the certified release and status.
 
-Every backend exposes the same module paths (`aead`, `csr`, `digest`, `fips`, `hkdf`, `hmac`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
+Every backend exposes the same module paths (`aead`, `csr`, `digest`, `fips`, `hmac`, `kdf`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
 
 ML-DSA is available only on the 4.x backend: aws-lc-rs 1.17.4 compiles its `pqdsa` module out under `fips` (`aws-lc-rs-1.17.4/src/lib.rs:283-284`), while 1.18.2 exposes `signature::ML_DSA_87_SIGNING` unconditionally (`aws-lc-rs-1.18.2/src/signature.rs:1177`). The capability table marks ML-DSA unavailable on 3.x, so the 3.x backend refuses it with `CryptoError::Unavailable` (`crypto-profile/src/capability.rs`, `three_x` and `ensure_available`).
 
@@ -198,15 +198,15 @@ The crate holds secret material in zeroizing buffers that are sized at allocatio
 
 - **Keys handed to rustls.** A `PrivateKeyDer` passed to `tls::load_private_key`, or to a rustls configuration, is rustls's to hold and drop; so is the copy of a `KeyPair`'s PKCS#8 encoding that `Resolved::certified_key` loads.
 - **HMAC key state.** An `hmac::Key` holds the module's HMAC context, which `HMAC_CTX_cleanup` clears with `OPENSSL_cleanse` when the key drops (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hmac/hmac.c:331-334`; 0.13.17 `:310-313`). aws-lc-rs builds that context on the stack and moves it into its key (`aws-lc-rs-1.18.2/src/hmac.rs:301-318`), and `hmac::Key::new` moves it again; each move can leave a copy of the keyed hash state, which nothing clears. The slice passed to `hmac::Key::new` stays the caller's.
-- **HKDF inside the module.** `hkdf::derive` returns a `DerivedKey` that is `Zeroizing` from allocation. aws-lc-rs copies the secret into a buffer it wipes on drop (`aws-lc-rs-1.18.2/src/hkdf.rs:181`, `:293`), and the pseudorandom key exists only inside the module's one-shot `HKDF()`. SP 800-56C Rev. 2 §5 requires that key to "be destroyed (along with all other sensitive, locally stored data) after its use" (p. 20). The 4.x module meets that: `HKDF()` calls `OPENSSL_cleanse` on it on every exit (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:50`). The 3.x module does not: `HKDF()` returns with it still in a stack buffer it never cleanses (`aws-lc-fips-sys-0.13.17/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:32-56`), and the crate cannot fix that without changing the validated module. aws-lc-rs copies the salt and `info` into buffers it does not wipe (`aws-lc-rs-1.18.2/src/hkdf.rs:132`, `:440-465`). SP 800-56C Rev. 2 §5.1 and RFC 5869 §3.1 allow a secret salt, but this crate supports only a non-secret salt and a non-secret `info`: put no secret in either. The secret slice stays the caller's.
+- **HKDF inside the module.** `kdf::derive` returns a `kdf::DerivedKey` that is `Zeroizing` from allocation. aws-lc-rs copies the secret into a buffer it wipes on drop (`aws-lc-rs-1.18.2/src/hkdf.rs:181`, `:293`), and the pseudorandom key exists only inside the module's one-shot `HKDF()`. SP 800-56C Rev. 2 §5 requires that key to "be destroyed (along with all other sensitive, locally stored data) after its use" (p. 20). The 4.x module meets that: `HKDF()` calls `OPENSSL_cleanse` on it on every exit (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:50`). The 3.x module does not: `HKDF()` returns with it still in a stack buffer it never cleanses (`aws-lc-fips-sys-0.13.17/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:32-56`), and the crate cannot fix that without changing the validated module. aws-lc-rs copies the salt and `info` into buffers it does not wipe (`aws-lc-rs-1.18.2/src/hkdf.rs:132`, `:440-465`). SP 800-56C Rev. 2 §5.1 and RFC 5869 §3.1 allow a secret salt, but this crate supports only a non-secret salt and a non-secret `info`: put no secret in either. The secret slice stays the caller's.
 
 A further residual holds no secret material:
 
 - **Per-set verifier tables and key providers.** rustls takes both by `'static` reference, so each distinct set of signature schemes leaks one verification-algorithm table and one key provider, cached for the life of the process (`crypto-profile/src/backend_body/tls.rs`, `tables`). The cache is keyed by the set, not the list, so it holds one entry per distinct non-empty set of signature schemes, at most 2^n − 1 for the n schemes in the inventory (2,047 for today's eleven), however many policies an application builds (test `retained_cache_state_is_bounded_by_the_distinct_scheme_sets`).
 
-RSA keys must have the public exponent 65537. `signature::KeyPair::from_pkcs8` refuses any other with `CryptoError::PrivateKey`, and `signature::verify` refuses a public key with any other with `CryptoError::Verify` (`crypto-profile/src/backend_body/signature.rs`, tests `an_rsa_key_whose_exponent_is_not_65537_is_refused` and `verify_refuses_an_rsa_key_whose_exponent_is_not_65537`).
+RSA keys must have the public exponent 65537. `signature::KeyPair::from_pkcs8_der` refuses any other with `CryptoError::PrivateKey`, and `signature::verify` refuses a public key with any other with `CryptoError::Verify` (`crypto-profile/src/backend_body/signature.rs`, tests `an_rsa_key_whose_exponent_is_not_65537_is_refused` and `verify_refuses_an_rsa_key_whose_exponent_is_not_65537`).
 
-An RSA key's modulus must be exactly the algorithm's bit length: 2048, 3072 or 4096. `signature::KeyPair::from_pkcs8` refuses any other length with `CryptoError::PrivateKey`, and `signature::verify` with `CryptoError::Verify`, even one bit off (tests `from_pkcs8_refuses_an_rsa_key_one_bit_off_its_size` and `verify_refuses_an_rsa_key_one_bit_off_its_size`). `signature::matches_spki` checks only the encoded length of the public key, so it does not tell a 3,072-bit modulus from a 3,073-bit one.
+An RSA key's modulus must be exactly the algorithm's bit length: 2048, 3072 or 4096. `signature::KeyPair::from_pkcs8_der` refuses any other length with `CryptoError::PrivateKey`, and `signature::verify` with `CryptoError::Verify`, even one bit off (tests `from_pkcs8_der_refuses_an_rsa_key_one_bit_off_its_size` and `verify_refuses_an_rsa_key_one_bit_off_its_size`). `signature::matches_spki` checks only the encoded length of the public key, so it does not tell a 3,072-bit modulus from a 3,073-bit one.
 
 ## 12. Known-answer coverage
 
@@ -235,10 +235,10 @@ Gaps, and what covers them instead:
 ## 13. HMAC under a profile
 
 ```rust
-use crypto_profile_awslc4::{MacAlgorithm, Options, Profile, admit, assert_admitted_approved, hmac};
+use crypto_profile_awslc4::{Family, MacAlgorithm, Options, Profile, admit, assert_admitted_approved, hmac};
 
 let admitted = admit(Profile::Cnsa2, Options::default());
-assert_admitted_approved(&admitted)?; // refuses on 4.x today; see profiles.md §10
+assert_admitted_approved(&admitted, &[Family::Mac])?; // refuses on 4.x today; see profiles.md §10
 let key = hmac::Key::new(&admitted, MacAlgorithm::HmacSha384, &key_bytes)?;
 let tag = key.sign(message);
 key.verify(message, tag.as_ref())?;
@@ -249,27 +249,48 @@ key.verify(message, tag.as_ref())?;
 - **Full-length tags only.** The crate offers no truncation.
 - **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 and HKDF-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
 - **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC or KDF the profile does not admit. Read it through `profile()`, `options()`, `macs()`, `kdfs()` and `excluded()`.
-- **Under `unrestricted`.** `assert_admitted_approved` refuses with `CryptoError::KdfInfoMayBeEmpty`, because the profile admits an empty HKDF `info`, even if only HMAC is used (§14).
+- **Asserting approval.** Name the families you use: `assert_admitted_approved(&admitted, &[Family::Mac])` walks the MAC cells only. Under `unrestricted` it passes the MACs wherever the module approves them; the empty-`info` refusal (§14) applies only when `Family::Kdf` is named. A TLS family is refused with `CryptoError::FamilyNotAdmitted`, because `assert_module_approves` checks TLS, and an empty list approves nothing.
 - **Panics.** `Key::new`, `sign` and `verify` panic only if the module's HMAC context fails, as aws-lc-rs's do.
 
-## 14. HKDF under a profile
+## 14. Key derivation
 
 ```rust
-use crypto_profile_awslc4::{KdfAlgorithm, Options, Profile, admit, assert_admitted_approved, hkdf};
+use crypto_profile_awslc4::{Family, KdfAlgorithm, Options, Profile, admit, assert_admitted_approved, kdf};
 
 let admitted = admit(Profile::Fips1403, Options::default());
-assert_admitted_approved(&admitted)?; // refuses on 4.x today; see profiles.md §11
+assert_admitted_approved(&admitted, &[Family::Kdf])?; // refuses on 4.x today; see profiles.md §11
 let mut info = b"example-app v1 session key".to_vec();
 info.extend_from_slice(&client_public_key);
 info.extend_from_slice(&server_public_key);
-let key = hkdf::derive(&admitted, KdfAlgorithm::HkdfSha384, &shared_secret, None, &info, 32)?;
+let spec = kdf::Spec::Hkdf { algorithm: KdfAlgorithm::HkdfSha384, salt: None, info: &info };
+let key = kdf::derive(&admitted, &shared_secret, &spec, 32)?;
 let key_bytes: &[u8] = key.as_bytes();
 ```
 
-- **One call.** `derive` extracts and expands; the pseudorandom key is never returned. There is no separate extract or expand.
+- **One call.** `kdf::derive` with `kdf::Spec::Hkdf` extracts and expands; the pseudorandom key is never returned. There is no separate extract or expand.
+- **The specification.** `kdf::Spec` carries the KDF and every input but the secret. It is `#[non_exhaustive]`: a later KDF is a new variant, so a `match` on it needs a `_` arm. An algorithm that does not match its variant, such as a one-step `KdfAlgorithm` in `Spec::Hkdf`, is refused with `CryptoError::KdfSpecMismatch` before anything else. The one-step variants exist as types only until #33's ECDH change implements them.
 - **What belongs in `info`.** What the key is for and who it is between: a purpose label, the parties' identifiers, and the public keys each contributed (SP 800-56A Rev. 3 §5.8.2). Every profile but `unrestricted` refuses an empty `info` with `CryptoError::KdfInfoEmpty`, because the module does not mark such a call approved.
 - **Salt.** Pass `None` unless the protocol defines a salt; `None` and an empty salt both mean RFC 5869's default, HashLen zero bytes. The standards allow a secret salt, but the salt and `info` are copied without wiping, so pass neither a secret (§11).
 - **Lengths.** 1 to 255 × HashLen bytes of output (`CryptoError::KdfOutputLength` otherwise); any non-empty secret (`CryptoError::KdfSecretEmpty` for an empty one).
 - **The derived key** is zeroized on drop, and its `Debug` prints only its length.
-- **Refusals** come in order: admission, `info`, output length, secret.
-- **`assert_admitted_approved` refuses `unrestricted`** with `CryptoError::KdfInfoMayBeEmpty`, on both module lines: `unrestricted` admits an empty `info`, which the module does not approve. It promises no approval; it also admits entries no module approves (X25519, ChaCha20-Poly1305), so `assert_module_approves` could never pass it either. `derive` under `unrestricted` still derives with an empty `info`. Use another profile where approval matters.
+- **Refusals** come in order: specification, admission, `info`, output length, secret.
+- **`assert_admitted_approved(&admitted, &[Family::Kdf])` refuses `unrestricted`** with `CryptoError::KdfInfoMayBeEmpty`, on both module lines: `unrestricted` admits an empty `info`, which the module does not approve. It promises no approval; it also admits entries no module approves (X25519, ChaCha20-Poly1305), so `assert_module_approves` could never pass it either. `derive` under `unrestricted` still derives with an empty `info`. Use another profile where approval matters.
+
+## 15. Migrating from 0.9
+
+0.10.0 is the last release that breaks the API on purpose ([decision 0012](decisions/0012-api-coherence-and-non-exhaustive.md)). Coming from 0.9.0:
+
+- **A `match` on the crate's enums needs a `_` arm.** The algorithm enums, `Algorithm`, `Profile` and `GoverningText` are `#[non_exhaustive]`. Refuse in the `_` arm; do not map it to a default algorithm.
+- **Build `Options` from its default.** A struct expression, with or without `..Options::default()`, no longer compiles:
+
+  ```rust
+  let mut options = Options::default();
+  options.pq_key_exchange_required = true;
+  ```
+
+  `tls::Policy` likewise: `Policy::default()`, then set its fields. `Resolved` comes only from `resolve`; its fields can be reassigned. `ProfileSpec`, `Selection` and `AdmittedSelection` can be read but not built.
+- **Signature keys.** `KeyPair::from_pkcs8(a, der)` is `KeyPair::from_pkcs8_der(a, der)`, `key.pkcs8_der()` is `key.to_pkcs8_der()`, and `key.public_key()` returns `&[u8]`: call `.to_vec()` where you kept the `Vec`.
+- **Hashing.** `digest::digest(h, data)` and `digest::Hasher::new(h)` return a `Result`; a hash the backend does not implement is refused with `CryptoError::Unavailable`.
+- **New variants and fields.** `Algorithm` has `Mac`, `Kdf` and `KeyAgreement`; `ProfileSpec` has `macs` and `kdfs`; `Options` has `cnsa1_unclassified_nss`; `CryptoError` and `Family` have new variants.
+- **`ParseAlgorithmError`** displays as "unknown algorithm name …", since `KeyAgreementAlgorithm` parses with it too.
+- **Sealed boxes.** `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`; a blob sealed under an empty domain by 0.9.0 no longer opens.

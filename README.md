@@ -17,7 +17,7 @@ One reviewed place for an application's cryptographic choices:
   - random bytes;
   - AEAD with module-chosen nonces;
   - HMAC under a profile, admitted with `admit` outside TLS and keyed through `hmac::Key`;
-  - HKDF under a profile, admitted with `admit` and derived through `hkdf::derive`;
+  - key derivation (HKDF) under a profile, admitted with `admit` and derived through `kdf::derive`;
   - a sealed box;
   - signature keys, signing and verification;
   - certificate-request generation.
