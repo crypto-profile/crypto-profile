@@ -10,15 +10,22 @@ pub use rustls;
 /// `Admitted` is built only by `admit`, and its lists are read-only:
 ///
 /// ```
-/// use crypto_profile_awslc4::{MacAlgorithm, Options, Profile, admit};
+/// use crypto_profile_awslc4::{KdfAlgorithm, MacAlgorithm, Options, Profile, admit};
 /// let a = admit(Profile::Cnsa2, Options::default());
 /// assert!(!a.macs().contains(&MacAlgorithm::HmacSha256));
+/// assert!(!a.kdfs().contains(&KdfAlgorithm::HkdfSha256));
 /// ```
 ///
 /// ```compile_fail,E0616
 /// use crypto_profile_awslc4::{MacAlgorithm, Options, Profile, admit};
 /// let mut a = admit(Profile::Cnsa2, Options::default());
 /// a.macs.push(MacAlgorithm::HmacSha256);
+/// ```
+///
+/// ```compile_fail,E0616
+/// use crypto_profile_awslc4::{KdfAlgorithm, Options, Profile, admit};
+/// let mut a = admit(Profile::Cnsa2, Options::default());
+/// a.kdfs.push(KdfAlgorithm::HkdfSha256);
 /// ```
 #[allow(dead_code)]
 mod admitted_is_read_only {}
@@ -42,7 +49,7 @@ pub use backend_body::test_support;
 pub use backend_body::{
     Admitted, Resolved, admit, assert_admitted_approved, assert_module_approves, resolve,
 };
-pub use backend_body::{aead, csr, digest, fips, hmac, random, sealbox, signature, tls};
+pub use backend_body::{aead, csr, digest, fips, hkdf, hmac, random, sealbox, signature, tls};
 
 /// The AWS-LC FIPS module (line and linkage) this build links. Its certificate status is
 /// [`fips::certificate()`]; for 4.x the module is in CMVP review.

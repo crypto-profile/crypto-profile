@@ -902,7 +902,19 @@ macro_rules! conformance_tests {
                         .unwrap_or_else(|e| panic!("{m:?}: {e}"));
                         assert_eq!(key.sign(b"").as_ref().len(), m.tag_len(), "{m:?}");
                     }
-                    Algorithm::Kdf(k) => assert!(cap.available, "{k:?}"),
+                    Algorithm::Kdf(k) => {
+                        assert!(cap.available, "{k:?}");
+                        let key = hkdf::derive(
+                            &admit(Profile::Unrestricted, Options::default()),
+                            k,
+                            &[7; 32],
+                            None,
+                            b"capability",
+                            k.max_output_len(),
+                        )
+                        .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                        assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
+                    }
                     Algorithm::Kx(k) => {
                         let p = policy(
                             &[TlsVersion::Tls13],

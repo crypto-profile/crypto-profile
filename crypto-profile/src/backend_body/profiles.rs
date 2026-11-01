@@ -2,8 +2,8 @@
 use crate::signature::KeyPair;
 use crate::tls::{Policy, load_private_key};
 use crate::{
-    Algorithm, Approval, CryptoError, Family, MacAlgorithm, Options, Profile, SignatureAlgorithm,
-    TlsError,
+    Algorithm, Approval, CryptoError, Family, KdfAlgorithm, MacAlgorithm, Options, Profile,
+    SignatureAlgorithm, TlsError,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
@@ -151,14 +151,15 @@ pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
 }
 
 /// A profile's non-TLS families on this backend's module, under `options`. Independent of
-/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs. Built
-/// only by [`admit`], and read-only, so a constructor that takes it checks the profile's own
-/// admission.
+/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs and KDFs.
+/// Built only by [`admit`], and read-only, so a constructor that takes it checks the profile's
+/// own admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Admitted {
     profile: Profile,
     options: Options,
     macs: Vec<MacAlgorithm>,
+    kdfs: Vec<KdfAlgorithm>,
     excluded: Vec<Algorithm>,
 }
 
@@ -170,6 +171,7 @@ pub fn admit(profile: Profile, options: Options) -> Admitted {
         profile,
         options,
         macs: s.macs,
+        kdfs: s.kdfs,
         excluded: s.excluded,
     }
 }
@@ -190,6 +192,11 @@ impl Admitted {
         &self.macs
     }
 
+    /// The KDFs the profile admits, in preference order.
+    pub fn kdfs(&self) -> &[KdfAlgorithm] {
+        &self.kdfs
+    }
+
     /// Entries unavailable on the module line, in family and preference order.
     pub fn excluded(&self) -> &[Algorithm] {
         &self.excluded
@@ -198,14 +205,24 @@ impl Admitted {
     /// Refuses a MAC the profile does not admit, and one the module line lacks with
     /// `CryptoError::Unavailable`.
     pub fn admit_mac(&self, m: MacAlgorithm) -> Result<(), CryptoError> {
-        if self.macs.contains(&m) {
+        self.admit_one(self.macs.contains(&m), Algorithm::Mac(m))
+    }
+
+    /// Refuses a KDF the profile does not admit, and one the module line lacks with
+    /// `CryptoError::Unavailable`.
+    pub fn admit_kdf(&self, k: KdfAlgorithm) -> Result<(), CryptoError> {
+        self.admit_one(self.kdfs.contains(&k), Algorithm::Kdf(k))
+    }
+
+    fn admit_one(&self, admitted: bool, algorithm: Algorithm) -> Result<(), CryptoError> {
+        if admitted {
             Ok(())
-        } else if self.excluded.contains(&Algorithm::Mac(m)) {
-            Err(CryptoError::Unavailable(Algorithm::Mac(m)))
+        } else if self.excluded.contains(&algorithm) {
+            Err(CryptoError::Unavailable(algorithm))
         } else {
             Err(CryptoError::NotInProfile {
                 profile: self.profile,
-                algorithm: Algorithm::Mac(m),
+                algorithm,
             })
         }
     }
@@ -219,7 +236,15 @@ fn admitted_approved_given(
     if !fips_mode {
         return Err(CryptoError::NotFips);
     }
-    for algorithm in a.macs.iter().map(|m| Algorithm::Mac(*m)) {
+    if crypto_profile::kdf_info_may_be_empty(a.profile) && !a.kdfs.is_empty() {
+        return Err(CryptoError::KdfInfoMayBeEmpty { profile: a.profile });
+    }
+    let cells = a
+        .macs
+        .iter()
+        .map(|m| Algorithm::Mac(*m))
+        .chain(a.kdfs.iter().map(|k| Algorithm::Kdf(*k)));
+    for algorithm in cells {
         let approval = cell(algorithm);
         if !approval.is_approved() {
             return Err(CryptoError::NotApproved {
@@ -231,9 +256,11 @@ fn admitted_approved_given(
     Ok(())
 }
 
-/// Refuses with `CryptoError::NotFips` unless the module is in FIPS mode, and otherwise unless
-/// every algorithm `a` admits is `Approved` for the running module, failing on the first that is
-/// not. An empty family is not a refusal. Independent of `assert_module_approves`.
+/// Refuses with `CryptoError::NotFips` unless the module is in FIPS mode; then with
+/// `CryptoError::KdfInfoMayBeEmpty` when `a`'s profile admits KDFs and an empty `info`, which the
+/// module does not approve (`unrestricted`); then unless every algorithm `a` admits is `Approved`
+/// for the running module, MACs first, then KDFs, failing on the first that is not. An empty
+/// family is not a refusal. Independent of `assert_module_approves`.
 pub fn assert_admitted_approved(a: &Admitted) -> Result<(), CryptoError> {
     admitted_approved_given(aws_lc_rs::try_fips_mode().is_ok(), a, |x| {
         crypto_profile::capability(crate::MODULE, x).approval
@@ -715,6 +742,7 @@ mod peer_certificate_tests {
 #[cfg(test)]
 mod admitted_tests {
     use super::*;
+    use crate::KdfAlgorithm as Kd;
     use crate::MacAlgorithm as M;
 
     const ON: Options = Options {
@@ -733,6 +761,10 @@ mod admitted_tests {
                     a.macs(),
                     crypto_profile::select_admitted(p, o, crate::MODULE).macs
                 );
+                assert_eq!(
+                    a.kdfs(),
+                    crypto_profile::select_admitted(p, o, crate::MODULE).kdfs
+                );
                 assert_eq!(a.excluded(), []);
             }
         }
@@ -743,6 +775,14 @@ mod admitted_tests {
         assert_eq!(
             admit(Profile::Cnsa1, ON).macs(),
             [M::HmacSha384, M::HmacSha256]
+        );
+        assert_eq!(
+            admit(Profile::Cnsa2, Options::default()).kdfs(),
+            [Kd::HkdfSha384, Kd::HkdfSha512]
+        );
+        assert_eq!(
+            admit(Profile::Cnsa1, ON).kdfs(),
+            [Kd::HkdfSha384, Kd::HkdfSha256]
         );
         assert_eq!(admit(Profile::Cnsa1, ON).options(), ON);
     }
@@ -788,22 +828,137 @@ mod admitted_tests {
     }
 
     #[test]
+    fn admit_kdf_admits_exactly_the_profile_kdfs() {
+        for p in Profile::ALL {
+            for o in [Options::default(), ON] {
+                let a = admit(p, o);
+                for k in KdfAlgorithm::ALL {
+                    let want = if a.kdfs.contains(&k) {
+                        Ok(())
+                    } else {
+                        Err(CryptoError::NotInProfile {
+                            profile: p,
+                            algorithm: Algorithm::Kdf(k),
+                        })
+                    };
+                    assert_eq!(a.admit_kdf(k), want, "{p} {o} {k:?}");
+                }
+            }
+        }
+        assert_eq!(
+            admit(Profile::Cnsa2, ON).admit_kdf(Kd::HkdfSha256),
+            Err(CryptoError::NotInProfile {
+                profile: Profile::Cnsa2,
+                algorithm: Algorithm::Kdf(Kd::HkdfSha256),
+            })
+        );
+    }
+
+    #[test]
+    fn a_kdf_the_module_lacks_is_unavailable() {
+        let mut a = admit(Profile::Fips1403, Options::default());
+        a.kdfs.retain(|k| *k != Kd::HkdfSha384);
+        a.excluded.push(Algorithm::Kdf(Kd::HkdfSha384));
+        assert_eq!(
+            a.admit_kdf(Kd::HkdfSha384),
+            Err(CryptoError::Unavailable(Algorithm::Kdf(Kd::HkdfSha384)))
+        );
+        assert_eq!(a.admit_kdf(Kd::HkdfSha512), Ok(()));
+        assert_eq!(a.admit_mac(M::HmacSha384), Ok(()));
+    }
+
+    #[test]
+    fn admitted_approval_walks_the_kdf_cells_after_the_macs() {
+        let approved = |_: Algorithm| Approval::Approved { source: "test" };
+        let a = admit(Profile::Cnsa2, Options::default());
+        let k512 = Algorithm::Kdf(Kd::HkdfSha512);
+        assert_eq!(
+            admitted_approved_given(true, &a, |x| if x == k512 {
+                Approval::Unverified
+            } else {
+                approved(x)
+            }),
+            Err(CryptoError::NotApproved {
+                algorithm: k512,
+                approval: Approval::Unverified,
+            })
+        );
+        let m384 = Algorithm::Mac(M::HmacSha384);
+        assert_eq!(
+            admitted_approved_given(true, &a, |x| if x == m384 || x == k512 {
+                Approval::Unverified
+            } else {
+                approved(x)
+            }),
+            Err(CryptoError::NotApproved {
+                algorithm: m384,
+                approval: Approval::Unverified,
+            })
+        );
+        let kdf_only = Admitted {
+            macs: vec![],
+            ..a.clone()
+        };
+        let first = Algorithm::Kdf(kdf_only.kdfs[0]);
+        let want = if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+            Ok(())
+        } else {
+            Err(CryptoError::NotApproved {
+                algorithm: first,
+                approval: crypto_profile::capability(crate::MODULE, first).approval,
+            })
+        };
+        assert_eq!(assert_admitted_approved(&kdf_only), want);
+    }
+
+    #[test]
+    fn a_profile_that_admits_an_empty_kdf_info_is_not_approved() {
+        let approved = |_: Algorithm| Approval::Approved { source: "test" };
+        let refused = Err(CryptoError::KdfInfoMayBeEmpty {
+            profile: Profile::Unrestricted,
+        });
+        let u = admit(Profile::Unrestricted, Options::default());
+        assert!(!u.kdfs.is_empty());
+        assert_eq!(admitted_approved_given(true, &u, approved), refused);
+        assert_eq!(
+            admitted_approved_given(true, &u, |_| Approval::Unverified),
+            refused
+        );
+        assert_eq!(
+            admitted_approved_given(false, &u, approved),
+            Err(CryptoError::NotFips)
+        );
+        let no_kdfs = Admitted {
+            kdfs: vec![],
+            ..u.clone()
+        };
+        assert_eq!(admitted_approved_given(true, &no_kdfs, approved), Ok(()));
+        let no_macs = Admitted {
+            macs: vec![],
+            ..u.clone()
+        };
+        assert_eq!(admitted_approved_given(true, &no_macs, approved), refused);
+        let bsi = admit(Profile::Bsi, Options::default());
+        assert!(!bsi.kdfs.is_empty());
+        assert_eq!(admitted_approved_given(true, &bsi, approved), Ok(()));
+    }
+
+    #[test]
     fn admitted_approval_follows_this_modules_cells() {
         for p in Profile::ALL {
             let a = admit(p, Options::default());
-            if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
-                assert_eq!(assert_admitted_approved(&a), Ok(()), "{p}");
+            let want = if p == Profile::Unrestricted {
+                Err(CryptoError::KdfInfoMayBeEmpty { profile: p })
+            } else if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                Ok(())
             } else {
                 let first = Algorithm::Mac(a.macs[0]);
-                assert_eq!(
-                    assert_admitted_approved(&a),
-                    Err(CryptoError::NotApproved {
-                        algorithm: first,
-                        approval: crypto_profile::capability(crate::MODULE, first).approval,
-                    }),
-                    "{p}"
-                );
-            }
+                Err(CryptoError::NotApproved {
+                    algorithm: first,
+                    approval: crypto_profile::capability(crate::MODULE, first).approval,
+                })
+            };
+            assert_eq!(assert_admitted_approved(&a), want, "{p}");
         }
     }
 
@@ -830,6 +985,7 @@ mod admitted_tests {
         );
         let empty = Admitted {
             macs: vec![],
+            kdfs: vec![],
             ..a.clone()
         };
         assert_eq!(
