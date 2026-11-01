@@ -71,7 +71,7 @@ mod tests {
 
     #[test]
     fn streaming_equals_one_shot() {
-        for h in HashAlgorithm::ALL {
+        for &h in HashAlgorithm::ALL {
             let mut s = Hasher::new(h).unwrap();
             s.update(b"a");
             s.update(b"bc");

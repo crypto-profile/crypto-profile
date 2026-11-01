@@ -146,7 +146,7 @@ macro_rules! __conformance_profile_tests {
         #[test]
         fn resolve_matches_the_golden_tables() {
             let (mut compared, mut refused) = (0, 0);
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 for pq in [false, true] {
                     let mut options = Options::default();
                     options.pq_key_exchange_required = pq;
@@ -449,7 +449,7 @@ macro_rules! __conformance_profile_tests {
 
         #[test]
         fn every_resolved_profile_builds_a_provider() {
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 for (pq, peer) in [(false, false), (true, false), (false, true), (true, true)] {
                     let mut o = Options::default();
                     o.pq_key_exchange_required = pq;
@@ -555,7 +555,7 @@ macro_rules! __conformance_profile_tests {
 
         #[test]
         fn rustls_classifies_every_profile_but_unrestricted_as_fips() {
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 let Some(r) = admitted(p, Options::default()) else {
                     continue;
                 };

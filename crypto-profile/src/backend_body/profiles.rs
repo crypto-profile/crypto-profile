@@ -297,6 +297,7 @@ mod tests {
         CipherSuite as C, KxGroup as K, SignatureAlgorithm as S, TlsSignatureScheme as T,
         TlsVersion as V,
     };
+    use crypto_profile::conformance::__empty_profile;
 
     fn pq() -> Options {
         let mut o = Options::default();
@@ -304,9 +305,13 @@ mod tests {
         o
     }
 
+    fn empty_profile(r: Result<Resolved, CryptoError>) -> Option<(Profile, Options, Family)> {
+        r.err().as_ref().and_then(__empty_profile)
+    }
+
     fn every_resolved() -> Vec<Resolved> {
         let mut v = Vec::new();
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             for o in [Options::default(), pq()] {
                 if let Ok(r) = resolve(p, o) {
                     v.push(r);
@@ -339,12 +344,8 @@ mod tests {
     fn resolve_carries_the_profile_the_options_and_the_policy() {
         if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
             assert_eq!(
-                resolve(Profile::Cnsa2, pq()),
-                Err(CryptoError::EmptyProfile {
-                    profile: Profile::Cnsa2,
-                    options: pq(),
-                    category: Family::SignatureScheme
-                })
+                empty_profile(resolve(Profile::Cnsa2, pq())),
+                Some((Profile::Cnsa2, pq(), Family::SignatureScheme))
             );
             return;
         }
@@ -363,20 +364,16 @@ mod tests {
         assert_eq!(r.keys, vec![S::MlDsa87]);
         assert!(r.excluded.is_empty());
         assert_eq!(
-            resolve(Profile::Bsi, pq()),
-            Err(CryptoError::EmptyProfile {
-                profile: Profile::Bsi,
-                options: pq(),
-                category: Family::KxGroup,
-            })
+            empty_profile(resolve(Profile::Bsi, pq())),
+            Some((Profile::Bsi, pq(), Family::KxGroup))
         );
     }
 
     #[test]
     fn admit_key_admits_exactly_the_profile_keys() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let admitted: &[S] = match p {
-                Profile::Unrestricted | Profile::Fips1403 => &S::ALL,
+                Profile::Unrestricted | Profile::Fips1403 => S::ALL,
                 Profile::Preferred => &[
                     S::MlDsa87,
                     S::EcdsaP256Sha256,
@@ -402,7 +399,7 @@ mod tests {
             };
             for o in [Options::default(), pq()] {
                 let Ok(r) = resolve(p, o) else { continue };
-                for a in S::ALL {
+                for &a in S::ALL {
                     let want = if admitted.contains(&a)
                         && crate::capability(crate::MODULE, Algorithm::Signature(a)).available
                     {
@@ -493,12 +490,8 @@ mod tests {
                     assert_eq!(crate::MODULE.line, crate::ModuleLine::AwsLcFips3);
                     assert_eq!(p, Profile::Cnsa2);
                     assert_eq!(
-                        e,
-                        CryptoError::EmptyProfile {
-                            profile: p,
-                            options: Options::default(),
-                            category: Family::SignatureScheme
-                        }
+                        __empty_profile(&e),
+                        Some((p, Options::default(), Family::SignatureScheme))
                     );
                     continue;
                 }
@@ -635,7 +628,7 @@ mod tests {
     #[test]
     fn assert_module_approves_reports_each_cell_as_fips_approval_does() {
         let base = resolve(Profile::Unrestricted, Options::default()).unwrap();
-        for a in S::ALL {
+        for &a in S::ALL {
             let r = Resolved {
                 keys: vec![a],
                 ..base.clone()
@@ -671,16 +664,12 @@ mod tests {
 
     #[test]
     fn no_profile_is_refused_for_want_of_an_algorithm_on_this_module() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             if p == Profile::Cnsa2 && crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
                 for options in [Options::default(), pq()] {
                     assert_eq!(
-                        resolve(p, options),
-                        Err(CryptoError::EmptyProfile {
-                            profile: p,
-                            options,
-                            category: Family::SignatureScheme
-                        })
+                        empty_profile(resolve(p, options)),
+                        Some((p, options, Family::SignatureScheme))
                     );
                 }
                 continue;
@@ -693,16 +682,10 @@ mod tests {
                 }
                 _ => panic!("{p}: no expected post-quantum result"),
             };
-            let want = if empty_with_pq {
-                Err(CryptoError::EmptyProfile {
-                    profile: p,
-                    options: pq(),
-                    category: Family::KxGroup,
-                })
-            } else {
-                Ok(())
-            };
-            assert_eq!(resolve(p, pq()).map(|_| ()), want, "{p}");
+            let want = empty_with_pq.then(|| (p, pq(), Family::KxGroup));
+            let got = resolve(p, pq());
+            assert_eq!(got.is_ok(), !empty_with_pq, "{p}");
+            assert_eq!(empty_profile(got), want, "{p}");
         }
     }
 }
@@ -710,11 +693,12 @@ mod tests {
 #[cfg(test)]
 mod peer_certificate_tests {
     use super::*;
+    use crypto_profile::conformance::__empty_profile;
 
     #[test]
     fn peer_certificate_resolution_is_canonical_and_default_off() {
         assert_eq!(Policy::default().peer_certificate_rule, None);
-        for profile in Profile::ALL {
+        for &profile in Profile::ALL {
             for pq in [false, true] {
                 let mut off = Options::default();
                 off.pq_key_exchange_required = pq;
@@ -732,18 +716,12 @@ mod peer_certificate_tests {
                         assert_eq!(off.keys, on.keys);
                         assert_eq!(off.excluded, on.excluded);
                     }
-                    (
-                        Err(CryptoError::EmptyProfile {
-                            profile: p,
-                            options: o,
-                            category: c,
-                        }),
-                        Err(CryptoError::EmptyProfile {
-                            profile: ep,
-                            options: eo,
-                            category: ec,
-                        }),
-                    ) => {
+                    (Err(off_err), Err(on_err)) => {
+                        let (Some((p, o, c)), Some((ep, eo, ec))) =
+                            (__empty_profile(&off_err), __empty_profile(&on_err))
+                        else {
+                            panic!("{off_err:?} != {on_err:?}");
+                        };
                         assert_eq!((p, o, c), (ep, off, ec));
                         assert_eq!(eo, on);
                         if profile == Profile::Cnsa2
@@ -773,7 +751,7 @@ mod admitted_tests {
 
     #[test]
     fn admit_never_refuses_and_carries_its_inputs() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             for o in [Options::default(), on()] {
                 let a = admit(p, o);
                 assert_eq!((a.profile(), a.options()), (p, o));
@@ -809,10 +787,10 @@ mod admitted_tests {
 
     #[test]
     fn admit_mac_admits_exactly_the_profile_macs() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             for o in [Options::default(), on()] {
                 let a = admit(p, o);
-                for m in MacAlgorithm::ALL {
+                for &m in MacAlgorithm::ALL {
                     let want = if a.macs.contains(&m) {
                         Ok(())
                     } else {
@@ -849,10 +827,10 @@ mod admitted_tests {
 
     #[test]
     fn admit_kdf_admits_exactly_the_profile_kdfs() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             for o in [Options::default(), on()] {
                 let a = admit(p, o);
-                for k in KdfAlgorithm::ALL {
+                for &k in KdfAlgorithm::ALL {
                     let want = if a.kdfs.contains(&k) {
                         Ok(())
                     } else {
@@ -956,7 +934,13 @@ mod admitted_tests {
     #[test]
     fn a_tls_family_is_refused_after_fips_mode_and_before_everything_else() {
         let u = admit(Profile::Unrestricted, Options::default());
+        let c = admit(Profile::Cnsa2, Options::default());
         for f in TLS {
+            assert_eq!(
+                admitted_approved_given(true, &c, &[Family::Mac, f], |_| Approval::Unverified),
+                Err(CryptoError::FamilyNotAdmitted(f)),
+                "{f:?}"
+            );
             assert_eq!(
                 admitted_approved_given(true, &u, &[f], approved),
                 Err(CryptoError::FamilyNotAdmitted(f)),
@@ -983,7 +967,7 @@ mod admitted_tests {
 
     #[test]
     fn asserting_nothing_approves_nothing() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let a = admit(p, Options::default());
             assert_eq!(
                 admitted_approved_given(true, &a, &[], |_| Approval::Unverified),
@@ -1060,7 +1044,7 @@ mod admitted_tests {
 
     #[test]
     fn admitted_approval_follows_this_modules_cells() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let a = admit(p, Options::default());
             for (families, first) in [
                 (

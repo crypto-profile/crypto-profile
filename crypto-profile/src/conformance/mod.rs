@@ -122,11 +122,25 @@ pub fn __cavp_short(file: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
     out
 }
 
+/// The fields of a `CryptoError::EmptyProfile`, which a backend cannot build to compare against.
+#[doc(hidden)]
+pub fn __empty_profile(e: &CryptoError) -> Option<(crate::Profile, crate::Options, crate::Family)> {
+    match *e {
+        CryptoError::EmptyProfile {
+            profile,
+            options,
+            category,
+        } => Some((profile, options, category)),
+        _ => None,
+    }
+}
+
 /// The handshake schemes a test peer offers on `module`: every scheme the module has.
 #[doc(hidden)]
 pub fn __peer_schemes(module: Module) -> Vec<TlsSignatureScheme> {
     TlsSignatureScheme::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|t| capability(module, Algorithm::Scheme(*t)).available)
         .collect()
 }
@@ -914,12 +928,12 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_hmac_refusal_matrix() {
-            for (p, off, on) in $crate::conformance::golden::MAC_GOLDEN {
+            for &(p, off, on) in $crate::conformance::golden::MAC_GOLDEN {
                 for (unclassified, admitted) in [(false, off), (true, on)] {
                     let mut o = Options::default();
                     o.cnsa1_unclassified_nss = unclassified;
                     let a = admit(p, o);
-                    for m in MacAlgorithm::ALL {
+                    for &m in MacAlgorithm::ALL {
                         let want = if admitted.contains(&m) {
                             Ok(m)
                         } else {
@@ -950,7 +964,7 @@ macro_rules! conformance_tests {
             let mut on = Options::default();
             on.cnsa1_unclassified_nss = true;
             let mut profiles = 0;
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 let a = admit(p, on);
                 if !a.kdfs().contains(&KdfAlgorithm::HkdfSha256) {
                     continue;
@@ -1014,7 +1028,7 @@ macro_rules! conformance_tests {
                 let cases = $crate::conformance::__wycheproof_kdf_cases(file);
                 assert_eq!(cases.len(), total, "{k:?}");
                 let mut exercised = 0;
-                for p in Profile::ALL {
+                for &p in Profile::ALL {
                     let a = admit(p, on);
                     if !a.kdfs().contains(&k) {
                         continue;
@@ -1072,13 +1086,13 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_hkdf_refusal_matrix() {
-            for (p, off, on) in $crate::conformance::golden::KDF_GOLDEN {
+            for &(p, off, on) in $crate::conformance::golden::KDF_GOLDEN {
                 for (unclassified, admitted) in [(false, off), (true, on)] {
                     let mut o = Options::default();
                     o.cnsa1_unclassified_nss = unclassified;
                     let a = admit(p, o);
                     assert_eq!(a.kdfs(), admitted, "{p} {o}");
-                    for k in KdfAlgorithm::ALL {
+                    for &k in KdfAlgorithm::ALL {
                         let len = |info: &[u8]| {
                             let spec = kdf::Spec::Hkdf {
                                 algorithm: k,
@@ -1236,7 +1250,8 @@ macro_rules! conformance_tests {
                     }
                     Algorithm::Protocol(v) => {
                         let suites: Vec<_> = CipherSuite::ALL
-                            .into_iter()
+                            .iter()
+                            .copied()
                             .filter(|c| c.version() == v)
                             .collect();
                         let p = policy(

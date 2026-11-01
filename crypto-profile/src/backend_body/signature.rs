@@ -313,7 +313,7 @@ mod tests {
 
     #[test]
     fn every_algorithm_generates_signs_and_verifies() {
-        for a in S::ALL {
+        for &a in S::ALL {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
                     KeyPair::generate(a).err(),
@@ -343,7 +343,7 @@ mod tests {
 
     #[test]
     fn a_key_reloads_from_its_pkcs8() {
-        for a in S::ALL {
+        for &a in S::ALL {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
                     KeyPair::generate(a).err(),
@@ -407,7 +407,7 @@ mod tests {
 
     #[test]
     fn rcgen_sees_our_key_and_algorithm() {
-        for a in S::ALL {
+        for &a in S::ALL {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
                     KeyPair::generate(a).err(),

@@ -18,11 +18,13 @@ fn alg(k: KdfAlgorithm) -> Result<aws_lc_rs::hkdf::Algorithm, CryptoError> {
 
 const ZERO_SALT: [u8; 64] = [0; 64];
 
-const _: () = {
-    let [a, b, c] = HashAlgorithm::ALL;
-    assert!(a.output_len() <= ZERO_SALT.len());
-    assert!(b.output_len() <= ZERO_SALT.len());
-    assert!(c.output_len() <= ZERO_SALT.len());
+const _: () = match HashAlgorithm::ALL {
+    [a, b, c] => {
+        assert!(a.output_len() <= ZERO_SALT.len());
+        assert!(b.output_len() <= ZERO_SALT.len());
+        assert!(c.output_len() <= ZERO_SALT.len());
+    }
+    _ => panic!("a new HashAlgorithm: check ZERO_SALT covers its output length"),
 };
 
 struct Len(usize);
@@ -232,7 +234,7 @@ mod tests {
 
     #[test]
     fn an_empty_info_derives_under_unrestricted_only() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let got = under(p, K::HkdfSha384, &[7; 32], b"", 48);
             if p == Profile::Unrestricted {
                 assert_eq!(got.map(|v| v.len()), Ok(48));
@@ -286,7 +288,7 @@ mod tests {
 
     #[test]
     fn an_empty_or_absent_salt_becomes_hash_length_zeros_before_the_module() {
-        for k in KdfAlgorithm::ALL {
+        for &k in KdfAlgorithm::ALL {
             let zeros = vec![0; k.hash().output_len()];
             assert_eq!(salt_for(k, None), zeros.as_slice(), "{k:?}");
             assert_eq!(salt_for(k, Some(&[])), zeros.as_slice(), "{k:?}");

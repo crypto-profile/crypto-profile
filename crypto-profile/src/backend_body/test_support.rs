@@ -14,6 +14,7 @@ pub const FIPS_LIBRARY: &str = env!("CRYPTO_PROFILE_FIPS_LIBRARY");
 
 /// What a completed handshake negotiated.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct Negotiated {
     /// The protocol version.
     pub version: TlsVersion,
@@ -284,19 +285,23 @@ fn run(
         .with_no_client_auth();
     let ([version_cp, suite_cp, group_cp, scheme_cp], kind) = drive(client_cfg, server_cfg, &seen)?;
     let version = TlsVersion::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|x| x.iana() == version_cp)
         .ok_or(format!("unexpected version {version_cp:#06x}"))?;
     let suite = CipherSuite::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|x| x.iana() == suite_cp)
         .ok_or(format!("unknown suite {suite_cp:#06x}"))?;
     let kx = KxGroup::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|x| x.iana() == group_cp)
         .ok_or(format!("unknown group {group_cp:#06x}"))?;
     let scheme = TlsSignatureScheme::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|x| x.iana() == scheme_cp)
         .ok_or(format!("unknown scheme {scheme_cp:#06x}"))?;
     Ok(Negotiated {
@@ -573,7 +578,8 @@ pub fn peer_certificate_default_session_configs(
     let mut baseline = policy.clone();
     baseline.peer_certificate_rule = None;
     baseline.cipher_suites = CipherSuite::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|s| policy.versions.contains(&s.version()))
         .collect();
     let cp = if server_checks_client {

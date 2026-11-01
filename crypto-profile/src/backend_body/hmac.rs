@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn a_tag_verifies_only_whole_and_unaltered() {
-        for m in MacAlgorithm::ALL {
+        for &m in MacAlgorithm::ALL {
             let k = key(Profile::Unrestricted, m, 32).unwrap();
             assert_eq!(k.algorithm(), m);
             let tag = k.sign(b"policy").as_ref().to_vec();
@@ -168,7 +168,7 @@ mod tests {
             assert_eq!(k.verify(b"policy", &tag), Ok(()));
             let mut flipped = tag.clone();
             flipped[0] ^= 1;
-            let other = MacAlgorithm::ALL.into_iter().find(|o| *o != m).unwrap();
+            let other = MacAlgorithm::ALL.iter().copied().find(|o| *o != m).unwrap();
             let other_tag = key(Profile::Unrestricted, other, 32)
                 .unwrap()
                 .sign(b"policy")

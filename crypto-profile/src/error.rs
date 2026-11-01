@@ -49,7 +49,7 @@ pub enum PeerVerifierIdentity {
         /// The certificate rule, absent for default-off policies.
         rule: Option<crate::PeerCertificateRuleId>,
         /// Canonical handshake-scheme mask, with bit positions from scheme preference order.
-        handshake_schemes: u16,
+        handshake_schemes: u64,
     },
     /// A verifier whose policy identity cannot be established.
     Opaque,
@@ -190,6 +190,7 @@ pub enum CryptoError {
     /// A cryptographic primitive failed.
     Primitive,
     /// A profile, narrowed by its options, names nothing in a family.
+    #[non_exhaustive]
     EmptyProfile {
         /// The profile.
         profile: Profile,

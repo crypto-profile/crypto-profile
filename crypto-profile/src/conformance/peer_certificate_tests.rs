@@ -11,6 +11,7 @@ macro_rules! __conformance_peer_certificate_tests {
             CertificateSignature as CS, HashAlgorithm as H, MlDsaParameterSet as ML};
         use $b::tls::{self, Policy};
         use $b::test_support::{self, PeerCertificatePki, PeerCertificateFixture as F};
+        use $crate::conformance::__empty_profile;
 
         fn strict_options(strict: bool) -> Options {
             let mut options = Options::default();
@@ -220,8 +221,8 @@ macro_rules! __conformance_peer_certificate_tests {
             if MODULE.line == ModuleLine::AwsLcFips3 {
                 for strict in [false, true] {
                     let options = strict_options(strict);
-                    assert_eq!(resolve(P::Cnsa2, options).err(), Some(CryptoError::EmptyProfile {
-                        profile: P::Cnsa2, options, category: Family::SignatureScheme }));
+                    assert_eq!(resolve(P::Cnsa2, options).err().as_ref().and_then(__empty_profile),
+                        Some((P::Cnsa2, options, Family::SignatureScheme)));
                 }
                 assert_eq!(signature::KeyPair::generate(S::MlDsa87).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(S::MlDsa87))));
@@ -372,18 +373,18 @@ macro_rules! __conformance_peer_certificate_tests {
 
         #[test]
         fn peer_certificate_options_coexist_without_changing_resolution_precedence() {
-            for profile in P::ALL {
+            for &profile in P::ALL {
                 for pq in [false,true] {
                     for strict in [false,true] {
                         let mut options = strict_options(strict);
                         options.pq_key_exchange_required = pq;
                         let result = resolve(profile,options);
                         if pq && [P::Cnsa1,P::Bsi,P::Fips1402].contains(&profile) {
-                            assert_eq!(result.err(),Some(CryptoError::EmptyProfile {
-                                profile,options,category:Family::KxGroup }));
+                            assert_eq!(result.err().as_ref().and_then(__empty_profile),
+                                Some((profile,options,Family::KxGroup)));
                         } else if profile == P::Cnsa2 && MODULE.line == ModuleLine::AwsLcFips3 {
-                            assert_eq!(result.err(),Some(CryptoError::EmptyProfile {
-                                profile,options,category:Family::SignatureScheme }));
+                            assert_eq!(result.err().as_ref().and_then(__empty_profile),
+                                Some((profile,options,Family::SignatureScheme)));
                         } else {
                             let resolved=result.unwrap();
                             assert_eq!(resolved.tls.peer_certificate_rule,

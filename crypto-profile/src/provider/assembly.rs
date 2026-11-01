@@ -113,11 +113,13 @@ pub(crate) fn verification() -> WebPkiSupportedAlgorithms {
 pub(crate) fn full() -> CryptoProvider {
     CryptoProvider {
         cipher_suites: crypto_profile::CipherSuite::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|c| suite(c).ok())
             .collect(),
         kx_groups: crypto_profile::KxGroup::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|k| group(k).ok())
             .collect(),
         signature_verification_algorithms: verification(),
@@ -256,14 +258,22 @@ mod tests {
                 .iter()
                 .map(|s| u16::from_be_bytes(s.suite().to_array()))
                 .collect::<Vec<_>>(),
-            C::ALL.map(|c| u16::from_be_bytes(suite(c).unwrap().suite().to_array()))
+            C::ALL
+                .iter()
+                .copied()
+                .map(|c| u16::from_be_bytes(suite(c).unwrap().suite().to_array()))
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             p.kx_groups
                 .iter()
                 .map(|g| u16::from_be_bytes(g.name().to_array()))
                 .collect::<Vec<_>>(),
-            K::ALL.map(|k| u16::from_be_bytes(group(k).unwrap().name().to_array()))
+            K::ALL
+                .iter()
+                .copied()
+                .map(|k| u16::from_be_bytes(group(k).unwrap().name().to_array()))
+                .collect::<Vec<_>>()
         );
         assert_eq!(
             ids(p.signature_verification_algorithms.all),

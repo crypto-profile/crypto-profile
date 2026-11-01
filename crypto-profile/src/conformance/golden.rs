@@ -324,7 +324,7 @@ pub fn expected(module: Module, profile: Profile, options: Options) -> Result<Go
 /// Each profile's MACs with the `cnsa1_unclassified_nss` option off and on, in preference order.
 /// Every MAC cell is available on every module line, so these hold on each one.
 #[doc(hidden)]
-pub const MAC_GOLDEN: [(Profile, &[MacAlgorithm], &[MacAlgorithm]); 7] = {
+pub const MAC_GOLDEN: &[(Profile, &[MacAlgorithm], &[MacAlgorithm])] = &{
     use MacAlgorithm::{HmacSha256 as H256, HmacSha384 as H384, HmacSha512 as H512};
     [
         (
@@ -344,7 +344,7 @@ pub const MAC_GOLDEN: [(Profile, &[MacAlgorithm], &[MacAlgorithm]); 7] = {
 /// Each profile's KDFs with the `cnsa1_unclassified_nss` option off and on, in preference order.
 /// Every KDF cell is available on every module line, so these hold on each one.
 #[doc(hidden)]
-pub const KDF_GOLDEN: [(Profile, &[KdfAlgorithm], &[KdfAlgorithm]); 7] = {
+pub const KDF_GOLDEN: &[(Profile, &[KdfAlgorithm], &[KdfAlgorithm])] = &{
     use KdfAlgorithm::{HkdfSha256 as K256, HkdfSha384 as K384, HkdfSha512 as K512};
     [
         (
@@ -388,11 +388,12 @@ mod tests {
 
     #[test]
     fn select_admitted_agrees_with_the_mac_golden_rows_on_every_module() {
-        for (i, p) in Profile::ALL.into_iter().enumerate() {
+        assert_eq!(MAC_GOLDEN.len(), Profile::ALL.len());
+        for (i, p) in Profile::ALL.iter().copied().enumerate() {
             assert_eq!(MAC_GOLDEN[i].0, p);
         }
         for m in [M3S, M3D, M4S, M4D] {
-            for (p, off, on) in MAC_GOLDEN {
+            for &(p, off, on) in MAC_GOLDEN {
                 for (unclassified, want) in [(false, off), (true, on)] {
                     let o = Options {
                         cnsa1_unclassified_nss: unclassified,
@@ -408,11 +409,12 @@ mod tests {
 
     #[test]
     fn select_admitted_agrees_with_the_kdf_golden_rows_on_every_module() {
-        for (i, p) in Profile::ALL.into_iter().enumerate() {
+        assert_eq!(KDF_GOLDEN.len(), Profile::ALL.len());
+        for (i, p) in Profile::ALL.iter().copied().enumerate() {
             assert_eq!(KDF_GOLDEN[i].0, p);
         }
         for m in [M3S, M3D, M4S, M4D] {
-            for (p, off, on) in KDF_GOLDEN {
+            for &(p, off, on) in KDF_GOLDEN {
                 for (unclassified, want) in [(false, off), (true, on)] {
                     let o = Options {
                         cnsa1_unclassified_nss: unclassified,
@@ -443,7 +445,7 @@ mod tests {
     #[test]
     fn every_profile_and_option_has_exactly_one_golden_row() {
         assert_eq!(GOLDEN.len(), 14);
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             for pq in [false, true] {
                 let n = GOLDEN
                     .iter()
@@ -458,7 +460,7 @@ mod tests {
     fn select_agrees_with_the_golden_rows_on_every_module() {
         for m in [M3S, M3D, M4S, M4D] {
             let mut successes = 0;
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 for pq in [false, true] {
                     let o = Options {
                         peer_certificates_match_profile: false,

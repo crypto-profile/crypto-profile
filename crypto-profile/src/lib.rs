@@ -106,5 +106,20 @@ mod options_are_built_from_their_default {}
 /// ```
 #[allow(dead_code)]
 mod matches_outside_the_crate_need_a_wildcard {}
+/// Every `ALL` is a `&'static [T]` (decision 0012), so a new variant changes its length, not its
+/// type:
+///
+/// ```
+/// use crypto_profile::{HashAlgorithm, Profile};
+/// let all: &'static [Profile] = Profile::ALL;
+/// assert!(all.contains(&Profile::Cnsa2));
+/// let mut lens = Vec::new();
+/// for &h in HashAlgorithm::ALL {
+///     lens.push(h.output_len());
+/// }
+/// assert_eq!(lens, [32, 48, 64]);
+/// ```
+#[allow(dead_code)]
+mod every_all_is_a_slice {}
 include!(concat!(env!("OUT_DIR"), "/provider.rs"));
 include!(concat!(env!("OUT_DIR"), "/backend_body.rs"));

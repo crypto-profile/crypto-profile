@@ -752,7 +752,8 @@ mod tests {
             cipher_suites: vec![suite],
             kx_groups: vec![K::Secp384r1MlKem1024, K::Secp384r1],
             signature_schemes: T::ALL
-                .into_iter()
+                .iter()
+                .copied()
                 .filter(|s| {
                     crate::capability(crate::MODULE, crate::Algorithm::Scheme(*s)).available
                 })

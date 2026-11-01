@@ -49,7 +49,7 @@ pub enum GoverningText {
 
 impl Profile {
     /// Every profile.
-    pub const ALL: [Profile; 7] = [
+    pub const ALL: &'static [Profile] = &[
         Profile::Unrestricted,
         Profile::Preferred,
         Profile::Cnsa2,
@@ -150,7 +150,8 @@ impl FromStr for Profile {
     type Err = ParseProfileError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Profile::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|p| p.as_str() == s)
             .ok_or_else(|| ParseProfileError(s.to_string()))
     }
@@ -840,7 +841,7 @@ mod tests {
             Profile::Unrestricted.spec().signature_schemes.len(),
             TlsSignatureScheme::ALL.len()
         );
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let s = p.spec().signature_schemes;
             assert!(
                 s.windows(2).all(|w| w[0].preference() < w[1].preference()),
@@ -876,7 +877,7 @@ mod tests {
 
     #[test]
     fn every_spec_is_well_formed() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let s = p.spec();
             no_duplicates(s.versions);
             no_duplicates(s.cipher_suites);
@@ -1064,7 +1065,7 @@ mod tests {
 
     #[test]
     fn select_without_options_is_the_spec_on_a_module_that_has_everything() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let s = select(p, Options::default(), M4S).unwrap();
             let spec = p.spec();
             assert!(s.excluded.is_empty());
@@ -1078,7 +1079,7 @@ mod tests {
 
     #[test]
     fn the_option_keeps_post_quantum_groups_tls13_and_no_pkcs1_schemes() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let refused = match p {
                 Profile::Unrestricted | Profile::Preferred | Profile::Cnsa2 | Profile::Fips1403 => {
                     false
@@ -1161,7 +1162,11 @@ mod tests {
     #[test]
     fn profile_names_are_stable_and_exact() {
         assert_eq!(
-            Profile::ALL.map(Profile::as_str),
+            Profile::ALL
+                .iter()
+                .copied()
+                .map(Profile::as_str)
+                .collect::<Vec<_>>(),
             [
                 "unrestricted",
                 "preferred",
@@ -1172,7 +1177,7 @@ mod tests {
                 "fips1402"
             ]
         );
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             assert_eq!(p.as_str().parse::<Profile>(), Ok(p));
             assert_eq!(p.to_string(), p.as_str());
         }
@@ -1207,7 +1212,11 @@ mod tests {
     #[test]
     fn profile_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
-            Profile::ALL.map(Profile::ordinal),
+            Profile::ALL
+                .iter()
+                .copied()
+                .map(Profile::ordinal)
+                .collect::<Vec<_>>(),
             std::array::from_fn::<usize, 7, _>(|i| i)
         );
     }
@@ -1309,7 +1318,7 @@ mod tests {
                 cnsa1_unclassified_nss: false,
             };
             assert_eq!(options.to_string(), display);
-            for profile in Profile::ALL {
+            for &profile in Profile::ALL {
                 for module in [M3S, M4S] {
                     let baseline = Options {
                         peer_certificates_match_profile: false,
@@ -1357,7 +1366,7 @@ mod tests {
             .to_string(),
             "post-quantum key exchange required, peer certificates match profile, cnsa1 UNCLASSIFIED NSS"
         );
-        for profile in Profile::ALL {
+        for &profile in Profile::ALL {
             for module in [M3S, M4S] {
                 for pq in [false, true] {
                     let off = Options {
@@ -1431,7 +1440,7 @@ mod tests {
             cnsa1_unclassified_nss: true,
             ..Options::default()
         };
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let mut want = select_admitted(p, Options::default(), M4S).macs;
             if p == Profile::Cnsa1 {
                 want.push(MacAlgorithm::HmacSha256);
@@ -1446,7 +1455,7 @@ mod tests {
             cnsa1_unclassified_nss: true,
             ..Options::default()
         };
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let mut want = select_admitted(p, Options::default(), M4S).kdfs;
             if p == Profile::Cnsa1 {
                 want.push(KdfAlgorithm::HkdfSha256);
@@ -1457,7 +1466,7 @@ mod tests {
 
     #[test]
     fn an_empty_kdf_info_is_admitted_under_unrestricted_only() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let may = match p {
                 Profile::Unrestricted => true,
                 Profile::Preferred
@@ -1473,7 +1482,7 @@ mod tests {
 
     #[test]
     fn mac_keys_are_bounded_by_the_module_and_by_bsi() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let floor = match p {
                 Profile::Bsi => 128,
                 Profile::Unrestricted
