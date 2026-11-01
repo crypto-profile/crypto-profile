@@ -109,8 +109,9 @@ pub(crate) fn rcgen_alg(a: S) -> Result<&'static rcgen::SignatureAlgorithm, Cryp
 /// A pure check that a parsed SubjectPublicKeyInfo is exactly this algorithm's key shape.
 /// For RSA it checks the encoded length of the `RSAPublicKey`, not the exact modulus bit
 /// length; the length assumes the public exponent 65537. [`KeyPair::from_pkcs8_der`] and
-/// [`verify`] check the exact bit length and the exponent. False for an algorithm this backend
-/// does not implement.
+/// [`verify`] check the exact bit length and the exponent. Strictly a shape check: it does not
+/// consult availability, so an algorithm this backend does not implement can still match (check
+/// `capability(..).available` separately); false only for a variant the backend cannot classify.
 pub fn matches_spki(
     a: S,
     alg_oid: &str,
