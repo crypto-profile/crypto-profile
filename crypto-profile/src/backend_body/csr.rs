@@ -141,7 +141,7 @@ mod tests {
             let info = &csr.certification_request_info;
             assert_eq!(
                 info.subject_pki.subject_public_key.data.as_ref(),
-                key.public_key().as_slice(),
+                key.public_key(),
                 "{a}"
             );
             assert_eq!(
@@ -173,7 +173,7 @@ mod tests {
             assert!(
                 oracle
                     .verify_signature(
-                        &key.public_key(),
+                        key.public_key(),
                         info.raw,
                         csr.signature_value.data.as_ref()
                     )

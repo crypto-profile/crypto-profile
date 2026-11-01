@@ -73,7 +73,7 @@ impl Resolved {
         key: &KeyPair,
     ) -> Result<CertifiedKey, CryptoError> {
         self.admit_key(key.algorithm())?;
-        let der = PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
+        let der = PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into());
         let certified = CertifiedKey::new(chain, load_private_key(&self.tls, der)?);
         certified
             .keys_match()

@@ -141,7 +141,7 @@ pub fn handshake_with_ca(
     key: SignatureAlgorithm,
 ) -> Result<Negotiated, String> {
     run(client, ca, key, |chain, leaf_key| {
-        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into());
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.to_pkcs8_der().to_vec().into());
         server_builder(server)
             .map_err(|x| x.to_string())?
             .with_no_client_auth()
@@ -434,7 +434,7 @@ fn peer_pki(
         opposite: None,
         roots,
         chain,
-        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into()),
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.to_pkcs8_der().to_vec().into()),
         crls,
     })
 }
@@ -534,7 +534,7 @@ impl rcgen::PublicKeyData for PeerSha256<'_> {
 }
 impl rcgen::SigningKey for PeerSha256<'_> {
     fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
-        let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.pkcs8_der())
+        let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.to_pkcs8_der())
             .map_err(|_| rcgen::Error::CouldNotParseKeyPair)?;
         let mut signature = vec![0; key.public_modulus_len()];
         key.sign(
@@ -723,7 +723,7 @@ fn peer_selected_path(bad_first: bool) -> Result<PeerCertificatePki, String> {
         opposite: None,
         roots,
         chain,
-        key: rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into()),
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into()),
         crls,
     })
 }
@@ -794,7 +794,7 @@ pub fn identity_pki(
     Ok(IdentityPki {
         roots,
         chain: vec![leaf_cert.der().clone(), ca_cert.der().clone()],
-        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into()),
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.to_pkcs8_der().to_vec().into()),
         crls: vec![crl.der().clone()],
     })
 }

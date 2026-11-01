@@ -1288,7 +1288,7 @@ macro_rules! conformance_tests {
         fn sign_and_verify(s: SignatureAlgorithm) -> Result<(), CryptoError> {
             let k = signature::KeyPair::generate(s)?;
             let sig = k.sign(b"m")?;
-            signature::verify(s, &k.public_key(), b"m", &sig)
+            signature::verify(s, k.public_key(), b"m", &sig)
         }
 
         #[test]

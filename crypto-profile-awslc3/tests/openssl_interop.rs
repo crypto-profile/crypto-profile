@@ -80,7 +80,7 @@ fn files(p: &Pki, tag: &str) -> Result<(Scratch, PathBuf, PathBuf, PathBuf), Str
         Ok(path)
     };
     let leaf = write("leaf.pem", "CERTIFICATE", &p.chain[0])?;
-    let key = write("key.pem", "PRIVATE KEY", p.key.pkcs8_der())?;
+    let key = write("key.pem", "PRIVATE KEY", p.key.to_pkcs8_der())?;
     let ca = write("ca.pem", "CERTIFICATE", &p.ca)?;
     Ok((dir, leaf, key, ca))
 }
@@ -195,7 +195,7 @@ fn openssl_s_client_negotiates_secp384r1mlkem1024_with_our_server() -> Result<()
     let (_dir, _, _, ca) = files(&p, "client")?;
     let listener = TcpListener::bind("127.0.0.1:0").map_err(e)?;
     let port = listener.local_addr().map_err(e)?.port();
-    let der = rustls::pki_types::PrivateKeyDer::Pkcs8(p.key.pkcs8_der().to_vec().into());
+    let der = rustls::pki_types::PrivateKeyDer::Pkcs8(p.key.to_pkcs8_der().to_vec().into());
     let cfg = server_builder(&policy())
         .map_err(e)?
         .with_no_client_auth()
@@ -459,7 +459,9 @@ fn peer_certificate_cnsa1_p256_client_tls12_sha384() -> Result<(), String> {
         let server_cfg = builder
             .with_single_cert(
                 server_pki.chain.clone(),
-                rustls::pki_types::PrivateKeyDer::Pkcs8(server_pki.key.pkcs8_der().to_vec().into()),
+                rustls::pki_types::PrivateKeyDer::Pkcs8(
+                    server_pki.key.to_pkcs8_der().to_vec().into(),
+                ),
             )
             .map_err(e)?;
         let listener = TcpListener::bind("127.0.0.1:0").map_err(e)?;

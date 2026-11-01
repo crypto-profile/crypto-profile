@@ -83,7 +83,7 @@ fn version(v: V) -> &'static rustls::SupportedProtocolVersion {
 }
 
 fn key_der(p: &Pki) -> PrivateKeyDer<'static> {
-    PrivateKeyDer::Pkcs8(p.key.pkcs8_der().to_vec().into())
+    PrivateKeyDer::Pkcs8(p.key.to_pkcs8_der().to_vec().into())
 }
 
 #[expect(clippy::disallowed_methods)]
@@ -559,7 +559,7 @@ fn every_verifier_accepts_and_refuses_as_the_reference() {
     let rsa_key = signature::RsaKeyPair::from_pkcs8(
         crypto_profile_awslc4::signature::KeyPair::generate(S::Rsa2048Sha384)
             .unwrap()
-            .pkcs8_der(),
+            .to_pkcs8_der(),
     )
     .unwrap();
     let ed = signature::Ed25519KeyPair::generate().unwrap();

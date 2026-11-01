@@ -116,7 +116,7 @@ mod shared_body_tests {
             crate::backend_body::signature::KeyPair::generate(crate::SignatureAlgorithm::MlDsa87)
                 .unwrap();
         assert_eq!(
-            crate::backend_arms::MlDsa::public_key(key.pkcs8_der()).unwrap(),
+            crate::backend_arms::MlDsa::public_key(key.to_pkcs8_der()).unwrap(),
             key.public_key()
         );
         assert_eq!(

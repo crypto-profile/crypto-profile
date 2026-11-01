@@ -762,7 +762,7 @@ mod tests {
 
     fn configs(p: &Policy) -> (rustls::ClientConfig, rustls::ServerConfig) {
         let pki = crate::test_support::pki(S::EcdsaP384Sha384, S::EcdsaP384Sha384).unwrap();
-        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(pki.key.pkcs8_der().to_vec().into());
+        let key = rustls::pki_types::PrivateKeyDer::Pkcs8(pki.key.to_pkcs8_der().to_vec().into());
         let mut server = server_builder(p)
             .unwrap()
             .with_no_client_auth()

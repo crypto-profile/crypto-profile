@@ -1530,7 +1530,7 @@ mod tests {
     }
     impl rcgen::SigningKey for Sha256<'_> {
         fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
-            let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.pkcs8_der()).unwrap();
+            let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.to_pkcs8_der()).unwrap();
             let mut sig = vec![0; key.public_modulus_len()];
             key.sign(
                 &aws_lc_rs::signature::RSA_PKCS1_SHA256,
@@ -2184,7 +2184,7 @@ mod tests {
         let client_config = client_builder
             .with_client_auth_cert(
                 client_pki.chain,
-                PrivateKeyDer::Pkcs8(client_pki.key.pkcs8_der().to_vec().into()),
+                PrivateKeyDer::Pkcs8(client_pki.key.to_pkcs8_der().to_vec().into()),
             )
             .unwrap();
         let server_builder = if server_checks_client {
@@ -2202,7 +2202,7 @@ mod tests {
         let server_config = server_builder
             .with_single_cert(
                 server_pki.chain,
-                PrivateKeyDer::Pkcs8(server_pki.key.pkcs8_der().to_vec().into()),
+                PrivateKeyDer::Pkcs8(server_pki.key.to_pkcs8_der().to_vec().into()),
             )
             .unwrap();
         let mut client = rustls::ClientConnection::new(
@@ -2615,7 +2615,7 @@ mod tests {
             .unwrap()
             .self_signed(&key)
             .unwrap();
-        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into());
         let fips = server_builder(&one13(K::Secp384r1))
             .unwrap()
             .with_no_client_auth()
@@ -2974,7 +2974,7 @@ mod tests {
 
     fn chosen(p: &Policy, a: S, offered: &[T]) -> Option<u16> {
         let key = crate::signature::KeyPair::generate(a).unwrap();
-        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into());
         let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t)).collect();
         load_private_key(p, der)
             .unwrap()
