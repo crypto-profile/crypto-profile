@@ -958,13 +958,16 @@ macro_rules! conformance_tests {
                 }
                 profiles += 1;
                 for t in cases {
-                    let info = d(&t["info"]);
-                    let got = hkdf::derive(
+                    let (salt, info) = (d(&t["salt"]), d(&t["info"]));
+                    let spec = kdf::Spec::Hkdf {
+                        algorithm: KdfAlgorithm::HkdfSha256,
+                        salt: Some(&salt),
+                        info: &info,
+                    };
+                    let got = kdf::derive(
                         &a,
-                        KdfAlgorithm::HkdfSha256,
                         &d(&t["ikm"]),
-                        Some(&d(&t["salt"])),
-                        &info,
+                        &spec,
                         t["len"].as_u64().unwrap() as usize,
                     )
                     .map(|k| k.as_bytes().to_vec());
@@ -1022,8 +1025,13 @@ macro_rules! conformance_tests {
                     exercised += 1;
                     let (mut derived, mut refused_info, mut too_long) = (0, 0, 0);
                     for c in &cases {
-                        let got = hkdf::derive(&a, k, &c.ikm, Some(&c.salt), &c.info, c.size)
-                            .map(|d| d.as_bytes().to_vec());
+                        let spec = kdf::Spec::Hkdf {
+                            algorithm: k,
+                            salt: Some(&c.salt),
+                            info: &c.info,
+                        };
+                        let got =
+                            kdf::derive(&a, &c.ikm, &spec, c.size).map(|d| d.as_bytes().to_vec());
                         match c.result.as_str() {
                             "valid" if c.info.is_empty() && p != Profile::Unrestricted => {
                                 refused_info += 1;
@@ -1077,8 +1085,12 @@ macro_rules! conformance_tests {
                     assert_eq!(a.kdfs(), admitted, "{p} {o}");
                     for k in KdfAlgorithm::ALL {
                         let len = |info: &[u8]| {
-                            hkdf::derive(&a, k, &[7; 32], None, info, 32)
-                                .map(|d| d.as_bytes().len())
+                            let spec = kdf::Spec::Hkdf {
+                                algorithm: k,
+                                salt: None,
+                                info,
+                            };
+                            kdf::derive(&a, &[7; 32], &spec, 32).map(|d| d.as_bytes().len())
                         };
                         let one_step = matches!(
                             k,
@@ -1168,22 +1180,20 @@ macro_rules! conformance_tests {
                     }
                     Algorithm::Kdf(k) => {
                         let unrestricted = admit(Profile::Unrestricted, Options::default());
+                        let spec = kdf::Spec::Hkdf {
+                            algorithm: k,
+                            salt: None,
+                            info: b"capability",
+                        };
                         if cap.available {
-                            let key = hkdf::derive(
-                                &unrestricted,
-                                k,
-                                &[7; 32],
-                                None,
-                                b"capability",
-                                k.max_output_len(),
-                            )
-                            .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                            let key =
+                                kdf::derive(&unrestricted, &[7; 32], &spec, k.max_output_len())
+                                    .unwrap_or_else(|e| panic!("{k:?}: {e}"));
                             assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
                         } else {
                             assert!(!unrestricted.kdfs().contains(&k), "{k:?}");
                             assert_eq!(
-                                hkdf::derive(&unrestricted, k, &[7; 32], None, b"capability", 32)
-                                    .err(),
+                                kdf::derive(&unrestricted, &[7; 32], &spec, 32).err(),
                                 Some(CryptoError::KdfSpecMismatch { algorithm: k }),
                                 "{k:?}"
                             );

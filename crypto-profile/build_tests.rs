@@ -175,12 +175,16 @@ fn body_index_accepts_the_hmac_module() {
 }
 
 #[test]
-fn body_index_accepts_the_hkdf_module() {
+fn body_index_accepts_the_kdf_module_and_no_longer_hkdf() {
     let fixture = Fixture::new();
-    fixture.write("hkdf.rs", "pub const VALUE: u8 = 1;\n");
-    fixture.write("mod.rs", "pub mod hkdf;\n");
+    fixture.write("kdf.rs", "pub const VALUE: u8 = 1;\n");
+    fixture.write("mod.rs", "pub mod kdf;\n");
     let (output, _) = modules(&fixture.0, true);
-    assert!(output.contains("pub mod hkdf {"), "{output}");
+    assert!(output.contains("pub mod kdf {"), "{output}");
+    let removed = Fixture::new();
+    removed.write("hkdf.rs", "pub const VALUE: u8 = 1;\n");
+    removed.write("mod.rs", "pub mod hkdf;\n");
+    assert!(std::panic::catch_unwind(|| modules(&removed.0, true)).is_err());
 }
 
 #[test]

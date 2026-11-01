@@ -208,7 +208,7 @@ pub struct ProfileSpec {
     pub key_algorithms: &'static [S],
     /// Message authentication codes, for `hmac`; admitted through `admit`, not `resolve`.
     pub macs: &'static [MacAlgorithm],
-    /// Key-derivation functions, for `hkdf`; admitted through `admit`, not `resolve`.
+    /// Key-derivation functions, for `kdf`; admitted through `admit`, not `resolve`.
     pub kdfs: &'static [KdfAlgorithm],
 }
 

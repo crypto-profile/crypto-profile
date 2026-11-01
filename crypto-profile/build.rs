@@ -202,7 +202,7 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
                     "tls",
                     "sealbox",
                     "hmac",
-                    "hkdf",
+                    "kdf",
                     "test_support",
                 ]
                 .contains(&name)
