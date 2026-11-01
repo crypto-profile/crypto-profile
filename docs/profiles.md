@@ -336,7 +336,7 @@ Without the option, `cnsa1` can accept a path that violates RFC 9151; such a con
 
 **Direct-rustls bypass:** Code driving rustls directly bypasses crate enforcement; `crypto_provider` alone does not enforce certificate rules. The crate makes consistent policy easy; adoption closes the gap.
 
-**Server resumption:** Never share server session storage or ticket keys between configurations enforcing a rule and configurations that do not, or between different rules. A resumed session skips certificate verification. Default stores are isolated.
+**Server resumption:** Never share server session storage or ticket keys between configurations enforcing a rule and configurations that do not, or between different rules. A resumed session skips certificate verification. Default stores are isolated. The same holds between configurations whose client verifiers carry different identity checks ([decision 0009](decisions/0009-peer-identity-check.md)).
 
 **Selected-path alternative rejection:** If WebPKI selects a non-compliant path, the connection is refused even if a compliant alternative exists. No alternative path search weakens this fail-closed decision. CRL signatures use the baseline list, not the profile rule. Dual-signature and composite certificates are unsupported (IR 8547 §3.2).
 

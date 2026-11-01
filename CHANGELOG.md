@@ -15,6 +15,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `hmac::Key` and `hmac::Tag`: `Key::new` refuses a MAC the profile does not admit and a key outside `mac_key_floor_bits(profile)` (112 bits, 128 under `bsi`) to `MAC_KEY_MAX_BITS` (524288); `Key::verify` is constant time and takes full-length tags only;
   - `CryptoError::NotInProfile`, for any algorithm outside TLS a profile does not admit, `CryptoError::MacKeyLength` and `CryptoError::MacVerify`;
   - Wycheproof HMAC-SHA256, HMAC-SHA384 and HMAC-SHA512 in the conformance suite.
+- `tls::PeerIdentity`, an application check on the peer's end-entity certificate, added with `with_peer_identity` on `ServerVerifierBuilder` (replacing the name check) and `ClientVerifierBuilder`; it runs after every crate check. On the client verifier it can only refuse; on the server verifier it is the only identity decision, so its `Ok` admits the peer whatever server name the client connected with. `tls::PeerLeaf::uri_names` refuses a leaf whose subjectAltName rustls-webpki cannot read in full, or whose URI entries the two parsers count differently. See [decision 0009](docs/decisions/0009-peer-identity-check.md).
 
 ### Changed
 

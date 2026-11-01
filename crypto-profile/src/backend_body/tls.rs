@@ -415,6 +415,7 @@ struct VerifierConfig {
     expiration: webpki::ExpirationPolicy,
     algorithms: WebPkiSupportedAlgorithms,
     identity: PeerVerifierIdentity,
+    peer_identity: Option<Arc<dyn PeerIdentity>>,
 }
 
 impl VerifierConfig {
@@ -428,6 +429,7 @@ impl VerifierConfig {
             expiration: webpki::ExpirationPolicy::Ignore,
             algorithms: provider.signature_verification_algorithms,
             identity: identity(p)?,
+            peer_identity: None,
         })
     }
 
@@ -492,6 +494,47 @@ fn certificate_error(error: impl std::error::Error + Send + Sync + 'static) -> r
     )))
 }
 
+/// The end-entity certificate after crypto-profile's own checks have passed.
+pub struct PeerLeaf<'a> {
+    der: &'a CertificateDer<'a>,
+    cert: &'a webpki::EndEntityCert<'a>,
+}
+
+impl<'a> PeerLeaf<'a> {
+    /// The certificate as received.
+    pub fn der(&self) -> &CertificateDer<'a> {
+        self.der
+    }
+
+    /// The subjectAltName URIs, in certificate order, as rustls-webpki parses them.
+    ///
+    /// Refuses with `CertificateError::BadEncoding` when the subjectAltName carries an entry
+    /// rustls-webpki cannot decode (rustls-webpki stops reading there), when the crate's count of
+    /// URI entries differs from rustls-webpki's list (rustls-webpki drops a URI that is not
+    /// UTF-8), or when the extension cannot be read.
+    pub fn uri_names(&self) -> Result<Vec<&'a str>, rustls::Error> {
+        let names: Vec<&'a str> = self.cert.valid_uri_names().collect();
+        match super::peer_certificates::uri_name_count(self.der) {
+            Ok(count) if count == names.len() => Ok(names),
+            _ => Err(rustls::CertificateError::BadEncoding.into()),
+        }
+    }
+}
+
+/// An application's check of the peer's identity, run after every crate check has passed.
+///
+/// On the client verifier it can only refuse. On the server verifier it replaces the name check,
+/// so it is the only identity decision: its `Ok` admits the peer whatever server name the client
+/// connected with. Its `Err` is returned unchanged. A panic inside it fails the handshake.
+///
+/// A resumed session does not call it again: rustls reuses the earlier decision. A check whose
+/// answer can change needs a new verifier and configuration when it changes, or resumption
+/// disabled.
+pub trait PeerIdentity: std::fmt::Debug + Send + Sync {
+    /// Refuses `leaf` unless it carries the expected identity.
+    fn check(&self, leaf: &PeerLeaf<'_>) -> Result<(), rustls::Error>;
+}
+
 impl ProfileVerifier {
     fn verify(
         &self,
@@ -523,7 +566,7 @@ impl ProfileVerifier {
                 None,
             )
             .map_err(pki_error)?;
-        if let Some(name) = name {
+        if let Some(name) = name.filter(|_| self.config.peer_identity.is_none()) {
             cert.verify_is_valid_for_subject_name(name)
                 .map_err(pki_error)?;
         }
@@ -535,6 +578,12 @@ impl ProfileVerifier {
                     .map_err(certificate_error)?;
             }
             PeerVerifierIdentity::Owned { rule: None, .. } | PeerVerifierIdentity::Opaque => {}
+        }
+        if let Some(identity) = &self.config.peer_identity {
+            identity.check(&PeerLeaf {
+                der: leaf,
+                cert: &cert,
+            })?;
         }
         Ok(())
     }
@@ -750,6 +799,18 @@ impl ServerVerifierBuilder {
         self.config.expiration = webpki::ExpirationPolicy::Enforce;
         self
     }
+    /// Replaces the server-name check with `identity`.
+    ///
+    /// `identity` runs after the path, EKU, revocation and the policy's peer-certificate rule
+    /// pass; the name the client connects with is then not checked. A second call replaces the
+    /// first.
+    ///
+    /// The check does not see the server name the client connected with, so a verifier handle,
+    /// and the client configuration built on it, expect one identity; use one per expected peer.
+    pub fn with_peer_identity(mut self, identity: Arc<dyn PeerIdentity>) -> Self {
+        self.config.peer_identity = Some(identity);
+        self
+    }
     /// Builds an owned verifier, refusing empty roots or invalid CRLs.
     pub fn build(self) -> Result<Arc<ServerVerifierHandle>, rustls::server::VerifierBuilderError> {
         Ok(Arc::new(ServerVerifierHandle {
@@ -806,6 +867,16 @@ impl ClientVerifierBuilder {
     /// Offers client authentication but permits clients without a certificate.
     pub fn allow_unauthenticated(mut self) -> Self {
         self.mandatory = false;
+        self
+    }
+    /// Adds `identity`, run after the path, EKU, revocation and the policy's peer-certificate
+    /// rule pass. A second call replaces the first.
+    ///
+    /// rustls verifies only a certificate the client presents: with
+    /// [`allow_unauthenticated`](Self::allow_unauthenticated), a client that presents none is
+    /// admitted without reaching `identity`.
+    pub fn with_peer_identity(mut self, identity: Arc<dyn PeerIdentity>) -> Self {
+        self.config.peer_identity = Some(identity);
         self
     }
     /// Builds an owned verifier, refusing empty roots or invalid CRLs.
@@ -1084,6 +1155,96 @@ mod tests {
     };
     use rustls::client::danger::ServerCertVerifier;
     use std::sync::Arc;
+
+    fn self_signed(
+        sans: Vec<rcgen::SanType>,
+        extensions: Vec<rcgen::CustomExtension>,
+    ) -> CertificateDer<'static> {
+        let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
+        params.subject_alt_names = sans;
+        params.custom_extensions = extensions;
+        params.self_signed(&key).unwrap().der().clone()
+    }
+
+    fn uri(s: &str) -> rcgen::SanType {
+        rcgen::SanType::URI(s.try_into().unwrap())
+    }
+
+    fn uri_names_of(der: &CertificateDer<'_>) -> Result<Vec<String>, rustls::Error> {
+        let cert = webpki::EndEntityCert::try_from(der).unwrap();
+        let leaf = PeerLeaf { der, cert: &cert };
+        assert_eq!(leaf.der(), der);
+        leaf.uri_names()
+            .map(|names| names.into_iter().map(str::to_owned).collect())
+    }
+
+    #[test]
+    fn uri_names_lists_the_uris_in_order_and_ignores_other_names() {
+        assert_eq!(
+            uri_names_of(&self_signed(vec![], vec![])).unwrap(),
+            Vec::<String>::new()
+        );
+        let der = self_signed(
+            vec![
+                uri("spiffe://example.org/a"),
+                rcgen::SanType::DnsName("a.example".try_into().unwrap()),
+                uri("spiffe://example.org/b"),
+            ],
+            vec![],
+        );
+        assert_eq!(
+            uri_names_of(&der).unwrap(),
+            ["spiffe://example.org/a", "spiffe://example.org/b"]
+        );
+    }
+
+    #[test]
+    fn uri_names_refuses_a_uri_entry_webpki_would_skip() {
+        let mut names = vec![0x86, 22];
+        names.extend_from_slice(b"spiffe://example.org/a");
+        names.extend_from_slice(&[0x86, 1, 0xff]);
+        let mut general_names = vec![0x30, u8::try_from(names.len()).unwrap()];
+        general_names.extend(names);
+        let der = self_signed(
+            vec![],
+            vec![rcgen::CustomExtension::from_oid_content(
+                &[2, 5, 29, 17],
+                general_names,
+            )],
+        );
+        assert_eq!(
+            uri_names_of(&der),
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::BadEncoding
+            ))
+        );
+    }
+
+    #[test]
+    fn uri_names_refuses_an_entry_that_stops_webpki() {
+        let mut second = vec![0x16, 22];
+        second.extend_from_slice(b"spiffe://example.org/b");
+        let mut names = vec![0x86, 22];
+        names.extend_from_slice(b"spiffe://example.org/a");
+        names.extend_from_slice(&[0xa6, u8::try_from(second.len()).unwrap()]);
+        names.extend(second);
+        let mut general_names = vec![0x30, u8::try_from(names.len()).unwrap()];
+        general_names.extend(names);
+        let der = self_signed(
+            vec![],
+            vec![rcgen::CustomExtension::from_oid_content(
+                &[2, 5, 29, 17],
+                general_names,
+            )],
+        );
+        assert_eq!(
+            uri_names_of(&der),
+            Err(rustls::Error::InvalidCertificate(
+                rustls::CertificateError::BadEncoding
+            ))
+        );
+    }
 
     fn available_schemes() -> Vec<T> {
         T::ALL
