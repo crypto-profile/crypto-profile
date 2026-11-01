@@ -20,7 +20,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - capability cells: `Approved` on the 3.x line (Table 5 of each certificate's security policy), `AlgorithmTested` on A7855 on the 4.x dynamic build, `Unverified` on the 4.x static build;
   - `Admitted::kdfs()` and `Admitted::admit_kdf`; `assert_admitted_approved` walks the KDF cells when `Family::Kdf` is named, and first refuses a profile that admits KDFs and an empty `info` (`unrestricted`) with `CryptoError::KdfInfoMayBeEmpty`; in the core crate, `AdmittedSelection::kdfs` and `kdf_info_may_be_empty`;
   - `kdf::derive` with `kdf::Spec::Hkdf`, and `kdf::DerivedKey`: RFC 5869 extract-then-expand in one call, with no public extract; an absent or empty salt is HashLen zeros; an empty `info` is refused under every profile but `unrestricted`; output 1 to 255 × HashLen bytes; an empty secret is refused; the derived key is zeroized on drop;
-  - `CryptoError::KdfOutputLength`, `CryptoError::KdfSecretEmpty`, `CryptoError::KdfInfoEmpty` and `CryptoError::KdfInfoMayBeEmpty`;
+  - `CryptoError::KdfOutputLength`, `CryptoError::KdfSecretEmpty`, `CryptoError::KdfInfoEmpty` and `CryptoError::KdfInfoMayBeEmpty`, whose `Display` names the KDF generically ("a KDF output of …", "the KDF secret is empty", "an empty KDF info");
   - RFC 5869 Appendix A cases 1-3 and Wycheproof HKDF-SHA256, HKDF-SHA384 and HKDF-SHA512 in the conformance suite.
 - The 0.10.0 API shape (#33, decision 0012):
   - `KeyAgreementAlgorithm` (ECDH on P-256, P-384 and P-521, and X25519), with `ALL`, `as_str`, `Display` and `FromStr`, and `Algorithm::KeyAgreement`; `KdfAlgorithm::OneStepSha256`, `OneStepSha384` and `OneStepSha512` (SP 800-56C Rev. 2 §4.1), whose `max_output_len()` is 2^30 bytes. Types only: no backend implements them yet, so every module's cell is unavailable and `Unverified`, and no profile admits them;
@@ -31,13 +31,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ### Changed
 
-- **Breaking:** `#[non_exhaustive]` on `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `MacAlgorithm`, `KdfAlgorithm`, `KeyAgreementAlgorithm`, `TlsVersion`, `Algorithm`, `Profile`, `GoverningText`, `ParseAlgorithmError`, `ParseProfileError`, `Options`, `ProfileSpec`, `Selection`, `AdmittedSelection`, `tls::Policy` and `Resolved` (decision 0012). A `match` outside the crate needs a `_` arm; `Options` and `tls::Policy` are built with `::default()` and field assignment, and `Resolved` only by `resolve`. From here on a new variant or field is not a breaking change.
+- **Breaking:** `#[non_exhaustive]` on `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `MacAlgorithm`, `KdfAlgorithm`, `KeyAgreementAlgorithm`, `TlsVersion`, `Algorithm`, `Profile`, `GoverningText`, `ParseAlgorithmError`, `ParseProfileError`, `Options`, `ProfileSpec`, `Selection`, `tls::Policy` and `Resolved` (decision 0012). A `match` outside the crate needs a `_` arm; `Options` and `tls::Policy` are built with `::default()` and field assignment, and `Resolved` only by `resolve`. From here on a new variant or field is not a breaking change.
 - **Breaking:** `signature::KeyPair::from_pkcs8` is now `from_pkcs8_der`, `pkcs8_der()` is now `to_pkcs8_der()`, and `public_key()` returns `&[u8]` instead of `Vec<u8>`.
 - **Breaking:** `digest::digest` and `digest::Hasher::new` return `Result`, refusing a hash the backend does not implement with `CryptoError::Unavailable`.
 - **Breaking:** `Algorithm` has new variants, `Algorithm::Mac`, `Algorithm::Kdf` and `Algorithm::KeyAgreement`; `ProfileSpec` new fields, `macs` and `kdfs`; and `Options` a new field, `cnsa1_unclassified_nss`, which admits HMAC-SHA256 and HKDF-SHA256 under `cnsa1` under CNSSP 15 (2016) Annex B ¶2b, for UNCLASSIFIED NSS data and community-of-interest separation only.
 - **Breaking:** `sealbox::seal` and `sealbox::open` refuse an empty `domain` with the new `CryptoError::SealDomainEmpty`, before any key operation. The domain is the HKDF salt, and the module does not mark an HKDF call with an empty salt approved; a blob sealed under an empty domain by an earlier release no longer opens.
 - `ParseAlgorithmError`'s `Display` reads "unknown algorithm name …"; it no longer says "signature", because `KeyAgreementAlgorithm` parses with it too.
-- The KDF errors' `Display` names the KDF generically ("a KDF output of …", "the KDF secret is empty", "an empty KDF info").
 - `AdmittedSelection` has a new field, `kdfs` (the type is unreleased).
 - `Options`' `Display` names each option set, joined with ", "; the existing strings are unchanged.
 

@@ -288,9 +288,10 @@ let key_bytes: &[u8] = key.as_bytes();
   options.pq_key_exchange_required = true;
   ```
 
-  `tls::Policy` likewise: `Policy::default()`, then set its fields. `Resolved` comes only from `resolve`; its fields can be reassigned. `ProfileSpec`, `Selection` and `AdmittedSelection` can be read but not built.
+  `tls::Policy` likewise: `Policy::default()`, then set its fields. `Resolved` comes only from `resolve`; its fields can be reassigned. `ProfileSpec` and `Selection` can be read but not built.
 - **Signature keys.** `KeyPair::from_pkcs8(a, der)` is `KeyPair::from_pkcs8_der(a, der)`, `key.pkcs8_der()` is `key.to_pkcs8_der()`, and `key.public_key()` returns `&[u8]`: call `.to_vec()` where you kept the `Vec`.
 - **Hashing.** `digest::digest(h, data)` and `digest::Hasher::new(h)` return a `Result`; a hash the backend does not implement is refused with `CryptoError::Unavailable`.
+- **Parse errors.** `ParseAlgorithmError` and `ParseProfileError` are `#[non_exhaustive]` tuple structs: read the message with `.0`, and do not construct or destructure one.
 - **New variants and fields.** `Algorithm` has `Mac`, `Kdf` and `KeyAgreement`; `ProfileSpec` has `macs` and `kdfs`; `Options` has `cnsa1_unclassified_nss`; `CryptoError` and `Family` have new variants.
 - **`ParseAlgorithmError`** displays as "unknown algorithm name …", since `KeyAgreementAlgorithm` parses with it too.
 - **Sealed boxes.** `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`; a blob sealed under an empty domain by 0.9.0 no longer opens.
