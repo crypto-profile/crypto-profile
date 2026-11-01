@@ -15,11 +15,10 @@ const fn alg(k: KdfAlgorithm) -> aws_lc_rs::hkdf::Algorithm {
 const ZERO_SALT: [u8; 64] = [0; 64];
 
 const _: () = {
-    let mut i = 0;
-    while i < KdfAlgorithm::ALL.len() {
-        assert!(KdfAlgorithm::ALL[i].hash().output_len() <= ZERO_SALT.len());
-        i += 1;
-    }
+    let [a, b, c] = KdfAlgorithm::ALL;
+    assert!(a.hash().output_len() <= ZERO_SALT.len());
+    assert!(b.hash().output_len() <= ZERO_SALT.len());
+    assert!(c.hash().output_len() <= ZERO_SALT.len());
 };
 
 struct Len(usize);
