@@ -336,13 +336,13 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
         },
         Algorithm::Kdf(k) => match k {
             KdfAlgorithm::HkdfSha256 => tested(
-                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048)",
+                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
             ),
             KdfAlgorithm::HkdfSha384 => tested(
-                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048)",
+                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
             ),
             KdfAlgorithm::HkdfSha512 => tested(
-                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048)",
+                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
             ),
         },
     }
@@ -579,19 +579,19 @@ mod tests {
             (
                 A::Kdf(KdfAlgorithm::HkdfSha256),
                 Some(
-                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048)",
+                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
                 ),
             ),
             (
                 A::Kdf(KdfAlgorithm::HkdfSha384),
                 Some(
-                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048)",
+                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
                 ),
             ),
             (
                 A::Kdf(KdfAlgorithm::HkdfSha512),
                 Some(
-                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048)",
+                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
                 ),
             ),
         ];
