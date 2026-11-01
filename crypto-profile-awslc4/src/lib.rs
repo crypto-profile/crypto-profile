@@ -16,16 +16,32 @@ pub use rustls;
 /// assert!(!a.kdfs().contains(&KdfAlgorithm::HkdfSha256));
 /// ```
 ///
-/// ```compile_fail,E0616
-/// use crypto_profile_awslc4::{MacAlgorithm, Options, Profile, admit};
+/// ```
+/// use crypto_profile_awslc4::{Options, Profile, admit};
 /// let mut a = admit(Profile::Cnsa2, Options::default());
-/// a.macs.push(MacAlgorithm::HmacSha256);
+/// let x = a.macs()[0];
+/// let _ = (&mut a, x);
 /// ```
 ///
 /// ```compile_fail,E0616
-/// use crypto_profile_awslc4::{KdfAlgorithm, Options, Profile, admit};
+/// use crypto_profile_awslc4::{Options, Profile, admit};
 /// let mut a = admit(Profile::Cnsa2, Options::default());
-/// a.kdfs.push(KdfAlgorithm::HkdfSha256);
+/// let x = a.macs()[0];
+/// a.macs.push(x);
+/// ```
+///
+/// ```
+/// use crypto_profile_awslc4::{Options, Profile, admit};
+/// let mut a = admit(Profile::Cnsa2, Options::default());
+/// let x = a.kdfs()[0];
+/// let _ = (&mut a, x);
+/// ```
+///
+/// ```compile_fail,E0616
+/// use crypto_profile_awslc4::{Options, Profile, admit};
+/// let mut a = admit(Profile::Cnsa2, Options::default());
+/// let x = a.kdfs()[0];
+/// a.kdfs.push(x);
 /// ```
 #[allow(dead_code)]
 mod admitted_is_read_only {}
