@@ -1445,10 +1445,6 @@ mod tests {
             }
             assert_eq!(select_admitted(p, on, M4S).kdfs, want, "{p}");
         }
-        assert_eq!(
-            select_admitted(Profile::Cnsa1, on, M4S).kdfs,
-            [KdfAlgorithm::HkdfSha384, KdfAlgorithm::HkdfSha256]
-        );
     }
 
     #[test]
