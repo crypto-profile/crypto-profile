@@ -12,11 +12,14 @@ macro_rules! __conformance_peer_certificate_tests {
         use $b::tls::{self, Policy};
         use $b::test_support::{self, PeerCertificatePki, PeerCertificateFixture as F};
 
+        fn strict_options(strict: bool) -> Options {
+            let mut options = Options::default();
+            options.peer_certificates_match_profile = strict;
+            options
+        }
+
         fn certificate_policy(profile: P, strict: bool, version: V, scheme: T) -> Policy {
-            let mut policy = resolve(profile, Options {
-                peer_certificates_match_profile: strict,
-                ..Options::default()
-            }).unwrap().tls;
+            let mut policy = resolve(profile, strict_options(strict)).unwrap().tls;
             policy.versions = vec![version];
             policy.cipher_suites.retain(|suite| suite.version() == version);
             policy.kx_groups = vec![K::Secp384r1];
@@ -216,8 +219,7 @@ macro_rules! __conformance_peer_certificate_tests {
         fn peer_certificate_cnsa2_classical_ca_and_pure_chain() {
             if MODULE.line == ModuleLine::AwsLcFips3 {
                 for strict in [false, true] {
-                    let options = Options { peer_certificates_match_profile: strict,
-                        ..Options::default() };
+                    let options = strict_options(strict);
                     assert_eq!(resolve(P::Cnsa2, options).err(), Some(CryptoError::EmptyProfile {
                         profile: P::Cnsa2, options, category: Family::SignatureScheme }));
                 }
@@ -270,8 +272,7 @@ macro_rules! __conformance_peer_certificate_tests {
                 roots.add(ca.der().clone()).unwrap();
                 for profile in [P::Unrestricted,P::Preferred,P::Fips1403,P::Fips1402,P::Bsi,P::Cnsa1,P::Cnsa2] {
                     for strict in [false,true] {
-                        let policy = resolve(profile,Options { peer_certificates_match_profile: strict,
-                            ..Options::default() }).unwrap().tls;
+                        let policy = resolve(profile, strict_options(strict)).unwrap().tls;
                         let cv = tls::server_cert_verifier_builder(Arc::new(roots.clone()),&policy).unwrap().build().unwrap();
                         let sv = tls::client_cert_verifier_builder(Arc::new(roots.clone()),&policy).unwrap().build().unwrap();
                         let now = rustls::pki_types::UnixTime::now();
@@ -295,8 +296,7 @@ macro_rules! __conformance_peer_certificate_tests {
                 roots.add(ca.der().clone()).unwrap();
                 for profile in [P::Unrestricted,P::Preferred,P::Fips1403,P::Fips1402,P::Bsi,P::Cnsa1] {
                     for strict in [false,true] {
-                        let policy = resolve(profile,Options { peer_certificates_match_profile: strict,
-                            ..Options::default() }).unwrap().tls;
+                        let policy = resolve(profile, strict_options(strict)).unwrap().tls;
                         let cv = tls::server_cert_verifier_builder(Arc::new(roots.clone()),&policy).unwrap().build().unwrap();
                         let sv = tls::client_cert_verifier_builder(Arc::new(roots.clone()),&policy).unwrap().build().unwrap();
                         let now = rustls::pki_types::UnixTime::now();
@@ -375,8 +375,8 @@ macro_rules! __conformance_peer_certificate_tests {
             for profile in P::ALL {
                 for pq in [false,true] {
                     for strict in [false,true] {
-                        let options = Options { peer_certificates_match_profile:strict,
-                            pq_key_exchange_required:pq, cnsa1_unclassified_nss:false };
+                        let mut options = strict_options(strict);
+                        options.pq_key_exchange_required = pq;
                         let result = resolve(profile,options);
                         if pq && [P::Cnsa1,P::Bsi,P::Fips1402].contains(&profile) {
                             assert_eq!(result.err(),Some(CryptoError::EmptyProfile {
@@ -408,9 +408,12 @@ macro_rules! __conformance_peer_certificate_tests {
             let pki = issued(S::EcdsaP384Sha384,None,S::EcdsaP384Sha384);
             let roots = Arc::new(pki.roots);
             let strict = certificate_policy(P::Cnsa1,true,V::Tls13,T::EcdsaNistp384Sha384);
-            let broad = Policy { signature_schemes:vec![T::EcdsaNistp384Sha384,T::RsaPssSha256], ..strict.clone() };
-            let off = Policy { peer_certificate_rule:None, ..strict.clone() };
-            let other = Policy { peer_certificate_rule:Some(PeerCertificateRuleId::Preferred), ..strict.clone() };
+            let mut broad = strict.clone();
+            broad.signature_schemes = vec![T::EcdsaNistp384Sha384,T::RsaPssSha256];
+            let mut off = strict.clone();
+            off.peer_certificate_rule = None;
+            let mut other = strict.clone();
+            other.peer_certificate_rule = Some(PeerCertificateRuleId::Preferred);
             for (completion,built) in [(&strict,&off),(&strict,&other),(&strict,&broad),
                 (&broad,&strict),(&off,&strict),(&off,&off)] {
                 let expected = Some(CryptoError::Tls(TlsError::IncompatiblePeerVerifier {

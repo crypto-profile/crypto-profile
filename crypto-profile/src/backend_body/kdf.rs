@@ -151,11 +151,11 @@ mod tests {
     use KdfAlgorithm as K;
     use crypto_profile::conformance::__hex;
 
-    const ON: Options = Options {
-        peer_certificates_match_profile: false,
-        pq_key_exchange_required: false,
-        cnsa1_unclassified_nss: true,
-    };
+    fn on() -> Options {
+        let mut o = Options::default();
+        o.cnsa1_unclassified_nss = true;
+        o
+    }
 
     fn hkdf<'a>(algorithm: KdfAlgorithm, salt: Option<&'a [u8]>, info: &'a [u8]) -> Spec<'a> {
         Spec::Hkdf {
@@ -346,7 +346,7 @@ mod tests {
     fn the_unclassified_nss_option_admits_hkdf_sha256_under_cnsa1_only() {
         assert!(
             derive(
-                &admit(Profile::Cnsa1, ON),
+                &admit(Profile::Cnsa1, on()),
                 &[7; 32],
                 &hkdf(K::HkdfSha256, None, b"x"),
                 32
@@ -362,7 +362,7 @@ mod tests {
         );
         assert_eq!(
             derive(
-                &admit(Profile::Cnsa2, ON),
+                &admit(Profile::Cnsa2, on()),
                 &[7; 32],
                 &hkdf(K::HkdfSha256, None, b"x"),
                 32

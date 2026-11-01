@@ -154,8 +154,10 @@ impl FromStr for Profile {
 }
 
 /// Options applied on top of any profile. The default changes nothing; `cnsa1_unclassified_nss`
-/// widens `cnsa1`'s MACs and KDFs, and the others narrow.
+/// widens `cnsa1`'s MACs and KDFs, and the others narrow. Outside this crate, build it from
+/// `Options::default()` and set the fields you need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Options {
     /// Keep only post-quantum key exchange (pure ML-KEM and hybrid groups), and so remove TLS 1.2,
     /// which has none. Signatures are not narrowed.
@@ -195,6 +197,7 @@ impl fmt::Display for Options {
 
 /// A profile's contents, each list in preference order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ProfileSpec {
     /// Protocol versions.
     pub versions: &'static [V],
@@ -605,6 +608,7 @@ pub const FIPS1402: ProfileSpec = ProfileSpec {
 /// A profile narrowed by its options, every entry implemented by the module's backend, in the
 /// profile's preference order.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Selection {
     /// Protocol versions.
     pub versions: Vec<V>,
@@ -705,6 +709,7 @@ fn select_spec(
 /// backend, in preference order. Never refused: an empty family means every constructor of that
 /// family refuses under the profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AdmittedSelection {
     /// Message authentication codes.
     pub macs: Vec<MacAlgorithm>,

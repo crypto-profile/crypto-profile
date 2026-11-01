@@ -59,13 +59,12 @@ fn openssl() -> Result<String, String> {
 }
 
 fn policy() -> Policy {
-    Policy {
-        peer_certificate_rule: None,
-        versions: vec![TlsVersion::Tls13],
-        cipher_suites: vec![CipherSuite::Tls13Aes256GcmSha384],
-        kx_groups: vec![KxGroup::Secp384r1MlKem1024],
-        signature_schemes: vec![TlsSignatureScheme::EcdsaNistp384Sha384],
-    }
+    let mut p = Policy::default();
+    p.versions = vec![TlsVersion::Tls13];
+    p.cipher_suites = vec![CipherSuite::Tls13Aes256GcmSha384];
+    p.kx_groups = vec![KxGroup::Secp384r1MlKem1024];
+    p.signature_schemes = vec![TlsSignatureScheme::EcdsaNistp384Sha384];
+    p
 }
 
 fn files(p: &Pki, tag: &str) -> Result<(Scratch, PathBuf, PathBuf, PathBuf), String> {
@@ -275,15 +274,9 @@ fn peer_certificate_cnsa1_p256_tls12_sha384() -> Result<(), String> {
     )
     .map_err(e)?;
     for strict in [false, true] {
-        let mut policy = resolve(
-            Profile::Cnsa1,
-            Options {
-                peer_certificates_match_profile: strict,
-                ..Options::default()
-            },
-        )
-        .map_err(e)?
-        .tls;
+        let mut options = Options::default();
+        options.peer_certificates_match_profile = strict;
+        let mut policy = resolve(Profile::Cnsa1, options).map_err(e)?.tls;
         policy.versions = vec![TlsVersion::Tls12];
         policy.cipher_suites = vec![CipherSuite::Tls12EcdheEcdsaAes256GcmSha384];
         policy.kx_groups = vec![KxGroup::Secp384r1, KxGroup::Secp256r1];
@@ -432,15 +425,9 @@ fn peer_certificate_cnsa1_p256_client_tls12_sha384() -> Result<(), String> {
     )
     .map_err(e)?;
     for strict in [false, true] {
-        let mut policy = resolve(
-            Profile::Cnsa1,
-            Options {
-                peer_certificates_match_profile: strict,
-                ..Options::default()
-            },
-        )
-        .map_err(e)?
-        .tls;
+        let mut options = Options::default();
+        options.peer_certificates_match_profile = strict;
+        let mut policy = resolve(Profile::Cnsa1, options).map_err(e)?.tls;
         policy.versions = vec![TlsVersion::Tls12];
         policy.cipher_suites = vec![CipherSuite::Tls12EcdheEcdsaAes256GcmSha384];
         policy.kx_groups = vec![KxGroup::Secp384r1];

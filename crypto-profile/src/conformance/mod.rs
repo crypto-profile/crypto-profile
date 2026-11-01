@@ -589,13 +589,12 @@ macro_rules! conformance_tests {
             k: &[KxGroup],
             t: &[TlsSignatureScheme],
         ) -> Policy {
-            Policy {
-                peer_certificate_rule: None,
-                versions: v.to_vec(),
-                cipher_suites: c.to_vec(),
-                kx_groups: k.to_vec(),
-                signature_schemes: t.to_vec(),
-            }
+            let mut p = Policy::default();
+            p.versions = v.to_vec();
+            p.cipher_suites = c.to_vec();
+            p.kx_groups = k.to_vec();
+            p.signature_schemes = t.to_vec();
+            p
         }
 
         fn suite_key(c: CipherSuite) -> SignatureAlgorithm {
@@ -913,10 +912,8 @@ macro_rules! conformance_tests {
         fn conformance_hmac_refusal_matrix() {
             for (p, off, on) in $crate::conformance::golden::MAC_GOLDEN {
                 for (unclassified, admitted) in [(false, off), (true, on)] {
-                    let o = Options {
-                        cnsa1_unclassified_nss: unclassified,
-                        ..Options::default()
-                    };
+                    let mut o = Options::default();
+                    o.cnsa1_unclassified_nss = unclassified;
                     let a = admit(p, o);
                     for m in MacAlgorithm::ALL {
                         let want = if admitted.contains(&m) {
@@ -946,10 +943,8 @@ macro_rules! conformance_tests {
             };
             let cases = v.as_array().unwrap();
             assert_eq!(cases.len(), 3);
-            let on = Options {
-                cnsa1_unclassified_nss: true,
-                ..Options::default()
-            };
+            let mut on = Options::default();
+            on.cnsa1_unclassified_nss = true;
             let mut profiles = 0;
             for p in Profile::ALL {
                 let a = admit(p, on);
@@ -984,10 +979,8 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_wycheproof_hkdf() {
-            let on = Options {
-                cnsa1_unclassified_nss: true,
-                ..Options::default()
-            };
+            let mut on = Options::default();
+            on.cnsa1_unclassified_nss = true;
             for (k, file, total, valid, empty_info, profiles) in [
                 (
                     KdfAlgorithm::HkdfSha256,
@@ -1077,10 +1070,8 @@ macro_rules! conformance_tests {
         fn conformance_hkdf_refusal_matrix() {
             for (p, off, on) in $crate::conformance::golden::KDF_GOLDEN {
                 for (unclassified, admitted) in [(false, off), (true, on)] {
-                    let o = Options {
-                        cnsa1_unclassified_nss: unclassified,
-                        ..Options::default()
-                    };
+                    let mut o = Options::default();
+                    o.cnsa1_unclassified_nss = unclassified;
                     let a = admit(p, o);
                     assert_eq!(a.kdfs(), admitted, "{p} {o}");
                     for k in KdfAlgorithm::ALL {

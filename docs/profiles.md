@@ -21,7 +21,9 @@ fn server(
     key: &KeyPair,
 ) -> Result<ServerConfig, Box<dyn std::error::Error>> {
     let profile: Profile = name.parse()?;
-    let r = resolve(profile, Options { pq_key_exchange_required: true, ..Options::default() })?;
+    let mut options = Options::default();
+    options.pq_key_exchange_required = true;
+    let r = resolve(profile, options)?;
     assert_module_approves(&r)?;
     let certified = r.certified_key(chain, key)?;
     Ok(tls::server_builder(&r.tls)?
@@ -63,7 +65,7 @@ fn report_approval(r: &Resolved) -> Result<(), CryptoError> {
 
 ## 2. The option: post-quantum key exchange required
 
-`Options { pq_key_exchange_required: true, ..Options::default() }` narrows any profile:
+`pq_key_exchange_required`, set on `Options::default()`, narrows any profile:
 
 - **Key exchange only.** It keeps only the pure ML-KEM and hybrid groups (`KxGroup::is_post_quantum`). Signatures are not narrowed: post-quantum signatures in TLS wait for composite certificates (section 4, item 7).
 - **TLS 1.3 only.** TLS 1.2 has no post-quantum group, so the option removes TLS 1.2, its cipher suites, and the RSA PKCS#1 v1.5 handshake schemes, which only TLS 1.2 uses.

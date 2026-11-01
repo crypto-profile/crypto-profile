@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// What a TLS configuration may use: versions, suites and groups in preference order, and a set
 /// of signature schemes. No list may name an entry twice.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Policy {
     /// Protocol versions.
     pub versions: Vec<V>,
@@ -1278,13 +1279,9 @@ mod tests {
     #[test]
     fn peer_certificates_old_builders_require_strict_completion() {
         for profile in crate::Profile::ALL {
-            let resolved = crate::resolve(
-                profile,
-                crate::Options {
-                    peer_certificates_match_profile: true,
-                    ..Default::default()
-                },
-            );
+            let mut options = crate::Options::default();
+            options.peer_certificates_match_profile = true;
+            let resolved = crate::resolve(profile, options);
             let Ok(resolved) = resolved else {
                 assert_eq!(profile, crate::Profile::Cnsa2);
                 continue;
@@ -2286,15 +2283,9 @@ mod tests {
         for version in [V::Tls12, V::Tls13] {
             for server_checks_client in [false, true] {
                 for key in [S::EcdsaP384Sha384, S::Rsa2048Sha384] {
-                    let mut resolved = crate::resolve(
-                        crate::Profile::Cnsa1,
-                        crate::Options {
-                            peer_certificates_match_profile: true,
-                            ..Default::default()
-                        },
-                    )
-                    .unwrap()
-                    .tls;
+                    let mut options = crate::Options::default();
+                    options.peer_certificates_match_profile = true;
+                    let mut resolved = crate::resolve(crate::Profile::Cnsa1, options).unwrap().tls;
                     resolved.versions = vec![version];
                     let result = peer_certificate_handshake(&resolved, server_checks_client, key);
                     if key == S::EcdsaP384Sha384 {

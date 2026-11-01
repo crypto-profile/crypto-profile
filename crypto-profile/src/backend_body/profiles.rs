@@ -12,6 +12,7 @@ use rustls::sign::CertifiedKey;
 /// was called with; `tls` goes to `tls::client_builder`, `tls::server_builder` and the verifier
 /// builders; [`Resolved::certified_key`] binds this side's certificate and key to the profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Resolved {
     /// The profile.
     pub profile: Profile,
@@ -296,16 +297,16 @@ mod tests {
         TlsVersion as V,
     };
 
-    const PQ: Options = Options {
-        peer_certificates_match_profile: false,
-        pq_key_exchange_required: true,
-        cnsa1_unclassified_nss: false,
-    };
+    fn pq() -> Options {
+        let mut o = Options::default();
+        o.pq_key_exchange_required = true;
+        o
+    }
 
     fn every_resolved() -> Vec<Resolved> {
         let mut v = Vec::new();
         for p in Profile::ALL {
-            for o in [Options::default(), PQ] {
+            for o in [Options::default(), pq()] {
                 if let Ok(r) = resolve(p, o) {
                     v.push(r);
                 }
@@ -337,17 +338,17 @@ mod tests {
     fn resolve_carries_the_profile_the_options_and_the_policy() {
         if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
             assert_eq!(
-                resolve(Profile::Cnsa2, PQ),
+                resolve(Profile::Cnsa2, pq()),
                 Err(CryptoError::EmptyProfile {
                     profile: Profile::Cnsa2,
-                    options: PQ,
+                    options: pq(),
                     category: Family::SignatureScheme
                 })
             );
             return;
         }
-        let r = resolve(Profile::Cnsa2, PQ).unwrap();
-        assert_eq!((r.profile, r.options), (Profile::Cnsa2, PQ));
+        let r = resolve(Profile::Cnsa2, pq()).unwrap();
+        assert_eq!((r.profile, r.options), (Profile::Cnsa2, pq()));
         assert_eq!(
             r.tls,
             Policy {
@@ -361,10 +362,10 @@ mod tests {
         assert_eq!(r.keys, vec![S::MlDsa87]);
         assert!(r.excluded.is_empty());
         assert_eq!(
-            resolve(Profile::Bsi, PQ),
+            resolve(Profile::Bsi, pq()),
             Err(CryptoError::EmptyProfile {
                 profile: Profile::Bsi,
-                options: PQ,
+                options: pq(),
                 category: Family::KxGroup,
             })
         );
@@ -397,7 +398,7 @@ mod tests {
                     S::Rsa4096Sha384,
                 ],
             };
-            for o in [Options::default(), PQ] {
+            for o in [Options::default(), pq()] {
                 let Ok(r) = resolve(p, o) else { continue };
                 for a in S::ALL {
                     let want = if admitted.contains(&a)
@@ -670,7 +671,7 @@ mod tests {
     fn no_profile_is_refused_for_want_of_an_algorithm_on_this_module() {
         for p in Profile::ALL {
             if p == Profile::Cnsa2 && crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
-                for options in [Options::default(), PQ] {
+                for options in [Options::default(), pq()] {
                     assert_eq!(
                         resolve(p, options),
                         Err(CryptoError::EmptyProfile {
@@ -692,13 +693,13 @@ mod tests {
             let want = if empty_with_pq {
                 Err(CryptoError::EmptyProfile {
                     profile: p,
-                    options: PQ,
+                    options: pq(),
                     category: Family::KxGroup,
                 })
             } else {
                 Ok(())
             };
-            assert_eq!(resolve(p, PQ).map(|_| ()), want, "{p}");
+            assert_eq!(resolve(p, pq()).map(|_| ()), want, "{p}");
         }
     }
 }
@@ -712,15 +713,10 @@ mod peer_certificate_tests {
         assert_eq!(Policy::default().peer_certificate_rule, None);
         for profile in Profile::ALL {
             for pq in [false, true] {
-                let off = Options {
-                    pq_key_exchange_required: pq,
-                    peer_certificates_match_profile: false,
-                    cnsa1_unclassified_nss: false,
-                };
-                let on = Options {
-                    peer_certificates_match_profile: true,
-                    ..off
-                };
+                let mut off = Options::default();
+                off.pq_key_exchange_required = pq;
+                let mut on = off;
+                on.peer_certificates_match_profile = true;
                 match (resolve(profile, off), resolve(profile, on)) {
                     (Ok(off), Ok(mut on)) => {
                         assert_eq!(off.tls.peer_certificate_rule, None);
@@ -766,16 +762,16 @@ mod admitted_tests {
     use crate::KdfAlgorithm as Kd;
     use crate::MacAlgorithm as M;
 
-    const ON: Options = Options {
-        peer_certificates_match_profile: false,
-        pq_key_exchange_required: false,
-        cnsa1_unclassified_nss: true,
-    };
+    fn on() -> Options {
+        let mut o = Options::default();
+        o.cnsa1_unclassified_nss = true;
+        o
+    }
 
     #[test]
     fn admit_never_refuses_and_carries_its_inputs() {
         for p in Profile::ALL {
-            for o in [Options::default(), ON] {
+            for o in [Options::default(), on()] {
                 let a = admit(p, o);
                 assert_eq!((a.profile(), a.options()), (p, o));
                 assert_eq!(
@@ -794,7 +790,7 @@ mod admitted_tests {
             [M::HmacSha384, M::HmacSha512]
         );
         assert_eq!(
-            admit(Profile::Cnsa1, ON).macs(),
+            admit(Profile::Cnsa1, on()).macs(),
             [M::HmacSha384, M::HmacSha256]
         );
         assert_eq!(
@@ -802,16 +798,16 @@ mod admitted_tests {
             [Kd::HkdfSha384, Kd::HkdfSha512]
         );
         assert_eq!(
-            admit(Profile::Cnsa1, ON).kdfs(),
+            admit(Profile::Cnsa1, on()).kdfs(),
             [Kd::HkdfSha384, Kd::HkdfSha256]
         );
-        assert_eq!(admit(Profile::Cnsa1, ON).options(), ON);
+        assert_eq!(admit(Profile::Cnsa1, on()).options(), on());
     }
 
     #[test]
     fn admit_mac_admits_exactly_the_profile_macs() {
         for p in Profile::ALL {
-            for o in [Options::default(), ON] {
+            for o in [Options::default(), on()] {
                 let a = admit(p, o);
                 for m in MacAlgorithm::ALL {
                     let want = if a.macs.contains(&m) {
@@ -827,7 +823,7 @@ mod admitted_tests {
             }
         }
         assert_eq!(
-            admit(Profile::Cnsa2, ON).admit_mac(M::HmacSha256),
+            admit(Profile::Cnsa2, on()).admit_mac(M::HmacSha256),
             Err(CryptoError::NotInProfile {
                 profile: Profile::Cnsa2,
                 algorithm: Algorithm::Mac(M::HmacSha256),
@@ -851,7 +847,7 @@ mod admitted_tests {
     #[test]
     fn admit_kdf_admits_exactly_the_profile_kdfs() {
         for p in Profile::ALL {
-            for o in [Options::default(), ON] {
+            for o in [Options::default(), on()] {
                 let a = admit(p, o);
                 for k in KdfAlgorithm::ALL {
                     let want = if a.kdfs.contains(&k) {
@@ -867,7 +863,7 @@ mod admitted_tests {
             }
         }
         assert_eq!(
-            admit(Profile::Cnsa2, ON).admit_kdf(Kd::HkdfSha256),
+            admit(Profile::Cnsa2, on()).admit_kdf(Kd::HkdfSha256),
             Err(CryptoError::NotInProfile {
                 profile: Profile::Cnsa2,
                 algorithm: Algorithm::Kdf(Kd::HkdfSha256),

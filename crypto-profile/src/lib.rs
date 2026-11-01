@@ -33,5 +33,24 @@ pub mod sealbox_wire;
 pub mod __test_data {
     pub const RSA8192_PKCS8: &[u8] = include_bytes!("../testdata/rsa8192.pkcs8.der");
 }
+/// `Options`, `ProfileSpec`, `Selection` and `AdmittedSelection` are `#[non_exhaustive]`
+/// (decision 0012), so a new field is not a breaking change. Outside this crate `Options` is built
+/// from its default:
+///
+/// ```
+/// use crypto_profile::Options;
+/// let mut o = Options::default();
+/// o.pq_key_exchange_required = true;
+/// assert_eq!(o.to_string(), "post-quantum key exchange required");
+/// ```
+///
+/// ```compile_fail,E0639
+/// use crypto_profile::Options;
+/// let mut o = Options { ..Options::default() };
+/// o.pq_key_exchange_required = true;
+/// assert_eq!(o.to_string(), "post-quantum key exchange required");
+/// ```
+#[allow(dead_code)]
+mod options_are_built_from_their_default {}
 include!(concat!(env!("OUT_DIR"), "/provider.rs"));
 include!(concat!(env!("OUT_DIR"), "/backend_body.rs"));

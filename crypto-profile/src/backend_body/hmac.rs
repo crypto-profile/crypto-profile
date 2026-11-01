@@ -111,10 +111,8 @@ mod tests {
 
     #[test]
     fn the_unclassified_nss_option_admits_hmac_sha256_under_cnsa1_only() {
-        let on = Options {
-            cnsa1_unclassified_nss: true,
-            ..Options::default()
-        };
+        let mut on = Options::default();
+        on.cnsa1_unclassified_nss = true;
         assert!(Key::new(&admit(Profile::Cnsa1, on), M::HmacSha256, &[7; 32]).is_ok());
         assert_eq!(
             key(Profile::Cnsa1, M::HmacSha256, 32).err(),
