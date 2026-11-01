@@ -160,7 +160,7 @@ pub fn __library_basename(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Linkage, ModuleLine, Options};
+    use crate::{KdfAlgorithm, KeyAgreementAlgorithm, Linkage, ModuleLine, Options};
 
     const M3S: Module = Module {
         line: ModuleLine::AwsLcFips3,
@@ -197,7 +197,14 @@ mod tests {
                 missing,
                 [
                     Algorithm::Signature(ml_dsa),
-                    Algorithm::Scheme(TlsSignatureScheme::MlDsa87)
+                    Algorithm::Scheme(TlsSignatureScheme::MlDsa87),
+                    Algorithm::Kdf(KdfAlgorithm::OneStepSha256),
+                    Algorithm::Kdf(KdfAlgorithm::OneStepSha384),
+                    Algorithm::Kdf(KdfAlgorithm::OneStepSha512),
+                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP256),
+                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
+                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP521),
+                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::X25519),
                 ],
                 "{m:?}"
             );
@@ -1073,9 +1080,19 @@ macro_rules! conformance_tests {
                             hkdf::derive(&a, k, &[7; 32], None, info, 32)
                                 .map(|d| d.as_bytes().len())
                         };
-                        let refused = Err(CryptoError::NotInProfile {
-                            profile: p,
-                            algorithm: Algorithm::Kdf(k),
+                        let one_step = matches!(
+                            k,
+                            KdfAlgorithm::OneStepSha256
+                                | KdfAlgorithm::OneStepSha384
+                                | KdfAlgorithm::OneStepSha512
+                        );
+                        let refused = Err(if one_step {
+                            CryptoError::KdfSpecMismatch { algorithm: k }
+                        } else {
+                            CryptoError::NotInProfile {
+                                profile: p,
+                                algorithm: Algorithm::Kdf(k),
+                            }
                         });
                         let (want, want_empty_info) = if !admitted.contains(&k) {
                             (refused, refused)
@@ -1150,17 +1167,31 @@ macro_rules! conformance_tests {
                         assert_eq!(key.sign(b"").as_ref().len(), m.tag_len(), "{m:?}");
                     }
                     Algorithm::Kdf(k) => {
-                        assert!(cap.available, "{k:?}");
-                        let key = hkdf::derive(
-                            &admit(Profile::Unrestricted, Options::default()),
-                            k,
-                            &[7; 32],
-                            None,
-                            b"capability",
-                            k.max_output_len(),
-                        )
-                        .unwrap_or_else(|e| panic!("{k:?}: {e}"));
-                        assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
+                        let unrestricted = admit(Profile::Unrestricted, Options::default());
+                        if cap.available {
+                            let key = hkdf::derive(
+                                &unrestricted,
+                                k,
+                                &[7; 32],
+                                None,
+                                b"capability",
+                                k.max_output_len(),
+                            )
+                            .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                            assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
+                        } else {
+                            assert!(!unrestricted.kdfs().contains(&k), "{k:?}");
+                            assert_eq!(
+                                hkdf::derive(&unrestricted, k, &[7; 32], None, b"capability", 32)
+                                    .err(),
+                                Some(CryptoError::KdfSpecMismatch { algorithm: k }),
+                                "{k:?}"
+                            );
+                        }
+                    }
+                    Algorithm::KeyAgreement(k) => {
+                        assert!(!cap.available, "{k:?}");
+                        assert_eq!(cap.approval, Approval::Unverified, "{k:?}");
                     }
                     Algorithm::Kx(k) => {
                         let p = policy(

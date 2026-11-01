@@ -90,6 +90,25 @@ pub(crate) fn ensure(alg: Algorithm) -> Result<(), CryptoError> {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_refuses_what_this_backend_does_not_implement() {
+        for algorithm in [
+            Algorithm::Kdf(KdfAlgorithm::OneStepSha384),
+            Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
+        ] {
+            assert_eq!(ensure(algorithm), Err(CryptoError::Unavailable(algorithm)));
+        }
+        assert_eq!(
+            ensure(Algorithm::Signature(SignatureAlgorithm::MlDsa87)),
+            Ok(())
+        );
+    }
+}
+
+#[cfg(test)]
 mod shared_body_tests {
     #[test]
     fn shared_exports_and_facade_agree() {

@@ -1,5 +1,5 @@
 //! The algorithms the crate names: signature keys, TLS signature schemes, key-exchange groups,
-//! cipher suites, hashes and TLS versions.
+//! cipher suites, hashes, TLS versions, MACs, KDFs and key agreements.
 use std::fmt;
 use std::str::FromStr;
 
@@ -114,13 +114,13 @@ impl SignatureAlgorithm {
     }
 }
 
-/// A name that is not one of the crate's algorithms.
+/// A name that is not one of the crate's algorithms of the type parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ParseAlgorithmError(pub String);
 
 impl fmt::Display for ParseAlgorithmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown signature algorithm {:?}", self.0)
+        write!(f, "unknown algorithm name {:?}", self.0)
     }
 }
 
@@ -550,14 +550,23 @@ pub enum KdfAlgorithm {
     HkdfSha384,
     /// HKDF with SHA-512 (RFC 5869; SP 800-56C Rev. 2 §5).
     HkdfSha512,
+    /// The one-step KDF with SHA-256 as its auxiliary function (SP 800-56C Rev. 2 §4.1, option 1).
+    OneStepSha256,
+    /// The one-step KDF with SHA-384 as its auxiliary function (SP 800-56C Rev. 2 §4.1, option 1).
+    OneStepSha384,
+    /// The one-step KDF with SHA-512 as its auxiliary function (SP 800-56C Rev. 2 §4.1, option 1).
+    OneStepSha512,
 }
 
 impl KdfAlgorithm {
     /// Every key-derivation function.
-    pub const ALL: [KdfAlgorithm; 3] = [
+    pub const ALL: [KdfAlgorithm; 6] = [
         KdfAlgorithm::HkdfSha256,
         KdfAlgorithm::HkdfSha384,
         KdfAlgorithm::HkdfSha512,
+        KdfAlgorithm::OneStepSha256,
+        KdfAlgorithm::OneStepSha384,
+        KdfAlgorithm::OneStepSha512,
     ];
 
     /// The position of `self` in [`Self::ALL`].
@@ -567,21 +576,96 @@ impl KdfAlgorithm {
             KdfAlgorithm::HkdfSha256 => 0,
             KdfAlgorithm::HkdfSha384 => 1,
             KdfAlgorithm::HkdfSha512 => 2,
+            KdfAlgorithm::OneStepSha256 => 3,
+            KdfAlgorithm::OneStepSha384 => 4,
+            KdfAlgorithm::OneStepSha512 => 5,
         }
     }
 
-    /// The hash function HKDF's HMAC is built on.
+    /// The hash function the KDF is built on: HKDF's HMAC, or the one-step KDF's auxiliary
+    /// function.
     pub const fn hash(self) -> HashAlgorithm {
         match self {
-            KdfAlgorithm::HkdfSha256 => HashAlgorithm::Sha256,
-            KdfAlgorithm::HkdfSha384 => HashAlgorithm::Sha384,
-            KdfAlgorithm::HkdfSha512 => HashAlgorithm::Sha512,
+            KdfAlgorithm::HkdfSha256 | KdfAlgorithm::OneStepSha256 => HashAlgorithm::Sha256,
+            KdfAlgorithm::HkdfSha384 | KdfAlgorithm::OneStepSha384 => HashAlgorithm::Sha384,
+            KdfAlgorithm::HkdfSha512 | KdfAlgorithm::OneStepSha512 => HashAlgorithm::Sha512,
         }
     }
 
-    /// The longest output in bytes: 255 times the hash length (RFC 5869 §2.3).
+    /// The longest output in bytes. HKDF: 255 times the hash length (RFC 5869 §2.3). The one-step
+    /// KDF: 2^30 bytes, the bound AWS-LC's `SSKDF` enforces on both module lines
+    /// (`SSKDF_MAX_INPUT_LEN`, `crypto/fipsmodule/kdf/sskdf.c`), inside SP 800-56C Rev. 2 §4.1's
+    /// (2^32 − 1) × HashLen bits.
     pub const fn max_output_len(self) -> usize {
-        255 * self.hash().output_len()
+        match self {
+            KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => {
+                255 * self.hash().output_len()
+            }
+            KdfAlgorithm::OneStepSha256
+            | KdfAlgorithm::OneStepSha384
+            | KdfAlgorithm::OneStepSha512 => 1 << 30,
+        }
+    }
+}
+
+/// A key-agreement algorithm outside TLS: Diffie-Hellman on a curve (SP 800-56A Rev. 3; RFC
+/// 7748). TLS key exchange is [`KxGroup`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KeyAgreementAlgorithm {
+    /// ECDH on P-256 (SP 800-56A Rev. 3, SP 800-186).
+    EcdhP256,
+    /// ECDH on P-384 (SP 800-56A Rev. 3, SP 800-186).
+    EcdhP384,
+    /// ECDH on P-521 (SP 800-56A Rev. 3, SP 800-186).
+    EcdhP521,
+    /// X25519 (RFC 7748).
+    X25519,
+}
+
+impl KeyAgreementAlgorithm {
+    /// Every key-agreement algorithm.
+    pub const ALL: [KeyAgreementAlgorithm; 4] = [
+        KeyAgreementAlgorithm::EcdhP256,
+        KeyAgreementAlgorithm::EcdhP384,
+        KeyAgreementAlgorithm::EcdhP521,
+        KeyAgreementAlgorithm::X25519,
+    ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            KeyAgreementAlgorithm::EcdhP256 => 0,
+            KeyAgreementAlgorithm::EcdhP384 => 1,
+            KeyAgreementAlgorithm::EcdhP521 => 2,
+            KeyAgreementAlgorithm::X25519 => 3,
+        }
+    }
+
+    /// The algorithm's stable configuration name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            KeyAgreementAlgorithm::EcdhP256 => "ecdh-p256",
+            KeyAgreementAlgorithm::EcdhP384 => "ecdh-p384",
+            KeyAgreementAlgorithm::EcdhP521 => "ecdh-p521",
+            KeyAgreementAlgorithm::X25519 => "x25519",
+        }
+    }
+}
+
+impl FromStr for KeyAgreementAlgorithm {
+    type Err = ParseAlgorithmError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        KeyAgreementAlgorithm::ALL
+            .into_iter()
+            .find(|a| a.as_str() == s)
+            .ok_or_else(|| ParseAlgorithmError(s.to_string()))
+    }
+}
+
+impl fmt::Display for KeyAgreementAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -635,6 +719,8 @@ pub enum Algorithm {
     Mac(MacAlgorithm),
     /// A key-derivation function.
     Kdf(KdfAlgorithm),
+    /// A key-agreement algorithm outside TLS.
+    KeyAgreement(KeyAgreementAlgorithm),
 }
 
 impl Algorithm {
@@ -649,6 +735,7 @@ impl Algorithm {
         v.extend(TlsVersion::ALL.map(Algorithm::Protocol));
         v.extend(MacAlgorithm::ALL.map(Algorithm::Mac));
         v.extend(KdfAlgorithm::ALL.map(Algorithm::Kdf));
+        v.extend(KeyAgreementAlgorithm::ALL.map(Algorithm::KeyAgreement));
         v
     }
 }
@@ -725,7 +812,7 @@ mod tests {
         }
         assert_eq!(
             ParseAlgorithmError("p384".to_string()).to_string(),
-            "unknown signature algorithm \"p384\""
+            "unknown algorithm name \"p384\""
         );
         for bad in [
             "",
@@ -837,17 +924,25 @@ mod tests {
             + HashAlgorithm::ALL.len()
             + TlsVersion::ALL.len()
             + MacAlgorithm::ALL.len()
-            + KdfAlgorithm::ALL.len();
+            + KdfAlgorithm::ALL.len()
+            + KeyAgreementAlgorithm::ALL.len();
         assert_eq!(all.len(), expected);
-        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3 + 3);
+        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3 + 6 + 4);
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
         assert_eq!(
-            all[all.len() - 6..all.len() - 3],
+            all[all.len() - 13..all.len() - 10],
             MacAlgorithm::ALL.map(Algorithm::Mac)
         );
-        assert_eq!(all[all.len() - 3..], KdfAlgorithm::ALL.map(Algorithm::Kdf));
+        assert_eq!(
+            all[all.len() - 10..all.len() - 4],
+            KdfAlgorithm::ALL.map(Algorithm::Kdf)
+        );
+        assert_eq!(
+            all[all.len() - 4..],
+            KeyAgreementAlgorithm::ALL.map(Algorithm::KeyAgreement)
+        );
     }
 
     #[test]
@@ -879,22 +974,72 @@ mod tests {
             [
                 KdfAlgorithm::HkdfSha256,
                 KdfAlgorithm::HkdfSha384,
-                KdfAlgorithm::HkdfSha512
+                KdfAlgorithm::HkdfSha512,
+                KdfAlgorithm::OneStepSha256,
+                KdfAlgorithm::OneStepSha384,
+                KdfAlgorithm::OneStepSha512,
             ]
         );
-        assert_eq!(KdfAlgorithm::ALL.map(KdfAlgorithm::ordinal), [0, 1, 2]);
+        assert_eq!(
+            KdfAlgorithm::ALL.map(KdfAlgorithm::ordinal),
+            std::array::from_fn::<usize, 6, _>(|i| i)
+        );
     }
 
     #[test]
-    fn each_kdf_names_its_hash_and_rfc_5869s_output_limit() {
+    fn each_kdf_names_its_hash_and_its_output_limit() {
+        use HashAlgorithm::{Sha256, Sha384, Sha512};
         assert_eq!(
             KdfAlgorithm::ALL.map(KdfAlgorithm::hash),
-            HashAlgorithm::ALL
+            [Sha256, Sha384, Sha512, Sha256, Sha384, Sha512]
         );
         assert_eq!(
             KdfAlgorithm::ALL.map(KdfAlgorithm::max_output_len),
-            [8160, 12240, 16320]
+            [
+                8160,
+                12240,
+                16320,
+                1_073_741_824,
+                1_073_741_824,
+                1_073_741_824
+            ]
         );
+    }
+
+    #[test]
+    fn key_agreement_algorithm_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            KeyAgreementAlgorithm::ALL,
+            [
+                KeyAgreementAlgorithm::EcdhP256,
+                KeyAgreementAlgorithm::EcdhP384,
+                KeyAgreementAlgorithm::EcdhP521,
+                KeyAgreementAlgorithm::X25519,
+            ]
+        );
+        assert_eq!(
+            KeyAgreementAlgorithm::ALL.map(KeyAgreementAlgorithm::ordinal),
+            std::array::from_fn::<usize, 4, _>(|i| i)
+        );
+    }
+
+    #[test]
+    fn key_agreement_names_are_stable_and_round_trip() {
+        assert_eq!(
+            KeyAgreementAlgorithm::ALL.map(KeyAgreementAlgorithm::as_str),
+            ["ecdh-p256", "ecdh-p384", "ecdh-p521", "x25519"]
+        );
+        for a in KeyAgreementAlgorithm::ALL {
+            assert_eq!(a.as_str().parse::<KeyAgreementAlgorithm>(), Ok(a));
+            assert_eq!(a.to_string(), a.as_str());
+        }
+        for bad in ["", "p384", "ECDH-P384", "ecdh-p384 ", "x448", "secp384r1"] {
+            assert_eq!(
+                bad.parse::<KeyAgreementAlgorithm>(),
+                Err(ParseAlgorithmError(bad.to_string())),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]

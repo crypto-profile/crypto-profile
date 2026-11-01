@@ -11,8 +11,8 @@ pub use peer_certificate::{
 };
 
 pub use algorithm::{
-    Algorithm, CipherSuite, HashAlgorithm, KdfAlgorithm, KxGroup, MacAlgorithm,
-    ParseAlgorithmError, SignatureAlgorithm, TlsSignatureScheme, TlsVersion,
+    Algorithm, CipherSuite, HashAlgorithm, KdfAlgorithm, KeyAgreementAlgorithm, KxGroup,
+    MacAlgorithm, ParseAlgorithmError, SignatureAlgorithm, TlsSignatureScheme, TlsVersion,
 };
 pub use error::{CryptoError, CsrError, Family, PeerVerifierIdentity, TlsError};
 

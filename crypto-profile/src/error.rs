@@ -1,5 +1,7 @@
 //! The crate's refusals.
-use crate::algorithm::{Algorithm, KdfAlgorithm, SignatureAlgorithm, TlsVersion};
+use crate::algorithm::{
+    Algorithm, KdfAlgorithm, KeyAgreementAlgorithm, SignatureAlgorithm, TlsVersion,
+};
 use crate::capability::Approval;
 use crate::peer_certificate::PeerCertificateViolation;
 use crate::profile::{Options, Profile};
@@ -224,7 +226,7 @@ pub enum CryptoError {
     },
     /// A MAC did not verify.
     MacVerify,
-    /// An HKDF output length outside 1 to 255 times the hash length (RFC 5869 §2.3).
+    /// A KDF output length outside 1 to the KDF's `max_output_len()`.
     KdfOutputLength {
         /// The KDF.
         algorithm: KdfAlgorithm,
@@ -233,18 +235,33 @@ pub enum CryptoError {
         /// The longest output the KDF gives, in bytes.
         max_bytes: usize,
     },
-    /// An empty HKDF secret.
+    /// An empty KDF secret.
     KdfSecretEmpty,
-    /// An empty HKDF `info` under a profile that refuses one.
+    /// An empty KDF `info` under a profile that refuses one.
     KdfInfoEmpty {
         /// The profile.
         profile: Profile,
     },
-    /// A profile that admits an empty HKDF `info`, which the module does not approve; refused by
+    /// A profile that admits an empty KDF `info`, which the module does not approve; refused by
     /// `assert_admitted_approved` when the profile admits any KDF.
     KdfInfoMayBeEmpty {
         /// The profile.
         profile: Profile,
+    },
+    /// A KDF specification whose variant does not match its algorithm.
+    KdfSpecMismatch {
+        /// The algorithm the specification carries.
+        algorithm: KdfAlgorithm,
+    },
+    /// A peer public key that is malformed for the curve, or that the module's validation refused.
+    KeyAgreementPeerKey {
+        /// The key-agreement algorithm.
+        algorithm: KeyAgreementAlgorithm,
+    },
+    /// A static key-agreement private key that cannot be imported.
+    KeyAgreementPrivateKey {
+        /// The key-agreement algorithm.
+        algorithm: KeyAgreementAlgorithm,
     },
 }
 
@@ -334,16 +351,25 @@ impl fmt::Display for CryptoError {
                 max_bytes,
             } => write!(
                 f,
-                "an HKDF output of {bytes} bytes ({algorithm:?}) is outside 1-{max_bytes} bytes"
+                "a KDF output of {bytes} bytes ({algorithm:?}) is outside 1-{max_bytes} bytes"
             ),
-            CryptoError::KdfSecretEmpty => f.write_str("the HKDF secret is empty"),
+            CryptoError::KdfSecretEmpty => f.write_str("the KDF secret is empty"),
             CryptoError::KdfInfoEmpty { profile } => {
-                write!(f, "the {profile} profile refuses an empty HKDF info")
+                write!(f, "the {profile} profile refuses an empty KDF info")
             }
             CryptoError::KdfInfoMayBeEmpty { profile } => write!(
                 f,
-                "the {profile} profile admits an empty HKDF info, which the module does not approve"
+                "the {profile} profile admits an empty KDF info, which the module does not approve"
             ),
+            CryptoError::KdfSpecMismatch { algorithm } => {
+                write!(f, "{algorithm:?} does not match its KDF specification")
+            }
+            CryptoError::KeyAgreementPeerKey { algorithm } => {
+                write!(f, "the peer public key is not a valid {algorithm} key")
+            }
+            CryptoError::KeyAgreementPrivateKey { algorithm } => {
+                write!(f, "the {algorithm} private key was refused")
+            }
         }
     }
 }
@@ -354,7 +380,8 @@ impl std::error::Error for CryptoError {}
 mod tests {
     use super::*;
     use crate::algorithm::{
-        Algorithm, KdfAlgorithm, KxGroup, MacAlgorithm, SignatureAlgorithm, TlsSignatureScheme,
+        Algorithm, KdfAlgorithm, KeyAgreementAlgorithm, KxGroup, MacAlgorithm, SignatureAlgorithm,
+        TlsSignatureScheme,
     };
     use crate::capability::Approval;
     use crate::profile::{Options, Profile};
@@ -407,7 +434,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 12] = [
+        let table: [(CryptoError, &str); 15] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -468,20 +495,38 @@ mod tests {
                     bytes: 8161,
                     max_bytes: 8160,
                 },
-                "an HKDF output of 8161 bytes (HkdfSha256) is outside 1-8160 bytes",
+                "a KDF output of 8161 bytes (HkdfSha256) is outside 1-8160 bytes",
             ),
-            (CryptoError::KdfSecretEmpty, "the HKDF secret is empty"),
+            (CryptoError::KdfSecretEmpty, "the KDF secret is empty"),
             (
                 CryptoError::KdfInfoEmpty {
                     profile: Profile::Fips1403,
                 },
-                "the fips1403 profile refuses an empty HKDF info",
+                "the fips1403 profile refuses an empty KDF info",
             ),
             (
                 CryptoError::KdfInfoMayBeEmpty {
                     profile: Profile::Unrestricted,
                 },
-                "the unrestricted profile admits an empty HKDF info, which the module does not approve",
+                "the unrestricted profile admits an empty KDF info, which the module does not approve",
+            ),
+            (
+                CryptoError::KdfSpecMismatch {
+                    algorithm: KdfAlgorithm::OneStepSha256,
+                },
+                "OneStepSha256 does not match its KDF specification",
+            ),
+            (
+                CryptoError::KeyAgreementPeerKey {
+                    algorithm: KeyAgreementAlgorithm::EcdhP384,
+                },
+                "the peer public key is not a valid ecdh-p384 key",
+            ),
+            (
+                CryptoError::KeyAgreementPrivateKey {
+                    algorithm: KeyAgreementAlgorithm::X25519,
+                },
+                "the x25519 private key was refused",
             ),
         ];
         for (e, text) in table {
