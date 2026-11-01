@@ -902,6 +902,7 @@ macro_rules! conformance_tests {
                         .unwrap_or_else(|e| panic!("{m:?}: {e}"));
                         assert_eq!(key.sign(b"").as_ref().len(), m.tag_len(), "{m:?}");
                     }
+                    Algorithm::Kdf(k) => assert!(cap.available, "{k:?}"),
                     Algorithm::Kx(k) => {
                         let p = policy(
                             &[TlsVersion::Tls13],

@@ -216,6 +216,11 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
                 (true, yes)
             }
         },
+        Algorithm::Kdf(k) => match k {
+            KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => {
+                (true, yes)
+            }
+        },
     };
     Capability {
         available,
@@ -329,6 +334,17 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             MacAlgorithm::HmacSha384 => tested("A7855 (HMAC-SHA2-384: MAC 384, key 112-524288)"),
             MacAlgorithm::HmacSha512 => tested("A7855 (HMAC-SHA2-512: MAC 512, key 112-524288)"),
         },
+        Algorithm::Kdf(k) => match k {
+            KdfAlgorithm::HkdfSha256 => tested(
+                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048)",
+            ),
+            KdfAlgorithm::HkdfSha384 => tested(
+                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048)",
+            ),
+            KdfAlgorithm::HkdfSha512 => tested(
+                "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048)",
+            ),
+        },
     }
 }
 
@@ -439,7 +455,7 @@ mod tests {
         use SignatureAlgorithm as S;
         use TlsSignatureScheme as T;
         use TlsVersion as V;
-        let expected: [(Algorithm, Option<&'static str>); 44] = [
+        let expected: [(Algorithm, Option<&'static str>); 47] = [
             (
                 A::Signature(S::MlDsa87),
                 Some("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)"),
@@ -560,13 +576,31 @@ mod tests {
                 A::Mac(MacAlgorithm::HmacSha512),
                 Some("A7855 (HMAC-SHA2-512: MAC 512, key 112-524288)"),
             ),
+            (
+                A::Kdf(KdfAlgorithm::HkdfSha256),
+                Some(
+                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048)",
+                ),
+            ),
+            (
+                A::Kdf(KdfAlgorithm::HkdfSha384),
+                Some(
+                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048)",
+                ),
+            ),
+            (
+                A::Kdf(KdfAlgorithm::HkdfSha512),
+                Some(
+                    "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048)",
+                ),
+            ),
         ];
         assert!(
             Algorithm::all()
                 .iter()
                 .all(|a| expected.iter().any(|(b, _)| b == a))
         );
-        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 25);
+        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 28);
         for (a, cavp) in expected {
             let approval = match cavp {
                 Some(cavp) => Approval::AlgorithmTested { cavp },
@@ -610,6 +644,7 @@ mod tests {
         assert!(approved(A::Cipher(CipherSuite::Tls13Aes128GcmSha256)));
         assert!(approved(A::Hash(HashAlgorithm::Sha512)));
         assert!(approved(A::Mac(MacAlgorithm::HmacSha384)));
+        assert!(approved(A::Kdf(KdfAlgorithm::HkdfSha512)));
         assert!(approved(A::Protocol(TlsVersion::Tls12)));
         for a in [
             A::Signature(SignatureAlgorithm::MlDsa87),
@@ -659,7 +694,7 @@ mod tests {
             Unverified,
         }
         use K::{Approved as Y, NotApproved as N, Unverified as U};
-        let expected: [(Algorithm, bool, K); 44] = [
+        let expected: [(Algorithm, bool, K); 47] = [
             (A::Signature(S::MlDsa87), false, N),
             (A::Signature(S::EcdsaP256Sha256), true, Y),
             (A::Signature(S::EcdsaP384Sha384), true, Y),
@@ -728,6 +763,9 @@ mod tests {
             (A::Mac(MacAlgorithm::HmacSha256), true, Y),
             (A::Mac(MacAlgorithm::HmacSha384), true, Y),
             (A::Mac(MacAlgorithm::HmacSha512), true, Y),
+            (A::Kdf(KdfAlgorithm::HkdfSha256), true, Y),
+            (A::Kdf(KdfAlgorithm::HkdfSha384), true, Y),
+            (A::Kdf(KdfAlgorithm::HkdfSha512), true, Y),
         ];
         assert_eq!(expected.len(), Algorithm::all().len());
         for m in [M3S, M3D] {
