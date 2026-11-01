@@ -42,6 +42,7 @@ impl fmt::Debug for DerivedKey {
 
 /// RFC 5869 HKDF (SP 800-56C Rev. 2 §5) in one call: extract, then expand. The pseudorandom key
 /// never leaves the module. `salt` `None` or empty is RFC 5869's default, HashLen zero bytes.
+/// `salt` and `info` are treated as non-secret: the module's binding copies them without wiping.
 /// `info` binds the key to its use: a purpose label, the parties' identifiers, the public keys
 /// each contributed. Refuses, in this order: an algorithm `a`'s profile does not admit, or its
 /// module line lacks (`Admitted::admit_kdf`); an empty `info` unless `kdf_info_may_be_empty`; an

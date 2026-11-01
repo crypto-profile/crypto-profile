@@ -315,9 +315,9 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 ///   (p. 20); SHA-2 output of at least 224 bits, ISM-1766 (p. 11). HMAC-SHA256 "will not be
 ///   approved beyond 2030" (pp. 15-16).
 /// - KDFs: HKDF, the two-step method of SP 800-56C Rev. 2 §5, of which RFC 5869 "specifies a
-///   version" (p. 20); the ISM cites SP 800-56C Rev. 2 for combining hybrid key-encapsulation
-///   components (p. 13). SHA-2 output of at least 224 bits, ISM-1766 (p. 11); SHA-256 "will not be
-///   approved beyond 2030" (p. 11). Decision 0010.
+///   version" (SP 800-56C Rev. 2, p. 20); the ISM cites SP 800-56C Rev. 2 for combining hybrid
+///   key-encapsulation components (p. 13). SHA-2 output of at least 224 bits, ISM-1766 (p. 11);
+///   SHA-256 "will not be approved beyond 2030" (p. 11). Decision 0010.
 pub const PREFERRED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384, C::Tls13Aes128GcmSha256],
