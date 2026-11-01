@@ -175,6 +175,15 @@ fn body_index_accepts_the_hmac_module() {
 }
 
 #[test]
+fn body_index_accepts_the_hkdf_module() {
+    let fixture = Fixture::new();
+    fixture.write("hkdf.rs", "pub const VALUE: u8 = 1;\n");
+    fixture.write("mod.rs", "pub mod hkdf;\n");
+    let (output, _) = modules(&fixture.0, true);
+    assert!(output.contains("pub mod hkdf {"), "{output}");
+}
+
+#[test]
 fn profile_exports_are_exact_and_require_the_module() {
     let fixture = Fixture::new();
     let resolved = "pub use profiles::{Resolved, assert_module_approves, resolve};\n";

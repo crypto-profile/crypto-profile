@@ -15,12 +15,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
   - `hmac::Key` and `hmac::Tag`: `Key::new` refuses a MAC the profile does not admit and a key outside `mac_key_floor_bits(profile)` (112 bits, 128 under `bsi`) to `MAC_KEY_MAX_BITS` (524288); `Key::verify` is constant time and takes full-length tags only;
   - `CryptoError::NotInProfile`, for any algorithm outside TLS a profile does not admit, `CryptoError::MacKeyLength` and `CryptoError::MacVerify`;
   - Wycheproof HMAC-SHA256, HMAC-SHA384 and HMAC-SHA512 in the conformance suite.
+- HKDF under a profile (#32), the second family governed outside TLS (decision 0010):
+  - `KdfAlgorithm` (HKDF-SHA256, HKDF-SHA384, HKDF-SHA512), with `hash()` and `max_output_len()`;
+  - capability cells: `Approved` on the 3.x line (Table 5 of each certificate's security policy), `AlgorithmTested` on A7855 on the 4.x dynamic build, `Unverified` on the 4.x static build;
+  - `Admitted::kdfs()` and `Admitted::admit_kdf`; `assert_admitted_approved` walks the KDF cells after the MACs, and first refuses a profile that admits KDFs and an empty `info` (`unrestricted`) with `CryptoError::KdfInfoMayBeEmpty`; in the core crate, `AdmittedSelection::kdfs` and `kdf_info_may_be_empty`;
+  - `hkdf::derive` and `hkdf::DerivedKey`: RFC 5869 extract-then-expand in one call, with no public extract; an absent or empty salt is HashLen zeros; an empty `info` is refused under every profile but `unrestricted`; output 1 to 255 × HashLen bytes; an empty secret is refused; the derived key is zeroized on drop;
+  - `CryptoError::KdfOutputLength`, `CryptoError::KdfSecretEmpty`, `CryptoError::KdfInfoEmpty` and `CryptoError::KdfInfoMayBeEmpty`;
+  - RFC 5869 Appendix A cases 1-3 and Wycheproof HKDF-SHA256, HKDF-SHA384 and HKDF-SHA512 in the conformance suite.
 - `tls::PeerIdentity`, an application check on the peer's end-entity certificate, added with `with_peer_identity` on `ServerVerifierBuilder` (replacing the name check) and `ClientVerifierBuilder`; it runs after every crate check. On the client verifier it can only refuse; on the server verifier it is the only identity decision, so its `Ok` admits the peer whatever server name the client connected with. `tls::PeerLeaf::uri_names` refuses a leaf whose subjectAltName rustls-webpki cannot read in full, or whose URI entries the two parsers count differently. See [decision 0009](docs/decisions/0009-peer-identity-check.md).
 
 ### Changed
 
 - **Breaking:** `Algorithm` has a new variant, `Algorithm::Mac` (`Algorithm` is not `#[non_exhaustive]`).
-- **Breaking:** `ProfileSpec` has a new field, `macs`, and `Options` a new field, `cnsa1_unclassified_nss`, which admits HMAC-SHA256 under `cnsa1` under CNSSP 15 (2016) Annex B ¶2b, for UNCLASSIFIED NSS data and community-of-interest separation only. Struct literals must supply them, or use `..Options::default()`.
+- **Breaking:** `ProfileSpec` has a new field, `macs`, and `Options` a new field, `cnsa1_unclassified_nss`, which admits HMAC-SHA256 and HKDF-SHA256 under `cnsa1` under CNSSP 15 (2016) Annex B ¶2b, for UNCLASSIFIED NSS data and community-of-interest separation only. Struct literals must supply them, or use `..Options::default()`.
+- **Breaking:** `Algorithm` has a new variant, `Algorithm::Kdf`, and `ProfileSpec` a new field, `kdfs`.
+- **Breaking:** `sealbox::seal` and `sealbox::open` refuse an empty `domain` with the new `CryptoError::SealDomainEmpty`, before any key operation. The domain is the HKDF salt, and the module does not mark an HKDF call with an empty salt approved; a blob sealed under an empty domain by an earlier release no longer opens.
+- `AdmittedSelection` has a new field, `kdfs` (the type is unreleased).
 - `Options`' `Display` names each option set, joined with ", "; the existing strings are unchanged.
 
 ## [0.9.0] - 2026-10-30

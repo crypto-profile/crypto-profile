@@ -6,6 +6,7 @@ pub mod aead;
 pub mod csr;
 pub mod digest;
 pub mod fips;
+pub mod hkdf;
 pub mod hmac;
 pub mod peer_certificates;
 mod profiles;

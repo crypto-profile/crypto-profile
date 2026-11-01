@@ -3,8 +3,8 @@
 //! with the option) specify the refusal `resolve` gives; their lists are never compared with a
 //! resolved profile.
 use crate::{
-    Algorithm, CryptoError, Family, MacAlgorithm, Module, ModuleLine, Options, Profile,
-    SignatureAlgorithm, TlsSignatureScheme,
+    Algorithm, CryptoError, Family, KdfAlgorithm, MacAlgorithm, Module, ModuleLine, Options,
+    Profile, SignatureAlgorithm, TlsSignatureScheme,
 };
 
 /// One profile's lists, with or without the option.
@@ -341,6 +341,26 @@ pub const MAC_GOLDEN: [(Profile, &[MacAlgorithm], &[MacAlgorithm]); 7] = {
     ]
 };
 
+/// Each profile's KDFs with the `cnsa1_unclassified_nss` option off and on, in preference order.
+/// Every KDF cell is available on every module line, so these hold on each one.
+#[doc(hidden)]
+pub const KDF_GOLDEN: [(Profile, &[KdfAlgorithm], &[KdfAlgorithm]); 7] = {
+    use KdfAlgorithm::{HkdfSha256 as K256, HkdfSha384 as K384, HkdfSha512 as K512};
+    [
+        (
+            Profile::Unrestricted,
+            &[K512, K384, K256],
+            &[K512, K384, K256],
+        ),
+        (Profile::Preferred, &[K512, K384, K256], &[K512, K384, K256]),
+        (Profile::Cnsa2, &[K384, K512], &[K384, K512]),
+        (Profile::Cnsa1, &[K384], &[K384, K256]),
+        (Profile::Bsi, &[K512, K384, K256], &[K512, K384, K256]),
+        (Profile::Fips1403, &[K512, K384, K256], &[K512, K384, K256]),
+        (Profile::Fips1402, &[K512, K384, K256], &[K512, K384, K256]),
+    ]
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,6 +400,26 @@ mod tests {
                     };
                     let s = crate::profile::select_admitted(p, o, m);
                     assert_eq!(s.macs, want, "{m:?} {p} {unclassified}");
+                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn select_admitted_agrees_with_the_kdf_golden_rows_on_every_module() {
+        for (i, p) in Profile::ALL.into_iter().enumerate() {
+            assert_eq!(KDF_GOLDEN[i].0, p);
+        }
+        for m in [M3S, M3D, M4S, M4D] {
+            for (p, off, on) in KDF_GOLDEN {
+                for (unclassified, want) in [(false, off), (true, on)] {
+                    let o = Options {
+                        cnsa1_unclassified_nss: unclassified,
+                        ..Options::default()
+                    };
+                    let s = crate::profile::select_admitted(p, o, m);
+                    assert_eq!(s.kdfs, want, "{m:?} {p} {unclassified}");
                     assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
                 }
             }

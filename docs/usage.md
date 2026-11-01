@@ -17,7 +17,7 @@ Cargo resolves one aws-lc-rs 1.x per lockfile, so a single crate cannot offer bo
 
 Call `crypto::awslc_version()` for the exact runtime-linked AWS-LC release. This is separate from `certificate(MODULE)`, which reports the certified release and status.
 
-Every backend exposes the same module paths (`aead`, `csr`, `digest`, `fips`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
+Every backend exposes the same module paths (`aead`, `csr`, `digest`, `fips`, `hkdf`, `hmac`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
 
 ML-DSA is available only on the 4.x backend: aws-lc-rs 1.17.4 compiles its `pqdsa` module out under `fips` (`aws-lc-rs-1.17.4/src/lib.rs:283-284`), while 1.18.2 exposes `signature::ML_DSA_87_SIGNING` unconditionally (`aws-lc-rs-1.18.2/src/signature.rs:1177`). The capability table marks ML-DSA unavailable on 3.x, so the 3.x backend refuses it with `CryptoError::Unavailable` (`crypto-profile/src/capability.rs`, `three_x` and `ensure_available`).
 
@@ -62,7 +62,7 @@ The crate never claims:
 - that it is validated or certified itself;
 - that a deployment's operating system or processor is a tested operational environment. Both 3.x certificates list Amazon Linux 2023 only, on Graviton4 and Xeon Platinum 8375C, each with and without PAA (#5314 and #5298 security policies, Table 3, p. 7). Whether a deployment falls inside a certificate's operational environments is the deployer's determination.
 
-**The 4.x module** is submitted, in CMVP review, with no security policy published (AWS-LC `FIPS.md:56-60`; the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), read 2026-10-28). With no policy to cite, every 4.x static cell is `Approval::Unverified`. A 4.x dynamic cell is `Approval::AlgorithmTested { cavp }` where one AWS-LC FIPS 4.0.0 CAVP certificate (A7839-A7876) shows every operation the cell needs, and `Unverified` otherwise ([decision 0004](decisions/0004-algorithm-tested.md)). An `AlgorithmTested` cell claims only the parameters its `cavp` names; for a signature scheme, rustls verifies a wider range of peer keys (decision 0004 §5). 25 dynamic cells are `AlgorithmTested`, the three HMAC cells on A7855 among them, and 19 are `Unverified`: X25519 and the three hybrid groups, because CAVP has no algorithm for them; the ChaCha20 suites, because none exists; TLS 1.2 and TLS 1.3, because no certificate shows a TLS 1.2 KDF with extended master secret or a TLS 1.3 KDF; and the ECDSA keys and the AES-GCM suites, because no single certificate shows every operation they need. `certificate()` reports `CertStatus::InProcess` with no number (`crypto-profile/src/capability.rs`, `four_x`, `four_x_dynamic` and `certificate`). Neither `AlgorithmTested` nor `Unverified` is ever treated as approved (`Approval::is_approved`).
+**The 4.x module** is submitted, in CMVP review, with no security policy published (AWS-LC `FIPS.md:56-60`; the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), read 2026-10-28). With no policy to cite, every 4.x static cell is `Approval::Unverified`. A 4.x dynamic cell is `Approval::AlgorithmTested { cavp }` where one AWS-LC FIPS 4.0.0 CAVP certificate (A7839-A7876) shows every operation the cell needs, and `Unverified` otherwise ([decision 0004](decisions/0004-algorithm-tested.md)). An `AlgorithmTested` cell claims only the parameters its `cavp` names; for a signature scheme, rustls verifies a wider range of peer keys (decision 0004 §5). 28 dynamic cells are `AlgorithmTested`, the three HMAC and three HKDF cells on A7855 among them, and 19 are `Unverified`: X25519 and the three hybrid groups, because CAVP has no algorithm for them; the ChaCha20 suites, because none exists; TLS 1.2 and TLS 1.3, because no certificate shows a TLS 1.2 KDF with extended master secret or a TLS 1.3 KDF; and the ECDSA keys and the AES-GCM suites, because no single certificate shows every operation they need. `certificate()` reports `CertStatus::InProcess` with no number (`crypto-profile/src/capability.rs`, `four_x`, `four_x_dynamic` and `certificate`). Neither `AlgorithmTested` nor `Unverified` is ever treated as approved (`Approval::is_approved`).
 
 ## 4. Build prerequisites
 
@@ -179,7 +179,7 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile/src/backend_body/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
-- **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5).
+- **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5). `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`: the domain is the box's HKDF salt, and the module does not mark an HKDF call with an empty salt approved.
 - **Server session resumption and identity checks.** A resumed server session is not re-verified, so a configuration whose client verifier carries an identity check must not share `session_storage` or a `ticketer` with one whose check differs. Default stores are per configuration ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Identity checks that change over time.** A resumed session does not call the check again, so a check whose answer can change, such as a revocable allow-list, needs a new verifier and configuration when it changes, or resumption disabled ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Unauthenticated clients and identity checks.** With `allow_unauthenticated`, a client that presents no certificate is admitted without the identity check.
@@ -194,10 +194,11 @@ The 3.x backend compiles aws-lc-fips-sys 0.13.17, which bundles AWS-LC 3.6.0 sou
 
 ## 11. Secret-handling residuals
 
-The crate holds secret material in zeroizing buffers that are sized at allocation and never grow. `signature::KeyPair::generate` generates through aws-lc-rs, which returns the new key's PKCS#8 encoding in a container that zeroizes on drop (`aws-lc-rs-1.18.2/src/pkcs8.rs:30-34`, `src/buffer.rs:22-28`); `generate` copies the encoding into the crate's zeroizing buffer before that container drops. aws-lc wipes its own allocations, the key structure among them, when it frees them, unless an application has installed its own allocator (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/mem.c:224-248`). Two places fall outside that, and a contributor must not widen them:
+The crate holds secret material in zeroizing buffers that are sized at allocation and never grow. `signature::KeyPair::generate` generates through aws-lc-rs, which returns the new key's PKCS#8 encoding in a container that zeroizes on drop (`aws-lc-rs-1.18.2/src/pkcs8.rs:30-34`, `src/buffer.rs:22-28`); `generate` copies the encoding into the crate's zeroizing buffer before that container drops. aws-lc wipes its own allocations, the key structure among them, when it frees them, unless an application has installed its own allocator (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/mem.c:224-248`). Three places fall outside that, and a contributor must not widen them:
 
 - **Keys handed to rustls.** A `PrivateKeyDer` passed to `tls::load_private_key`, or to a rustls configuration, is rustls's to hold and drop; so is the copy of a `KeyPair`'s PKCS#8 encoding that `Resolved::certified_key` loads.
 - **HMAC key state.** An `hmac::Key` holds the module's HMAC context, which `HMAC_CTX_cleanup` clears with `OPENSSL_cleanse` when the key drops (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hmac/hmac.c:331-334`; 0.13.17 `:310-313`). aws-lc-rs builds that context on the stack and moves it into its key (`aws-lc-rs-1.18.2/src/hmac.rs:301-318`), and `hmac::Key::new` moves it again; each move can leave a copy of the keyed hash state, which nothing clears. The slice passed to `hmac::Key::new` stays the caller's.
+- **HKDF inside the module.** `hkdf::derive` returns a `DerivedKey` that is `Zeroizing` from allocation. aws-lc-rs copies the secret into a buffer it wipes on drop (`aws-lc-rs-1.18.2/src/hkdf.rs:181`, `:293`), and the pseudorandom key exists only inside the module's one-shot `HKDF()`. SP 800-56C Rev. 2 §5 requires that key to "be destroyed (along with all other sensitive, locally stored data) after its use" (p. 20). The 4.x module meets that: `HKDF()` calls `OPENSSL_cleanse` on it on every exit (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:50`). The 3.x module does not: `HKDF()` returns with it still in a stack buffer it never cleanses (`aws-lc-fips-sys-0.13.17/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:32-56`), and the crate cannot fix that without changing the validated module. aws-lc-rs copies the salt and `info` into buffers it does not wipe (`aws-lc-rs-1.18.2/src/hkdf.rs:132`, `:440-465`). SP 800-56C Rev. 2 §5.1 and RFC 5869 §3.1 allow a secret salt, but this crate supports only a non-secret salt and a non-secret `info`: put no secret in either. The secret slice stays the caller's.
 
 A further residual holds no secret material:
 
@@ -219,6 +220,7 @@ The conformance suite (`crypto-profile/src/conformance/`, run by every backend) 
 | ML-DSA-87 verification | Wycheproof, the cases with an empty context only; the backend verifies under the empty context |
 | AES-256-GCM | Wycheproof, 256-bit keys with 96-bit nonces and 128-bit tags, opening only |
 | HMAC-SHA256, HMAC-SHA384, HMAC-SHA512 | Wycheproof: full-length tags sign and verify, or are refused when invalid; truncated tags are refused, and the valid ones match the leading bytes of the full tag |
+| HKDF-SHA256, HKDF-SHA384, HKDF-SHA512 | RFC 5869 Appendix A cases 1-3 (SHA-256); Wycheproof: every valid case derives under `unrestricted`, and under every other profile that admits the hash when `info` is non-empty (empty-`info` cases are refused with `KdfInfoEmpty`), and outputs over 255 × HashLen are refused |
 | SHA-256, SHA-384, SHA-512 | NIST CAVP byte-oriented short messages |
 | Sealed box | a version-1 known-answer blob from an independent implementation, which must open unchanged |
 
@@ -245,6 +247,29 @@ key.verify(message, tag.as_ref())?;
 - **Admission.** `admit` gives the profile's MACs on the module, independently of `resolve`, and never refuses. `hmac::Key::new` refuses a MAC the profile does not admit with `CryptoError::NotInProfile`, then a key outside the profile's range with `CryptoError::MacKeyLength` ([`profiles.md`](profiles.md) §10). A MAC the module line lacks is refused with `CryptoError::Unavailable`. `cnsa2` refuses HMAC-SHA256.
 - **Comparing tags.** `Key::verify` compares in constant time, and refuses a tag of any other length with `CryptoError::MacVerify`, whatever the cause. It is the only constant-time comparison: comparing `Tag::as_ref()` bytes directly is not one, and `Tag` has no `==`.
 - **Full-length tags only.** The crate offers no truncation.
-- **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
-- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC the profile does not admit. Read it through `profile()`, `options()`, `macs()` and `excluded()`.
+- **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 and HKDF-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
+- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC or KDF the profile does not admit. Read it through `profile()`, `options()`, `macs()`, `kdfs()` and `excluded()`.
+- **Under `unrestricted`.** `assert_admitted_approved` refuses with `CryptoError::KdfInfoMayBeEmpty`, because the profile admits an empty HKDF `info`, even if only HMAC is used (§14).
 - **Panics.** `Key::new`, `sign` and `verify` panic only if the module's HMAC context fails, as aws-lc-rs's do.
+
+## 14. HKDF under a profile
+
+```rust
+use crypto_profile_awslc4::{KdfAlgorithm, Options, Profile, admit, assert_admitted_approved, hkdf};
+
+let admitted = admit(Profile::Fips1403, Options::default());
+assert_admitted_approved(&admitted)?; // refuses on 4.x today; see profiles.md §11
+let mut info = b"example-app v1 session key".to_vec();
+info.extend_from_slice(&client_public_key);
+info.extend_from_slice(&server_public_key);
+let key = hkdf::derive(&admitted, KdfAlgorithm::HkdfSha384, &shared_secret, None, &info, 32)?;
+let key_bytes: &[u8] = key.as_bytes();
+```
+
+- **One call.** `derive` extracts and expands; the pseudorandom key is never returned. There is no separate extract or expand.
+- **What belongs in `info`.** What the key is for and who it is between: a purpose label, the parties' identifiers, and the public keys each contributed (SP 800-56A Rev. 3 §5.8.2). Every profile but `unrestricted` refuses an empty `info` with `CryptoError::KdfInfoEmpty`, because the module does not mark such a call approved.
+- **Salt.** Pass `None` unless the protocol defines a salt; `None` and an empty salt both mean RFC 5869's default, HashLen zero bytes. The standards allow a secret salt, but the salt and `info` are copied without wiping, so pass neither a secret (§11).
+- **Lengths.** 1 to 255 × HashLen bytes of output (`CryptoError::KdfOutputLength` otherwise); any non-empty secret (`CryptoError::KdfSecretEmpty` for an empty one).
+- **The derived key** is zeroized on drop, and its `Debug` prints only its length.
+- **Refusals** come in order: admission, `info`, output length, secret.
+- **`assert_admitted_approved` refuses `unrestricted`** with `CryptoError::KdfInfoMayBeEmpty`, on both module lines: `unrestricted` admits an empty `info`, which the module does not approve. It promises no approval; it also admits entries no module approves (X25519, ChaCha20-Poly1305), so `assert_module_approves` could never pass it either. `derive` under `unrestricted` still derives with an empty `info`. Use another profile where approval matters.

@@ -68,6 +68,13 @@ fn derive_key(
     Aes256GcmKey::new(&key)
 }
 
+fn check_domain(domain: &[u8]) -> Result<(), CryptoError> {
+    if domain.is_empty() {
+        return Err(CryptoError::SealDomainEmpty);
+    }
+    Ok(())
+}
+
 fn check_plaintext(plaintext: &[u8]) -> Result<(), CryptoError> {
     if plaintext.is_empty() {
         return Err(CryptoError::SealPlaintext);
@@ -75,14 +82,17 @@ fn check_plaintext(plaintext: &[u8]) -> Result<(), CryptoError> {
     Ok(())
 }
 
-/// Seals a non-empty `plaintext` to `recipient` under `domain`, authenticating `aad`.
+/// Seals a non-empty `plaintext` to `recipient` under a non-empty `domain`, authenticating `aad`.
+/// Refuses an empty `domain` with `CryptoError::SealDomainEmpty`.
 pub fn seal(
     recipient: &PublicKey,
     domain: &[u8],
     aad: &[u8],
     plaintext: &[u8],
 ) -> Result<SealedBlob, CryptoError> {
-    assert_fips_module().and_then(|()| check_plaintext(plaintext))?;
+    assert_fips_module()
+        .and_then(|()| check_domain(domain))
+        .and_then(|()| check_plaintext(plaintext))?;
     let generated = EphemeralPrivateKey::generate(&ECDH_P384, &SystemRandom::new());
     let ephemeral = generated.map_err(|_| CryptoError::Primitive)?;
     let computed = ephemeral.compute_public_key();
@@ -105,14 +115,17 @@ pub fn seal(
     Ok(SealedBlob(std::mem::take(&mut *out)))
 }
 
-/// Opens a blob sealed to `recipient` under `domain` and `aad`.
+/// Opens a blob sealed to `recipient` under `domain` and `aad`. Refuses an empty `domain` with
+/// `CryptoError::SealDomainEmpty` before reading the blob.
 pub fn open(
     recipient: &PrivateKey,
     domain: &[u8],
     aad: &[u8],
     blob: &[u8],
 ) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-    let parts = assert_fips_module().and_then(|()| parse_blob(blob))?;
+    let parts = assert_fips_module()
+        .and_then(|()| check_domain(domain))
+        .and_then(|()| parse_blob(blob))?;
     let peer = ParsedPublicKey::try_from(UnparsedPublicKey::new(&ECDH_P384, parts.ephemeral));
     let ephemeral = peer.map_err(|_| CryptoError::SealEphemeralKey)?;
     let derive =
@@ -202,6 +215,24 @@ mod tests {
         assert!(matches!(
             open(&key, b"domain-b", b"aad", blob.as_bytes()),
             Err(CryptoError::SealOpen)
+        ));
+    }
+
+    #[test]
+    fn an_empty_domain_is_refused_by_seal_and_by_open() {
+        let key = PrivateKey::generate().unwrap();
+        assert!(matches!(
+            seal(key.public_key(), b"", b"aad", b"secret"),
+            Err(CryptoError::SealDomainEmpty)
+        ));
+        let blob = seal(key.public_key(), DOMAIN, b"aad", b"secret").unwrap();
+        assert!(matches!(
+            open(&key, b"", b"aad", blob.as_bytes()),
+            Err(CryptoError::SealDomainEmpty)
+        ));
+        assert!(matches!(
+            open(&key, b"", b"aad", b""),
+            Err(CryptoError::SealDomainEmpty)
         ));
     }
 

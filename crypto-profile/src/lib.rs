@@ -11,8 +11,8 @@ pub use peer_certificate::{
 };
 
 pub use algorithm::{
-    Algorithm, CipherSuite, HashAlgorithm, KxGroup, MacAlgorithm, ParseAlgorithmError,
-    SignatureAlgorithm, TlsSignatureScheme, TlsVersion,
+    Algorithm, CipherSuite, HashAlgorithm, KdfAlgorithm, KxGroup, MacAlgorithm,
+    ParseAlgorithmError, SignatureAlgorithm, TlsSignatureScheme, TlsVersion,
 };
 pub use error::{CryptoError, CsrError, Family, PeerVerifierIdentity, TlsError};
 
@@ -24,7 +24,7 @@ pub use capability::{
 pub mod profile;
 pub use profile::{
     AdmittedSelection, GoverningText, MAC_KEY_MAX_BITS, Options, ParseProfileError, Profile,
-    ProfileSpec, mac_key_floor_bits, select_admitted,
+    ProfileSpec, kdf_info_may_be_empty, mac_key_floor_bits, select_admitted,
 };
 #[cfg(feature = "conformance")]
 pub mod conformance;

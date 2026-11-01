@@ -2,7 +2,7 @@
 //! admits. A profile is an algorithm set, not a validation claim; whether the running module is
 //! validated for it is a separate check.
 use crate::algorithm::{
-    Algorithm, CipherSuite as C, KxGroup as K, MacAlgorithm, SignatureAlgorithm as S,
+    Algorithm, CipherSuite as C, KdfAlgorithm, KxGroup as K, MacAlgorithm, SignatureAlgorithm as S,
     TlsSignatureScheme as T, TlsVersion as V,
 };
 use crate::capability::{Module, capability};
@@ -154,7 +154,7 @@ impl FromStr for Profile {
 }
 
 /// Options applied on top of any profile. The default changes nothing; `cnsa1_unclassified_nss`
-/// widens `cnsa1`'s MACs, and the others narrow.
+/// widens `cnsa1`'s MACs and KDFs, and the others narrow.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Options {
     /// Keep only post-quantum key exchange (pure ML-KEM and hybrid groups), and so remove TLS 1.2,
@@ -162,10 +162,10 @@ pub struct Options {
     pub pq_key_exchange_required: bool,
     /// Require peer leaf keys and certification paths to match the profile. Off by default.
     pub peer_certificates_match_profile: bool,
-    /// Admit HMAC-SHA256 under `cnsa1`, as CNSSP 15 (20 October 2016) Annex B ¶2b (p. B-2) allows
-    /// in the near term for UNCLASSIFIED NSS data and community-of-interest separation only.
-    /// Ignored by every other profile, and by every family but message authentication. Off by
-    /// default.
+    /// Admit HMAC-SHA256 and HKDF-SHA256 under `cnsa1`, as CNSSP 15 (20 October 2016) Annex B
+    /// ¶2b (p. B-2) allows SHA-256 in the near term for UNCLASSIFIED NSS data and
+    /// community-of-interest separation only. Ignored by every other profile, and by every family
+    /// but message authentication and key derivation. Off by default.
     pub cnsa1_unclassified_nss: bool,
 }
 
@@ -208,6 +208,8 @@ pub struct ProfileSpec {
     pub key_algorithms: &'static [S],
     /// Message authentication codes, for `hmac`; admitted through `admit`, not `resolve`.
     pub macs: &'static [MacAlgorithm],
+    /// Key-derivation functions, for `hkdf`; admitted through `admit`, not `resolve`.
+    pub kdfs: &'static [KdfAlgorithm],
 }
 
 impl Profile {
@@ -230,6 +232,7 @@ impl Profile {
 /// - Versions: TLS 1.3, TLS 1.2. Suites: all nine. Groups: all seven. Schemes: all eleven. Keys:
 ///   all nine (`crypto_profile::algorithm`, each family's `ALL`).
 /// - MACs: every HMAC in the inventory.
+/// - KDFs: every HKDF in the inventory.
 pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -281,6 +284,11 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
         MacAlgorithm::HmacSha384,
         MacAlgorithm::HmacSha256,
     ],
+    kdfs: &[
+        KdfAlgorithm::HkdfSha512,
+        KdfAlgorithm::HkdfSha384,
+        KdfAlgorithm::HkdfSha256,
+    ],
 };
 
 /// `preferred`: the crate's recommendation. Not a government profile; see `docs/profiles.md`.
@@ -306,6 +314,10 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 /// - MACs: HMAC with SHA-2 for IPsec and TLS, ISM-1772 (p. 15), ISM-0998 (p. 16) and ISM-1375
 ///   (p. 20); SHA-2 output of at least 224 bits, ISM-1766 (p. 11). HMAC-SHA256 "will not be
 ///   approved beyond 2030" (pp. 15-16).
+/// - KDFs: HKDF, the two-step method of SP 800-56C Rev. 2 §5, of which RFC 5869 "specifies a
+///   version" (SP 800-56C Rev. 2, p. 20); the ISM cites SP 800-56C Rev. 2 for combining hybrid
+///   key-encapsulation components (p. 13). SHA-2 output of at least 224 bits, ISM-1766 (p. 11);
+///   SHA-256 "will not be approved beyond 2030" (p. 11). Decision 0010.
 pub const PREFERRED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384, C::Tls13Aes128GcmSha256],
@@ -340,6 +352,11 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
         MacAlgorithm::HmacSha384,
         MacAlgorithm::HmacSha256,
     ],
+    kdfs: &[
+        KdfAlgorithm::HkdfSha512,
+        KdfAlgorithm::HkdfSha384,
+        KdfAlgorithm::HkdfSha256,
+    ],
 };
 
 /// `cnsa2`: the CNSA 2.0 algorithm set of CNSSP 15 (December 2024), Annex B, pp. B-1 to B-2, on
@@ -352,6 +369,8 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
 /// - MACs: hash "SHA-384 or SHA-512", Annex B p. B-1; protocol guidance RFC 9206 and RFC 9151,
 ///   ¶8a and fn. 1 (p. 5); RFC 9206 §4 (SHA-384 "for all purposes") and §8 (PRF_HMAC_SHA2_384 or
 ///   PRF_HMAC_SHA2_512 only).
+/// - KDFs: CNSSP 15 names no KDF. ¶8a (p. 5) names RFC 9151, whose §4 approves SHA-384 for HKDF
+///   in TLS 1.3; Annex B (p. B-1) admits SHA-384 and SHA-512. Decision 0010.
 pub const CNSA2: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384],
@@ -359,6 +378,7 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
     signature_schemes: &[T::MlDsa87],
     key_algorithms: &[S::MlDsa87],
     macs: &[MacAlgorithm::HmacSha384, MacAlgorithm::HmacSha512],
+    kdfs: &[KdfAlgorithm::HkdfSha384, KdfAlgorithm::HkdfSha512],
 };
 
 /// `cnsa1`: the CNSA 1.0 algorithm set of CNSSP 15 (20 October 2016), Annex B (p. B-1), in the
@@ -377,6 +397,8 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
 ///   TLS_DHE_RSA_WITH_AES_256_GCM_SHA384 (§6), ffdhe3072 and ffdhe4096 (§5.3, §7).
 /// - MACs: hash "Use SHA-384", Annex B p. B-1; RFC 9151 §4 (SHA-384 for the TLS 1.2 PRF and the
 ///   TLS 1.3 HKDF). `Options::cnsa1_unclassified_nss` adds HMAC-SHA256 under ¶2b (p. B-2).
+/// - KDFs: hash "Use SHA-384", Annex B p. B-1; RFC 9151 §4 (HKDF with SHA-384 in TLS 1.3).
+///   `Options::cnsa1_unclassified_nss` adds HKDF-SHA256 under ¶2b (p. B-2).
 pub const CNSA1: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -388,6 +410,7 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
     signature_schemes: &[T::EcdsaNistp384Sha384, T::RsaPssSha384, T::RsaPkcs1Sha384],
     key_algorithms: &[S::EcdsaP384Sha384, S::Rsa3072Sha384, S::Rsa4096Sha384],
     macs: &[MacAlgorithm::HmacSha384],
+    kdfs: &[KdfAlgorithm::HkdfSha384],
 };
 
 /// `bsi`: BSI TR-02102-2 (TLS) and TR-02102-1, version 2026-01.
@@ -403,6 +426,8 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
 /// - ML-DSA excluded: TR-02102-1 §5.3.4.
 /// - Hybrid groups excluded: TR-02102-2 Table 10 note.
 /// - MACs: HMAC with a Table 4.1 hash (TR-02102-1 §5.2, pp. 49-50; Table 4.1, p. 47).
+/// - KDFs: HKDF (RFC 5869) and the SP 800-56C two-step KDF, TR-02102-1 Table B.1 and §B.1.1
+///   (p. 73), with a Table 4.1 hash (p. 47).
 pub const BSI: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -427,6 +452,11 @@ pub const BSI: ProfileSpec = ProfileSpec {
         MacAlgorithm::HmacSha512,
         MacAlgorithm::HmacSha384,
         MacAlgorithm::HmacSha256,
+    ],
+    kdfs: &[
+        KdfAlgorithm::HkdfSha512,
+        KdfAlgorithm::HkdfSha384,
+        KdfAlgorithm::HkdfSha256,
     ],
 };
 
@@ -456,6 +486,8 @@ pub const BSI: ProfileSpec = ProfileSpec {
 /// - RSA 2048, 3072, 4096 keys: FIPS 186-5 §5.1; SP 800-131A r2 Table 2.
 /// - ML-DSA-87 scheme and key: SP 800-140C list §6.2.3.1 (FIPS 204).
 /// - MACs: FIPS 198-1 with SHA-2; SP 800-131A r2 Table 8 (p. 18) and Table 9 (p. 20).
+/// - KDFs: HKDF as the two-step method of SP 800-56C Rev. 2 §5 (pp. 17-20); SP 800-131A r2 §6
+///   (p. 12).
 pub const FIPS1403: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -503,6 +535,11 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
         MacAlgorithm::HmacSha384,
         MacAlgorithm::HmacSha256,
     ],
+    kdfs: &[
+        KdfAlgorithm::HkdfSha512,
+        KdfAlgorithm::HkdfSha384,
+        KdfAlgorithm::HkdfSha256,
+    ],
 };
 
 /// `fips1402`: FIPS 140-2 Annex A and Annex D (2021-10-12 editions), FIPS 186-4, SP 800-131A r2
@@ -520,6 +557,8 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
 ///   (pp. 29-30).
 /// - RSA 3072 and 2048 keys: FIPS 186-4 §5.1; RSA 4096: FIPS 140-2 IG A.14 (p. 221).
 /// - MACs: FIPS 140-2 Annex A, Message Authentication 3 (p. 3); SP 800-131A r2 Table 9 (p. 20).
+/// - KDFs: FIPS 140-2 Annex D (p. 1) items 12 and 13, SP 800-56C Rev. 1 and SP 800-56C (2011),
+///   each specifying extraction-then-expansion.
 pub const FIPS1402: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -555,6 +594,11 @@ pub const FIPS1402: ProfileSpec = ProfileSpec {
         MacAlgorithm::HmacSha512,
         MacAlgorithm::HmacSha384,
         MacAlgorithm::HmacSha256,
+    ],
+    kdfs: &[
+        KdfAlgorithm::HkdfSha512,
+        KdfAlgorithm::HkdfSha384,
+        KdfAlgorithm::HkdfSha256,
     ],
 };
 
@@ -664,6 +708,8 @@ fn select_spec(
 pub struct AdmittedSelection {
     /// Message authentication codes.
     pub macs: Vec<MacAlgorithm>,
+    /// Key-derivation functions.
+    pub kdfs: Vec<KdfAlgorithm>,
     /// Entries unavailable on the module line, in family and preference order.
     pub excluded: Vec<Algorithm>,
 }
@@ -683,18 +729,34 @@ fn select_admitted_with(
     available: impl Fn(Algorithm) -> bool,
 ) -> AdmittedSelection {
     let mut macs = spec.macs.to_vec();
+    let mut kdfs = spec.kdfs.to_vec();
     if options.cnsa1_unclassified_nss {
         macs.extend_from_slice(unclassified_nss_macs(profile));
+        kdfs.extend_from_slice(unclassified_nss_kdfs(profile));
     }
     let mut excluded = Vec::new();
-    macs.retain(|m| {
-        let on = available(Algorithm::Mac(*m));
+    retain_available(&mut macs, Algorithm::Mac, &available, &mut excluded);
+    retain_available(&mut kdfs, Algorithm::Kdf, &available, &mut excluded);
+    AdmittedSelection {
+        macs,
+        kdfs,
+        excluded,
+    }
+}
+
+fn retain_available<X: Copy>(
+    xs: &mut Vec<X>,
+    tag: fn(X) -> Algorithm,
+    available: &impl Fn(Algorithm) -> bool,
+    excluded: &mut Vec<Algorithm>,
+) {
+    xs.retain(|x| {
+        let on = available(tag(*x));
         if !on {
-            excluded.push(Algorithm::Mac(*m));
+            excluded.push(tag(*x));
         }
         on
     });
-    AdmittedSelection { macs, excluded }
 }
 
 const fn unclassified_nss_macs(p: Profile) -> &'static [MacAlgorithm] {
@@ -706,6 +768,33 @@ const fn unclassified_nss_macs(p: Profile) -> &'static [MacAlgorithm] {
         | Profile::Bsi
         | Profile::Fips1403
         | Profile::Fips1402 => &[],
+    }
+}
+
+const fn unclassified_nss_kdfs(p: Profile) -> &'static [KdfAlgorithm] {
+    match p {
+        Profile::Cnsa1 => &[KdfAlgorithm::HkdfSha256],
+        Profile::Unrestricted
+        | Profile::Preferred
+        | Profile::Cnsa2
+        | Profile::Bsi
+        | Profile::Fips1403
+        | Profile::Fips1402 => &[],
+    }
+}
+
+/// Whether `profile` admits an empty HKDF `info`: `unrestricted` only, which makes no approval
+/// claim. The module does not mark an HKDF call with an empty `info` approved (AWS-LC
+/// `HKDF_verify_service_indicator`), so every other profile refuses one (decision 0010).
+pub const fn kdf_info_may_be_empty(profile: Profile) -> bool {
+    match profile {
+        Profile::Unrestricted => true,
+        Profile::Preferred
+        | Profile::Cnsa2
+        | Profile::Cnsa1
+        | Profile::Bsi
+        | Profile::Fips1403
+        | Profile::Fips1402 => false,
     }
 }
 
@@ -786,6 +875,8 @@ mod tests {
             no_duplicates(s.kx_groups);
             no_duplicates(s.signature_schemes);
             no_duplicates(s.key_algorithms);
+            no_duplicates(s.macs);
+            no_duplicates(s.kdfs);
             assert!(!s.versions.is_empty() && !s.kx_groups.is_empty(), "{p}");
             assert!(
                 !s.signature_schemes.is_empty() && !s.key_algorithms.is_empty(),
@@ -911,6 +1002,7 @@ mod tests {
             signature_schemes: &[],
             key_algorithms: &[],
             macs: &[],
+            kdfs: &[],
         };
         let empty = |category| {
             Err(CryptoError::EmptyProfile {
@@ -1294,11 +1386,16 @@ mod tests {
 
     #[test]
     fn select_admitted_never_refuses_an_empty_family() {
-        let spec = ProfileSpec { macs: &[], ..BSI };
+        let spec = ProfileSpec {
+            macs: &[],
+            kdfs: &[],
+            ..BSI
+        };
         assert_eq!(
             select_admitted_with(Profile::Bsi, &spec, Options::default(), |_| true),
             AdmittedSelection {
                 macs: vec![],
+                kdfs: vec![],
                 excluded: vec![],
             }
         );
@@ -1306,14 +1403,16 @@ mod tests {
 
     #[test]
     fn select_admitted_records_what_the_module_lacks() {
+        use KdfAlgorithm as K;
         use MacAlgorithm as M;
         assert_eq!(
             select_admitted_with(Profile::Fips1403, &FIPS1403, Options::default(), |a| {
-                a != Algorithm::Mac(M::HmacSha384)
+                a != Algorithm::Mac(M::HmacSha384) && a != Algorithm::Kdf(K::HkdfSha512)
             }),
             AdmittedSelection {
                 macs: vec![M::HmacSha512, M::HmacSha256],
-                excluded: vec![Algorithm::Mac(M::HmacSha384)],
+                kdfs: vec![K::HkdfSha384, K::HkdfSha256],
+                excluded: vec![Algorithm::Mac(M::HmacSha384), Algorithm::Kdf(K::HkdfSha512)],
             }
         );
     }
@@ -1330,6 +1429,37 @@ mod tests {
                 want.push(MacAlgorithm::HmacSha256);
             }
             assert_eq!(select_admitted(p, on, M4S).macs, want, "{p}");
+        }
+    }
+
+    #[test]
+    fn the_unclassified_nss_option_adds_hkdf_sha256_to_cnsa1_only() {
+        let on = Options {
+            cnsa1_unclassified_nss: true,
+            ..Options::default()
+        };
+        for p in Profile::ALL {
+            let mut want = select_admitted(p, Options::default(), M4S).kdfs;
+            if p == Profile::Cnsa1 {
+                want.push(KdfAlgorithm::HkdfSha256);
+            }
+            assert_eq!(select_admitted(p, on, M4S).kdfs, want, "{p}");
+        }
+    }
+
+    #[test]
+    fn an_empty_kdf_info_is_admitted_under_unrestricted_only() {
+        for p in Profile::ALL {
+            let may = match p {
+                Profile::Unrestricted => true,
+                Profile::Preferred
+                | Profile::Cnsa2
+                | Profile::Cnsa1
+                | Profile::Bsi
+                | Profile::Fips1403
+                | Profile::Fips1402 => false,
+            };
+            assert_eq!(kdf_info_may_be_empty(p), may, "{p}");
         }
     }
 

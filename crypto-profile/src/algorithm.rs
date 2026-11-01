@@ -541,6 +541,50 @@ impl MacAlgorithm {
     }
 }
 
+/// A key-derivation function.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum KdfAlgorithm {
+    /// HKDF with SHA-256 (RFC 5869; SP 800-56C Rev. 2 §5).
+    HkdfSha256,
+    /// HKDF with SHA-384 (RFC 5869; SP 800-56C Rev. 2 §5).
+    HkdfSha384,
+    /// HKDF with SHA-512 (RFC 5869; SP 800-56C Rev. 2 §5).
+    HkdfSha512,
+}
+
+impl KdfAlgorithm {
+    /// Every key-derivation function.
+    pub const ALL: [KdfAlgorithm; 3] = [
+        KdfAlgorithm::HkdfSha256,
+        KdfAlgorithm::HkdfSha384,
+        KdfAlgorithm::HkdfSha512,
+    ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            KdfAlgorithm::HkdfSha256 => 0,
+            KdfAlgorithm::HkdfSha384 => 1,
+            KdfAlgorithm::HkdfSha512 => 2,
+        }
+    }
+
+    /// The hash function HKDF's HMAC is built on.
+    pub const fn hash(self) -> HashAlgorithm {
+        match self {
+            KdfAlgorithm::HkdfSha256 => HashAlgorithm::Sha256,
+            KdfAlgorithm::HkdfSha384 => HashAlgorithm::Sha384,
+            KdfAlgorithm::HkdfSha512 => HashAlgorithm::Sha512,
+        }
+    }
+
+    /// The longest output in bytes: 255 times the hash length (RFC 5869 §2.3).
+    pub const fn max_output_len(self) -> usize {
+        255 * self.hash().output_len()
+    }
+}
+
 /// A TLS protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TlsVersion {
@@ -589,6 +633,8 @@ pub enum Algorithm {
     Protocol(TlsVersion),
     /// A message authentication code.
     Mac(MacAlgorithm),
+    /// A key-derivation function.
+    Kdf(KdfAlgorithm),
 }
 
 impl Algorithm {
@@ -602,6 +648,7 @@ impl Algorithm {
         v.extend(HashAlgorithm::ALL.map(Algorithm::Hash));
         v.extend(TlsVersion::ALL.map(Algorithm::Protocol));
         v.extend(MacAlgorithm::ALL.map(Algorithm::Mac));
+        v.extend(KdfAlgorithm::ALL.map(Algorithm::Kdf));
         v
     }
 }
@@ -789,13 +836,18 @@ mod tests {
             + CipherSuite::ALL.len()
             + HashAlgorithm::ALL.len()
             + TlsVersion::ALL.len()
-            + MacAlgorithm::ALL.len();
+            + MacAlgorithm::ALL.len()
+            + KdfAlgorithm::ALL.len();
         assert_eq!(all.len(), expected);
-        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3);
+        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3 + 3);
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
-        assert_eq!(all[all.len() - 3..], MacAlgorithm::ALL.map(Algorithm::Mac));
+        assert_eq!(
+            all[all.len() - 6..all.len() - 3],
+            MacAlgorithm::ALL.map(Algorithm::Mac)
+        );
+        assert_eq!(all[all.len() - 3..], KdfAlgorithm::ALL.map(Algorithm::Kdf));
     }
 
     #[test]
@@ -818,6 +870,31 @@ mod tests {
             HashAlgorithm::ALL
         );
         assert_eq!(MacAlgorithm::ALL.map(MacAlgorithm::tag_len), [32, 48, 64]);
+    }
+
+    #[test]
+    fn kdf_algorithm_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            KdfAlgorithm::ALL,
+            [
+                KdfAlgorithm::HkdfSha256,
+                KdfAlgorithm::HkdfSha384,
+                KdfAlgorithm::HkdfSha512
+            ]
+        );
+        assert_eq!(KdfAlgorithm::ALL.map(KdfAlgorithm::ordinal), [0, 1, 2]);
+    }
+
+    #[test]
+    fn each_kdf_names_its_hash_and_rfc_5869s_output_limit() {
+        assert_eq!(
+            KdfAlgorithm::ALL.map(KdfAlgorithm::hash),
+            HashAlgorithm::ALL
+        );
+        assert_eq!(
+            KdfAlgorithm::ALL.map(KdfAlgorithm::max_output_len),
+            [8160, 12240, 16320]
+        );
     }
 
     #[test]

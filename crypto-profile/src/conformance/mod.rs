@@ -307,6 +307,42 @@ mod tests {
     }
 
     #[test]
+    fn kdf_cases_carry_every_field() {
+        assert!(__wycheproof_kdf_cases("not json").is_empty());
+        let kdf = __wycheproof_kdf_cases(vectors::HKDF_SHA256);
+        assert_eq!(kdf.len(), 86);
+        let first = &kdf[0];
+        assert_eq!(
+            (
+                first.tc_id,
+                first.ikm.len(),
+                first.salt.len(),
+                first.info.len(),
+                first.size,
+                first.okm.len()
+            ),
+            (1, 22, 13, 10, 42, 42)
+        );
+        assert_eq!(first.result, "valid");
+        for (file, total, too_large) in [
+            (vectors::HKDF_SHA256, 86, 8161),
+            (vectors::HKDF_SHA384, 83, 12241),
+            (vectors::HKDF_SHA512, 83, 16321),
+        ] {
+            let kdf = __wycheproof_kdf_cases(file);
+            assert_eq!(kdf.len(), total);
+            let invalid: Vec<&KdfCase> = kdf.iter().filter(|c| c.result == "invalid").collect();
+            assert_eq!(invalid.len(), 3, "{too_large}");
+            assert!(
+                invalid
+                    .iter()
+                    .all(|c| c.size == too_large && c.okm.is_empty() && !c.info.is_empty()),
+                "{too_large}"
+            );
+        }
+    }
+
+    #[test]
     fn aead_cases_keep_only_the_named_sizes() {
         let file = r#"{"testGroups":[
             {"keySize":128,"ivSize":96,"tagSize":128,"tests":[{"tcId":1,"key":"00","iv":"00","aad":"","msg":"","ct":"","tag":"00","result":"valid"}]},
@@ -369,6 +405,48 @@ pub fn __wycheproof_mac_cases(file: &str) -> Vec<MacCase> {
     out
 }
 
+/// One Wycheproof HKDF test.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct KdfCase {
+    /// The input keying material.
+    pub ikm: Vec<u8>,
+    /// The salt; empty when the case has none.
+    pub salt: Vec<u8>,
+    /// The info.
+    pub info: Vec<u8>,
+    /// The output length in bytes.
+    pub size: usize,
+    /// The expected output; empty for an invalid case.
+    pub okm: Vec<u8>,
+    /// `valid` or `invalid`.
+    pub result: String,
+    /// The Wycheproof test-case id.
+    pub tc_id: u64,
+}
+
+/// Every case of a Wycheproof HKDF file.
+#[doc(hidden)]
+pub fn __wycheproof_kdf_cases(file: &str) -> Vec<KdfCase> {
+    let v: serde_json::Value = serde_json::from_str(file).unwrap_or_default();
+    let d = |x: &serde_json::Value| hex::decode(x.as_str().unwrap_or_default()).unwrap_or_default();
+    let mut out = Vec::new();
+    for g in v["testGroups"].as_array().into_iter().flatten() {
+        for t in g["tests"].as_array().into_iter().flatten() {
+            out.push(KdfCase {
+                ikm: d(&t["ikm"]),
+                salt: d(&t["salt"]),
+                info: d(&t["info"]),
+                size: t["size"].as_u64().unwrap_or_default() as usize,
+                okm: d(&t["okm"]),
+                result: t["result"].as_str().unwrap_or_default().to_string(),
+                tc_id: t["tcId"].as_u64().unwrap_or_default(),
+            });
+        }
+    }
+    out
+}
+
 /// Known-answer data every backend's conformance run checks.
 pub mod vectors {
     /// Wycheproof ECDSA P-256 / SHA-256.
@@ -399,6 +477,14 @@ pub mod vectors {
     pub const HMAC_SHA384: &str = include_str!("vectors/hmac_sha384_test.json");
     /// Wycheproof HMAC-SHA512.
     pub const HMAC_SHA512: &str = include_str!("vectors/hmac_sha512_test.json");
+    /// RFC 5869 HKDF-SHA256 test cases 1-3.
+    pub const HKDF_RFC5869: &str = include_str!("vectors/hkdf_rfc5869.json");
+    /// Wycheproof HKDF-SHA256.
+    pub const HKDF_SHA256: &str = include_str!("vectors/hkdf_sha256_test.json");
+    /// Wycheproof HKDF-SHA384.
+    pub const HKDF_SHA384: &str = include_str!("vectors/hkdf_sha384_test.json");
+    /// Wycheproof HKDF-SHA512.
+    pub const HKDF_SHA512: &str = include_str!("vectors/hkdf_sha512_test.json");
     /// NIST CAVP SHA-256 short messages.
     pub const SHA256_SHORT: &str = include_str!("vectors/SHA256ShortMsg.rsp");
     /// NIST CAVP SHA-384 short messages.
@@ -845,6 +931,167 @@ macro_rules! conformance_tests {
         }
 
         #[test]
+        fn conformance_rfc5869_hkdf() {
+            let v: $crate::conformance::__serde_json::Value =
+                $crate::conformance::__serde_json::from_str(vectors::HKDF_RFC5869).unwrap();
+            let d = |x: &$crate::conformance::__serde_json::Value| {
+                $crate::conformance::__hex::decode(x.as_str().unwrap()).unwrap()
+            };
+            let cases = v.as_array().unwrap();
+            assert_eq!(cases.len(), 3);
+            let on = Options {
+                cnsa1_unclassified_nss: true,
+                ..Options::default()
+            };
+            let mut profiles = 0;
+            for p in Profile::ALL {
+                let a = admit(p, on);
+                if !a.kdfs().contains(&KdfAlgorithm::HkdfSha256) {
+                    continue;
+                }
+                profiles += 1;
+                for t in cases {
+                    let info = d(&t["info"]);
+                    let got = hkdf::derive(
+                        &a,
+                        KdfAlgorithm::HkdfSha256,
+                        &d(&t["ikm"]),
+                        Some(&d(&t["salt"])),
+                        &info,
+                        t["len"].as_u64().unwrap() as usize,
+                    )
+                    .map(|k| k.as_bytes().to_vec());
+                    let want = if info.is_empty() && p != Profile::Unrestricted {
+                        Err(CryptoError::KdfInfoEmpty { profile: p })
+                    } else {
+                        Ok(d(&t["okm"]))
+                    };
+                    assert_eq!(got, want, "{p} case {}", t["case"]);
+                }
+            }
+            assert_eq!(profiles, 6);
+        }
+
+        #[test]
+        fn conformance_wycheproof_hkdf() {
+            let on = Options {
+                cnsa1_unclassified_nss: true,
+                ..Options::default()
+            };
+            for (k, file, total, valid, empty_info, profiles) in [
+                (
+                    KdfAlgorithm::HkdfSha256,
+                    vectors::HKDF_SHA256,
+                    86,
+                    83,
+                    31,
+                    6,
+                ),
+                (
+                    KdfAlgorithm::HkdfSha384,
+                    vectors::HKDF_SHA384,
+                    83,
+                    80,
+                    30,
+                    7,
+                ),
+                (
+                    KdfAlgorithm::HkdfSha512,
+                    vectors::HKDF_SHA512,
+                    83,
+                    80,
+                    30,
+                    6,
+                ),
+            ] {
+                let cases = $crate::conformance::__wycheproof_kdf_cases(file);
+                assert_eq!(cases.len(), total, "{k:?}");
+                let mut exercised = 0;
+                for p in Profile::ALL {
+                    let a = admit(p, on);
+                    if !a.kdfs().contains(&k) {
+                        continue;
+                    }
+                    exercised += 1;
+                    let (mut derived, mut refused_info, mut too_long) = (0, 0, 0);
+                    for c in &cases {
+                        let got = hkdf::derive(&a, k, &c.ikm, Some(&c.salt), &c.info, c.size)
+                            .map(|d| d.as_bytes().to_vec());
+                        match c.result.as_str() {
+                            "valid" if c.info.is_empty() && p != Profile::Unrestricted => {
+                                refused_info += 1;
+                                assert_eq!(
+                                    got,
+                                    Err(CryptoError::KdfInfoEmpty { profile: p }),
+                                    "{p} {k:?} tcId {}",
+                                    c.tc_id
+                                );
+                            }
+                            "valid" => {
+                                derived += 1;
+                                assert_eq!(got, Ok(c.okm.clone()), "{p} {k:?} tcId {}", c.tc_id);
+                            }
+                            "invalid" => {
+                                too_long += 1;
+                                assert_eq!(
+                                    got,
+                                    Err(CryptoError::KdfOutputLength {
+                                        algorithm: k,
+                                        bytes: c.size,
+                                        max_bytes: k.max_output_len(),
+                                    }),
+                                    "{p} {k:?} tcId {}",
+                                    c.tc_id
+                                );
+                            }
+                            other => panic!("{k:?} tcId {}: unknown result {other:?}", c.tc_id),
+                        }
+                    }
+                    let want = if p == Profile::Unrestricted {
+                        (valid, 0, 3)
+                    } else {
+                        (valid - empty_info, empty_info, 3)
+                    };
+                    assert_eq!((derived, refused_info, too_long), want, "{p} {k:?}");
+                }
+                assert_eq!(exercised, profiles, "{k:?}");
+            }
+        }
+
+        #[test]
+        fn conformance_hkdf_refusal_matrix() {
+            for (p, off, on) in $crate::conformance::golden::KDF_GOLDEN {
+                for (unclassified, admitted) in [(false, off), (true, on)] {
+                    let o = Options {
+                        cnsa1_unclassified_nss: unclassified,
+                        ..Options::default()
+                    };
+                    let a = admit(p, o);
+                    assert_eq!(a.kdfs(), admitted, "{p} {o}");
+                    for k in KdfAlgorithm::ALL {
+                        let len = |info: &[u8]| {
+                            hkdf::derive(&a, k, &[7; 32], None, info, 32)
+                                .map(|d| d.as_bytes().len())
+                        };
+                        let refused = Err(CryptoError::NotInProfile {
+                            profile: p,
+                            algorithm: Algorithm::Kdf(k),
+                        });
+                        let (want, want_empty_info) = if !admitted.contains(&k) {
+                            (refused, refused)
+                        } else if p == Profile::Unrestricted {
+                            (Ok(32), Ok(32))
+                        } else {
+                            (Ok(32), Err(CryptoError::KdfInfoEmpty { profile: p }))
+                        };
+                        assert_eq!(len(b"matrix"), want, "{p} {o} {k:?}");
+                        assert_eq!(len(b""), want_empty_info, "{p} {o} {k:?} empty info");
+                    }
+                }
+            }
+        }
+
+        #[test]
         fn conformance_rfc8032_ed25519() {
             let v: $crate::conformance::__serde_json::Value =
                 $crate::conformance::__serde_json::from_str(vectors::ED25519_RFC8032).unwrap();
@@ -901,6 +1148,19 @@ macro_rules! conformance_tests {
                         )
                         .unwrap_or_else(|e| panic!("{m:?}: {e}"));
                         assert_eq!(key.sign(b"").as_ref().len(), m.tag_len(), "{m:?}");
+                    }
+                    Algorithm::Kdf(k) => {
+                        assert!(cap.available, "{k:?}");
+                        let key = hkdf::derive(
+                            &admit(Profile::Unrestricted, Options::default()),
+                            k,
+                            &[7; 32],
+                            None,
+                            b"capability",
+                            k.max_output_len(),
+                        )
+                        .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                        assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
                     }
                     Algorithm::Kx(k) => {
                         let p = policy(
