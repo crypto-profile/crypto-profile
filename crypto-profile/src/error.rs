@@ -1,5 +1,5 @@
 //! The crate's refusals.
-use crate::algorithm::{Algorithm, SignatureAlgorithm, TlsVersion};
+use crate::algorithm::{Algorithm, KdfAlgorithm, SignatureAlgorithm, TlsVersion};
 use crate::capability::Approval;
 use crate::peer_certificate::PeerCertificateViolation;
 use crate::profile::{Options, Profile};
@@ -221,6 +221,28 @@ pub enum CryptoError {
     },
     /// A MAC did not verify.
     MacVerify,
+    /// An HKDF output length outside 1 to 255 times the hash length (RFC 5869 §2.3).
+    KdfOutputLength {
+        /// The KDF.
+        algorithm: KdfAlgorithm,
+        /// The requested length in bytes.
+        bytes: usize,
+        /// The longest output the KDF gives, in bytes.
+        max_bytes: usize,
+    },
+    /// An empty HKDF secret.
+    KdfSecretEmpty,
+    /// An empty HKDF `info` under a profile that refuses one.
+    KdfInfoEmpty {
+        /// The profile.
+        profile: Profile,
+    },
+    /// A profile that admits an empty HKDF `info`, which the module does not approve; refused by
+    /// `assert_admitted_approved` when the profile admits any KDF.
+    KdfInfoMayBeEmpty {
+        /// The profile.
+        profile: Profile,
+    },
 }
 
 impl fmt::Display for CryptoError {
@@ -302,6 +324,22 @@ impl fmt::Display for CryptoError {
                 "a {bytes}-byte HMAC key is outside the {profile} profile's {min_bits}-{max_bits} bit range"
             ),
             CryptoError::MacVerify => f.write_str("the MAC did not verify"),
+            CryptoError::KdfOutputLength {
+                algorithm,
+                bytes,
+                max_bytes,
+            } => write!(
+                f,
+                "a {bytes}-byte {algorithm:?} output is outside 1-{max_bytes} bytes"
+            ),
+            CryptoError::KdfSecretEmpty => f.write_str("the HKDF secret is empty"),
+            CryptoError::KdfInfoEmpty { profile } => {
+                write!(f, "the {profile} profile refuses an empty HKDF info")
+            }
+            CryptoError::KdfInfoMayBeEmpty { profile } => write!(
+                f,
+                "the {profile} profile admits an empty HKDF info, which the module does not approve"
+            ),
         }
     }
 }
@@ -312,7 +350,7 @@ impl std::error::Error for CryptoError {}
 mod tests {
     use super::*;
     use crate::algorithm::{
-        Algorithm, KxGroup, MacAlgorithm, SignatureAlgorithm, TlsSignatureScheme,
+        Algorithm, KdfAlgorithm, KxGroup, MacAlgorithm, SignatureAlgorithm, TlsSignatureScheme,
     };
     use crate::capability::Approval;
     use crate::profile::{Options, Profile};
@@ -365,7 +403,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 8] = [
+        let table: [(CryptoError, &str); 12] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -420,6 +458,27 @@ mod tests {
                 "a 15-byte HMAC key is outside the bsi profile's 128-524288 bit range",
             ),
             (CryptoError::MacVerify, "the MAC did not verify"),
+            (
+                CryptoError::KdfOutputLength {
+                    algorithm: KdfAlgorithm::HkdfSha256,
+                    bytes: 8161,
+                    max_bytes: 8160,
+                },
+                "a 8161-byte HkdfSha256 output is outside 1-8160 bytes",
+            ),
+            (CryptoError::KdfSecretEmpty, "the HKDF secret is empty"),
+            (
+                CryptoError::KdfInfoEmpty {
+                    profile: Profile::Fips1403,
+                },
+                "the fips1403 profile refuses an empty HKDF info",
+            ),
+            (
+                CryptoError::KdfInfoMayBeEmpty {
+                    profile: Profile::Unrestricted,
+                },
+                "the unrestricted profile admits an empty HKDF info, which the module does not approve",
+            ),
         ];
         for (e, text) in table {
             assert_eq!(e.to_string(), text);
