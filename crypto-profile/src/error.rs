@@ -321,7 +321,7 @@ impl fmt::Display for CryptoError {
                 max_bits,
             } => write!(
                 f,
-                "a {bytes}-byte HMAC key is outside the {profile} profile's {min_bits}-{max_bits} bit range"
+                "an HMAC key of {bytes} bytes is outside the {profile} profile's {min_bits}-{max_bits} bit range"
             ),
             CryptoError::MacVerify => f.write_str("the MAC did not verify"),
             CryptoError::KdfOutputLength {
@@ -330,7 +330,7 @@ impl fmt::Display for CryptoError {
                 max_bytes,
             } => write!(
                 f,
-                "a {bytes}-byte {algorithm:?} output is outside 1-{max_bytes} bytes"
+                "an HKDF output of {bytes} bytes ({algorithm:?}) is outside 1-{max_bytes} bytes"
             ),
             CryptoError::KdfSecretEmpty => f.write_str("the HKDF secret is empty"),
             CryptoError::KdfInfoEmpty { profile } => {
@@ -455,7 +455,7 @@ mod tests {
                     min_bits: 128,
                     max_bits: 524_288,
                 },
-                "a 15-byte HMAC key is outside the bsi profile's 128-524288 bit range",
+                "an HMAC key of 15 bytes is outside the bsi profile's 128-524288 bit range",
             ),
             (CryptoError::MacVerify, "the MAC did not verify"),
             (
@@ -464,7 +464,7 @@ mod tests {
                     bytes: 8161,
                     max_bytes: 8160,
                 },
-                "a 8161-byte HkdfSha256 output is outside 1-8160 bytes",
+                "an HKDF output of 8161 bytes (HkdfSha256) is outside 1-8160 bytes",
             ),
             (CryptoError::KdfSecretEmpty, "the HKDF secret is empty"),
             (
