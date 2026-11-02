@@ -443,6 +443,7 @@ mod tests {
             }
         }
     }
+
     #[test]
     fn select_admitted_agrees_with_the_key_agreement_golden_rows_on_every_module() {
         assert_eq!(KEY_AGREEMENT_GOLDEN.len(), Profile::ALL.len());

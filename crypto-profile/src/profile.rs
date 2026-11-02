@@ -171,8 +171,8 @@ pub struct Options {
     /// Admit HMAC-SHA256 and HKDF-SHA256 under `cnsa1`, as CNSSP 15 (20 October 2016) Annex B
     /// ¶2b (p. B-2) allows SHA-256 in the near term for UNCLASSIFIED NSS data and
     /// community-of-interest separation only. Ignored by every other profile, and by every family
-    /// but message authentication and HKDF: it admits no one-step KDF and no key-agreement curve
-    /// but P-384. Off by default.
+    /// but message authentication and HKDF. It admits no one-step KDF, and does not widen `cnsa1`'s
+    /// key agreement beyond P-384. Off by default.
     pub cnsa1_unclassified_nss: bool,
 }
 

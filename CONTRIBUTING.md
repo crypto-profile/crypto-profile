@@ -142,7 +142,7 @@ The suite checks the backend against the known answers, walks every capability c
 - `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`, with `KeyPair` implementing `rcgen::SigningKey`;
 - `digest::digest`;
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
-- `admit`, `Admitted::macs`, `Admitted::kdfs` and `Admitted::key_agreements`, `hmac::Key`, `kdf::derive` and `kdf::Spec` (both variants), and `ecdh::EphemeralKey` and `ecdh::StaticKey` with `generate`, `from_pkcs8_der`, `from_scalar`, `algorithm`, `public_key` and `agree`;
+- `admit`, `Admitted::macs`, `Admitted::kdfs` and `Admitted::key_agreements`, `hmac::Key`, `kdf::derive` and `kdf::Spec` (`Hkdf`, `OneStep`, `Dhkem`), and `ecdh::EphemeralKey` with `generate`, `algorithm`, `public_key` and `agree`, and `ecdh::StaticKey` with `from_pkcs8_der`, `from_scalar`, `algorithm`, `public_key` and `agree`;
 - `test_support::ecdh_shared_secret`, under the `test-support` feature;
 - `sealbox::PrivateKey::generate`, `sealbox::PrivateKey::from_pkcs8_der`, `sealbox::PrivateKey::recipient`, `sealbox::seal` and `sealbox::open`.
 
