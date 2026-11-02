@@ -217,12 +217,12 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
             }
         },
         Algorithm::Kdf(k) => match k {
-            KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => {
-                (true, yes)
-            }
-            KdfAlgorithm::OneStepSha256
+            KdfAlgorithm::HkdfSha256
+            | KdfAlgorithm::HkdfSha384
+            | KdfAlgorithm::HkdfSha512
+            | KdfAlgorithm::OneStepSha256
             | KdfAlgorithm::OneStepSha384
-            | KdfAlgorithm::OneStepSha512 => (false, Approval::Unverified),
+            | KdfAlgorithm::OneStepSha512 => (true, yes),
         },
         Algorithm::KeyAgreement(k) => match k {
             KeyAgreementAlgorithm::EcdhP256
@@ -255,13 +255,8 @@ const fn four_x_available(a: Algorithm) -> bool {
         | Algorithm::Cipher(_)
         | Algorithm::Hash(_)
         | Algorithm::Protocol(_)
-        | Algorithm::Mac(_) => true,
-        Algorithm::Kdf(k) => match k {
-            KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => true,
-            KdfAlgorithm::OneStepSha256
-            | KdfAlgorithm::OneStepSha384
-            | KdfAlgorithm::OneStepSha512 => false,
-        },
+        | Algorithm::Mac(_)
+        | Algorithm::Kdf(_) => true,
         Algorithm::KeyAgreement(k) => match k {
             KeyAgreementAlgorithm::EcdhP256
             | KeyAgreementAlgorithm::EcdhP384
@@ -377,9 +372,15 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             KdfAlgorithm::HkdfSha512 => tested(
                 "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
             ),
-            KdfAlgorithm::OneStepSha256
-            | KdfAlgorithm::OneStepSha384
-            | KdfAlgorithm::OneStepSha512 => Approval::Unverified,
+            KdfAlgorithm::OneStepSha256 => tested(
+                "A7856 (KDA OneStep SP800-56Cr2: SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+            ),
+            KdfAlgorithm::OneStepSha384 => tested(
+                "A7856 (KDA OneStep SP800-56Cr2: SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+            ),
+            KdfAlgorithm::OneStepSha512 => tested(
+                "A7856 (KDA OneStep SP800-56Cr2: SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+            ),
         },
         Algorithm::KeyAgreement(k) => match k {
             KeyAgreementAlgorithm::EcdhP256
@@ -434,15 +435,7 @@ mod tests {
     }
 
     fn implemented_by_no_backend(a: Algorithm) -> bool {
-        matches!(
-            a,
-            Algorithm::KeyAgreement(_)
-                | Algorithm::Kdf(
-                    KdfAlgorithm::OneStepSha256
-                        | KdfAlgorithm::OneStepSha384
-                        | KdfAlgorithm::OneStepSha512
-                )
-        )
+        matches!(a, Algorithm::KeyAgreement(_))
     }
 
     #[test]
@@ -501,12 +494,12 @@ mod tests {
     }
 
     #[test]
-    fn no_module_has_or_approves_key_agreement_or_the_one_step_kdf_yet() {
+    fn no_module_has_or_approves_key_agreement_yet() {
         let pending: Vec<Algorithm> = Algorithm::all()
             .into_iter()
             .filter(|a| implemented_by_no_backend(*a))
             .collect();
-        assert_eq!(pending.len(), 7);
+        assert_eq!(pending.len(), 4);
         for m in modules() {
             for a in &pending {
                 assert_eq!(
@@ -670,9 +663,24 @@ mod tests {
                     "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
                 ),
             ),
-            (A::Kdf(KdfAlgorithm::OneStepSha256), None),
-            (A::Kdf(KdfAlgorithm::OneStepSha384), None),
-            (A::Kdf(KdfAlgorithm::OneStepSha512), None),
+            (
+                A::Kdf(KdfAlgorithm::OneStepSha256),
+                Some(
+                    "A7856 (KDA OneStep SP800-56Cr2: SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                ),
+            ),
+            (
+                A::Kdf(KdfAlgorithm::OneStepSha384),
+                Some(
+                    "A7856 (KDA OneStep SP800-56Cr2: SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                ),
+            ),
+            (
+                A::Kdf(KdfAlgorithm::OneStepSha512),
+                Some(
+                    "A7856 (KDA OneStep SP800-56Cr2: SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                ),
+            ),
             (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256), None),
             (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384), None),
             (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521), None),
@@ -683,7 +691,7 @@ mod tests {
                 .iter()
                 .all(|a| expected.iter().any(|(b, _)| b == a))
         );
-        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 28);
+        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 31);
         for (a, cavp) in expected {
             let approval = match cavp {
                 Some(cavp) => Approval::AlgorithmTested { cavp },
@@ -732,6 +740,7 @@ mod tests {
         assert!(approved(A::Hash(HashAlgorithm::Sha512)));
         assert!(approved(A::Mac(MacAlgorithm::HmacSha384)));
         assert!(approved(A::Kdf(KdfAlgorithm::HkdfSha512)));
+        assert!(approved(A::Kdf(KdfAlgorithm::OneStepSha256)));
         assert!(approved(A::Protocol(TlsVersion::Tls12)));
         for a in [
             A::Signature(SignatureAlgorithm::MlDsa87),
@@ -853,9 +862,9 @@ mod tests {
             (A::Kdf(KdfAlgorithm::HkdfSha256), true, Y),
             (A::Kdf(KdfAlgorithm::HkdfSha384), true, Y),
             (A::Kdf(KdfAlgorithm::HkdfSha512), true, Y),
-            (A::Kdf(KdfAlgorithm::OneStepSha256), false, U),
-            (A::Kdf(KdfAlgorithm::OneStepSha384), false, U),
-            (A::Kdf(KdfAlgorithm::OneStepSha512), false, U),
+            (A::Kdf(KdfAlgorithm::OneStepSha256), true, Y),
+            (A::Kdf(KdfAlgorithm::OneStepSha384), true, Y),
+            (A::Kdf(KdfAlgorithm::OneStepSha512), true, Y),
             (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256), false, U),
             (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384), false, U),
             (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521), false, U),

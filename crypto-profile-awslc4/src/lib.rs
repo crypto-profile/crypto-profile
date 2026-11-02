@@ -96,8 +96,8 @@ mod tests {
     #[test]
     fn ensure_refuses_what_this_backend_does_not_implement() {
         for algorithm in [
-            Algorithm::Kdf(KdfAlgorithm::OneStepSha384),
-            Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
+            Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP256),
+            Algorithm::KeyAgreement(KeyAgreementAlgorithm::X25519),
         ] {
             assert_eq!(ensure(algorithm), Err(CryptoError::Unavailable(algorithm)));
         }

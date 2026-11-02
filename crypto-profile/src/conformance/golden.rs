@@ -345,19 +345,19 @@ pub const MAC_GOLDEN: &[(Profile, &[MacAlgorithm], &[MacAlgorithm])] = &{
 /// Every KDF cell is available on every module line, so these hold on each one.
 #[doc(hidden)]
 pub const KDF_GOLDEN: &[(Profile, &[KdfAlgorithm], &[KdfAlgorithm])] = &{
-    use KdfAlgorithm::{HkdfSha256 as K256, HkdfSha384 as K384, HkdfSha512 as K512};
+    use KdfAlgorithm::{
+        HkdfSha256 as K256, HkdfSha384 as K384, HkdfSha512 as K512, OneStepSha256 as O256,
+        OneStepSha384 as O384, OneStepSha512 as O512,
+    };
+    const ALL: &[KdfAlgorithm] = &[K512, K384, K256, O512, O384, O256];
     [
-        (
-            Profile::Unrestricted,
-            &[K512, K384, K256],
-            &[K512, K384, K256],
-        ),
-        (Profile::Preferred, &[K512, K384, K256], &[K512, K384, K256]),
+        (Profile::Unrestricted, ALL, ALL),
+        (Profile::Preferred, ALL, ALL),
         (Profile::Cnsa2, &[K384, K512], &[K384, K512]),
         (Profile::Cnsa1, &[K384], &[K384, K256]),
         (Profile::Bsi, &[K512, K384, K256], &[K512, K384, K256]),
-        (Profile::Fips1403, &[K512, K384, K256], &[K512, K384, K256]),
-        (Profile::Fips1402, &[K512, K384, K256], &[K512, K384, K256]),
+        (Profile::Fips1403, ALL, ALL),
+        (Profile::Fips1402, ALL, ALL),
     ]
 };
 

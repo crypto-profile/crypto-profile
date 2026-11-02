@@ -174,7 +174,7 @@ pub fn __library_basename(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{KdfAlgorithm, KeyAgreementAlgorithm, Linkage, ModuleLine, Options};
+    use crate::{KeyAgreementAlgorithm, Linkage, ModuleLine, Options};
 
     const M3S: Module = Module {
         line: ModuleLine::AwsLcFips3,
@@ -212,9 +212,6 @@ mod tests {
                 [
                     Algorithm::Signature(ml_dsa),
                     Algorithm::Scheme(TlsSignatureScheme::MlDsa87),
-                    Algorithm::Kdf(KdfAlgorithm::OneStepSha256),
-                    Algorithm::Kdf(KdfAlgorithm::OneStepSha384),
-                    Algorithm::Kdf(KdfAlgorithm::OneStepSha512),
                     Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP256),
                     Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
                     Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP521),
@@ -1084,8 +1081,41 @@ macro_rules! conformance_tests {
             }
         }
 
+        fn kdf_spec(k: KdfAlgorithm, info: &[u8]) -> kdf::Spec<'_> {
+            match k {
+                KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => {
+                    kdf::Spec::Hkdf {
+                        algorithm: k,
+                        salt: None,
+                        info,
+                    }
+                }
+                KdfAlgorithm::OneStepSha256
+                | KdfAlgorithm::OneStepSha384
+                | KdfAlgorithm::OneStepSha512 => kdf::Spec::OneStep {
+                    algorithm: k,
+                    fixed_info: info,
+                },
+                _ => panic!("{k:?}: no specification for this KDF"),
+            }
+        }
+
+        fn other_kind(k: KdfAlgorithm, info: &[u8]) -> kdf::Spec<'_> {
+            match kdf_spec(k, info) {
+                kdf::Spec::Hkdf { .. } => kdf::Spec::OneStep {
+                    algorithm: k,
+                    fixed_info: info,
+                },
+                _ => kdf::Spec::Hkdf {
+                    algorithm: k,
+                    salt: None,
+                    info,
+                },
+            }
+        }
+
         #[test]
-        fn conformance_hkdf_refusal_matrix() {
+        fn conformance_kdf_refusal_matrix() {
             for &(p, off, on) in $crate::conformance::golden::KDF_GOLDEN {
                 for (unclassified, admitted) in [(false, off), (true, on)] {
                     let mut o = Options::default();
@@ -1093,38 +1123,67 @@ macro_rules! conformance_tests {
                     let a = admit(p, o);
                     assert_eq!(a.kdfs(), admitted, "{p} {o}");
                     for &k in KdfAlgorithm::ALL {
-                        let len = |info: &[u8]| {
-                            let spec = kdf::Spec::Hkdf {
-                                algorithm: k,
-                                salt: None,
-                                info,
-                            };
-                            kdf::derive(&a, &[7; 32], &spec, 32).map(|d| d.as_bytes().len())
+                        let derive = |spec: &kdf::Spec<'_>| {
+                            kdf::derive(&a, &[7; 32], spec, 32).map(|d| d.as_bytes().len())
                         };
-                        let one_step = matches!(
-                            k,
-                            KdfAlgorithm::OneStepSha256
-                                | KdfAlgorithm::OneStepSha384
-                                | KdfAlgorithm::OneStepSha512
-                        );
-                        let refused = Err(if one_step {
-                            CryptoError::KdfSpecMismatch { algorithm: k }
-                        } else {
-                            CryptoError::NotInProfile {
-                                profile: p,
-                                algorithm: Algorithm::Kdf(k),
-                            }
+                        let not_admitted = Err(CryptoError::NotInProfile {
+                            profile: p,
+                            algorithm: Algorithm::Kdf(k),
                         });
-                        let (want, want_empty_info) = if !admitted.contains(&k) {
-                            (refused, refused)
+                        let (want, want_empty) = if !admitted.contains(&k) {
+                            (not_admitted, not_admitted)
                         } else if p == Profile::Unrestricted {
                             (Ok(32), Ok(32))
                         } else {
                             (Ok(32), Err(CryptoError::KdfInfoEmpty { profile: p }))
                         };
-                        assert_eq!(len(b"matrix"), want, "{p} {o} {k:?}");
-                        assert_eq!(len(b""), want_empty_info, "{p} {o} {k:?} empty info");
+                        assert_eq!(derive(&kdf_spec(k, b"matrix")), want, "{p} {o} {k:?}");
+                        assert_eq!(derive(&kdf_spec(k, b"")), want_empty, "{p} {o} {k:?}");
+                        assert_eq!(
+                            derive(&other_kind(k, b"matrix")),
+                            Err(CryptoError::KdfSpecMismatch { algorithm: k }),
+                            "{p} {o} {k:?}"
+                        );
                     }
+                }
+            }
+        }
+
+        #[test]
+        fn conformance_one_step_bounds_under_every_profile() {
+            for &p in Profile::ALL {
+                let a = admit(p, Options::default());
+                for &k in KdfAlgorithm::ALL {
+                    let one_step = matches!(kdf_spec(k, b""), kdf::Spec::OneStep { .. });
+                    if !one_step || !a.kdfs().contains(&k) {
+                        continue;
+                    }
+                    let derive = |secret: &[u8], info: &[u8], len| {
+                        kdf::derive(&a, secret, &kdf_spec(k, info), len).map(|d| d.as_bytes().len())
+                    };
+                    let empty_info = if p == Profile::Unrestricted {
+                        Ok(32)
+                    } else {
+                        Err(CryptoError::KdfInfoEmpty { profile: p })
+                    };
+                    assert_eq!(derive(&[7; 32], b"", 32), empty_info, "{p} {k:?}");
+                    for len in [0, (1 << 30) + 1] {
+                        assert_eq!(
+                            derive(&[7; 32], b"x", len),
+                            Err(CryptoError::KdfOutputLength {
+                                algorithm: k,
+                                bytes: len,
+                                max_bytes: 1 << 30,
+                            }),
+                            "{p} {k:?}"
+                        );
+                    }
+                    assert_eq!(
+                        derive(&[], b"x", 32),
+                        Err(CryptoError::KdfSecretEmpty),
+                        "{p} {k:?}"
+                    );
+                    assert_eq!(derive(&[7; 32], b"x", 1), Ok(1), "{p} {k:?}");
                 }
             }
         }
@@ -1188,25 +1247,28 @@ macro_rules! conformance_tests {
                         assert_eq!(key.sign(b"").as_ref().len(), m.tag_len(), "{m:?}");
                     }
                     Algorithm::Kdf(k) => {
+                        assert!(cap.available, "{k:?}");
                         let unrestricted = admit(Profile::Unrestricted, Options::default());
-                        let spec = kdf::Spec::Hkdf {
-                            algorithm: k,
-                            salt: None,
-                            info: b"capability",
+                        let spec = match k {
+                            KdfAlgorithm::HkdfSha256
+                            | KdfAlgorithm::HkdfSha384
+                            | KdfAlgorithm::HkdfSha512 => kdf::Spec::Hkdf {
+                                algorithm: k,
+                                salt: None,
+                                info: b"capability",
+                            },
+                            KdfAlgorithm::OneStepSha256
+                            | KdfAlgorithm::OneStepSha384
+                            | KdfAlgorithm::OneStepSha512 => kdf::Spec::OneStep {
+                                algorithm: k,
+                                fixed_info: b"capability",
+                            },
+                            _ => panic!("{k:?}: no capability check for this KDF"),
                         };
-                        if cap.available {
-                            let key =
-                                kdf::derive(&unrestricted, &[7; 32], &spec, k.max_output_len())
-                                    .unwrap_or_else(|e| panic!("{k:?}: {e}"));
-                            assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
-                        } else {
-                            assert!(!unrestricted.kdfs().contains(&k), "{k:?}");
-                            assert_eq!(
-                                kdf::derive(&unrestricted, &[7; 32], &spec, 32).err(),
-                                Some(CryptoError::KdfSpecMismatch { algorithm: k }),
-                                "{k:?}"
-                            );
-                        }
+                        let len = k.max_output_len().min(16320);
+                        let key = kdf::derive(&unrestricted, &[7; 32], &spec, len)
+                            .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                        assert_eq!(key.as_bytes().len(), len, "{k:?}");
                     }
                     Algorithm::KeyAgreement(k) => {
                         assert!(!cap.available, "{k:?}");
