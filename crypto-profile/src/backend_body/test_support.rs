@@ -14,6 +14,7 @@ pub const FIPS_LIBRARY: &str = env!("CRYPTO_PROFILE_FIPS_LIBRARY");
 
 /// What a completed handshake negotiated.
 #[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
 pub struct Negotiated {
     /// The protocol version.
     pub version: TlsVersion,
@@ -141,7 +142,7 @@ pub fn handshake_with_ca(
     key: SignatureAlgorithm,
 ) -> Result<Negotiated, String> {
     run(client, ca, key, |chain, leaf_key| {
-        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into());
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.to_pkcs8_der().to_vec().into());
         server_builder(server)
             .map_err(|x| x.to_string())?
             .with_no_client_auth()
@@ -284,19 +285,23 @@ fn run(
         .with_no_client_auth();
     let ([version_cp, suite_cp, group_cp, scheme_cp], kind) = drive(client_cfg, server_cfg, &seen)?;
     let version = TlsVersion::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|x| x.iana() == version_cp)
         .ok_or(format!("unexpected version {version_cp:#06x}"))?;
     let suite = CipherSuite::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|x| x.iana() == suite_cp)
         .ok_or(format!("unknown suite {suite_cp:#06x}"))?;
     let kx = KxGroup::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|x| x.iana() == group_cp)
         .ok_or(format!("unknown group {group_cp:#06x}"))?;
     let scheme = TlsSignatureScheme::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .find(|x| x.iana() == scheme_cp)
         .ok_or(format!("unknown scheme {scheme_cp:#06x}"))?;
     Ok(Negotiated {
@@ -434,7 +439,7 @@ fn peer_pki(
         opposite: None,
         roots,
         chain,
-        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into()),
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.to_pkcs8_der().to_vec().into()),
         crls,
     })
 }
@@ -534,7 +539,7 @@ impl rcgen::PublicKeyData for PeerSha256<'_> {
 }
 impl rcgen::SigningKey for PeerSha256<'_> {
     fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
-        let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.pkcs8_der())
+        let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.to_pkcs8_der())
             .map_err(|_| rcgen::Error::CouldNotParseKeyPair)?;
         let mut signature = vec![0; key.public_modulus_len()];
         key.sign(
@@ -573,7 +578,8 @@ pub fn peer_certificate_default_session_configs(
     let mut baseline = policy.clone();
     baseline.peer_certificate_rule = None;
     baseline.cipher_suites = CipherSuite::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|s| policy.versions.contains(&s.version()))
         .collect();
     let cp = if server_checks_client {
@@ -723,7 +729,7 @@ fn peer_selected_path(bad_first: bool) -> Result<PeerCertificatePki, String> {
         opposite: None,
         roots,
         chain,
-        key: rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into()),
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into()),
         crls,
     })
 }
@@ -794,7 +800,7 @@ pub fn identity_pki(
     Ok(IdentityPki {
         roots,
         chain: vec![leaf_cert.der().clone(), ca_cert.der().clone()],
-        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.pkcs8_der().to_vec().into()),
+        key: rustls::pki_types::PrivateKeyDer::Pkcs8(leaf_key.to_pkcs8_der().to_vec().into()),
         crls: vec![crl.der().clone()],
     })
 }

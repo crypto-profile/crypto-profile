@@ -65,25 +65,31 @@ fn reference(c: &Case) -> CryptoProvider {
     }
 }
 
+fn tls13(suite: C, group: K, schemes: Vec<T>) -> Policy {
+    let mut p = Policy::default();
+    p.versions = vec![V::Tls13];
+    p.cipher_suites = vec![suite];
+    p.kx_groups = vec![group];
+    p.signature_schemes = schemes;
+    p
+}
+
 fn policy(c: &Case) -> Policy {
-    Policy {
-        peer_certificate_rule: None,
-        versions: vec![c.version],
-        cipher_suites: vec![c.suite],
-        kx_groups: vec![c.group],
-        signature_schemes: vec![c.scheme],
-    }
+    let mut p = tls13(c.suite, c.group, vec![c.scheme]);
+    p.versions = vec![c.version];
+    p
 }
 
 fn version(v: V) -> &'static rustls::SupportedProtocolVersion {
     match v {
         V::Tls12 => &rustls::version::TLS12,
         V::Tls13 => &rustls::version::TLS13,
+        _ => panic!("{v:?}: no rustls version"),
     }
 }
 
 fn key_der(p: &Pki) -> PrivateKeyDer<'static> {
-    PrivateKeyDer::Pkcs8(p.key.pkcs8_der().to_vec().into())
+    PrivateKeyDer::Pkcs8(p.key.to_pkcs8_der().to_vec().into())
 }
 
 #[expect(clippy::disallowed_methods)]
@@ -392,13 +398,11 @@ fn every_shared_component_classifies_fips_as_the_reference() {
         assert_eq!(ours.cipher_suites[0].fips(), c.reference.0.fips(), "{c:?}");
         assert_eq!(ours.kx_groups[0].fips(), c.reference.1.fips(), "{c:?}");
     }
-    let mine = crypto_provider(&Policy {
-        peer_certificate_rule: None,
-        versions: vec![V::Tls13],
-        cipher_suites: vec![C::Tls13Aes256GcmSha384],
-        kx_groups: vec![K::Secp384r1MlKem1024],
-        signature_schemes: vec![T::EcdsaNistp384Sha384],
-    })
+    let mine = crypto_provider(&tls13(
+        C::Tls13Aes256GcmSha384,
+        K::Secp384r1MlKem1024,
+        vec![T::EcdsaNistp384Sha384],
+    ))
     .unwrap();
     assert_eq!(mine.kx_groups[0].fips(), rk::SECP384R1.fips());
     assert_eq!(
@@ -440,14 +444,8 @@ fn every_quic_suite_derives_the_keys_of_the_reference() {
             rs::TLS13_CHACHA20_POLY1305_SHA256,
         ),
     ] {
-        let provider = crypto_provider(&Policy {
-            peer_certificate_rule: None,
-            versions: vec![V::Tls13],
-            cipher_suites: vec![suite],
-            kx_groups: vec![K::Secp384r1],
-            signature_schemes: vec![T::EcdsaNistp384Sha384],
-        })
-        .unwrap();
+        let provider =
+            crypto_provider(&tls13(suite, K::Secp384r1, vec![T::EcdsaNistp384Sha384])).unwrap();
         let ours = provider.cipher_suites[0]
             .tls13()
             .unwrap()
@@ -486,13 +484,7 @@ fn every_quic_suite_derives_the_keys_of_the_reference() {
 }
 
 fn every_scheme() -> Policy {
-    Policy {
-        peer_certificate_rule: None,
-        versions: vec![V::Tls13],
-        cipher_suites: vec![C::Tls13Aes256GcmSha384],
-        kx_groups: vec![K::Secp384r1],
-        signature_schemes: T::ALL.to_vec(),
-    }
+    tls13(C::Tls13Aes256GcmSha384, K::Secp384r1, T::ALL.to_vec())
 }
 
 #[test]
@@ -559,7 +551,7 @@ fn every_verifier_accepts_and_refuses_as_the_reference() {
     let rsa_key = signature::RsaKeyPair::from_pkcs8(
         crypto_profile_awslc4::signature::KeyPair::generate(S::Rsa2048Sha384)
             .unwrap()
-            .pkcs8_der(),
+            .to_pkcs8_der(),
     )
     .unwrap();
     let ed = signature::Ed25519KeyPair::generate().unwrap();

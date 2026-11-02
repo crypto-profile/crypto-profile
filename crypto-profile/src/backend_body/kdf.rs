@@ -1,24 +1,30 @@
-//! HKDF (RFC 5869; SP 800-56C Rev. 2 §5) under a profile.
+//! Key derivation under a profile: HKDF (RFC 5869; SP 800-56C Rev. 2 §5).
 use crate::{Admitted, CryptoError};
-use crypto_profile::{KdfAlgorithm, kdf_info_may_be_empty};
+use crypto_profile::{Algorithm, HashAlgorithm, KdfAlgorithm, kdf_info_may_be_empty};
 use std::fmt;
 use zeroize::Zeroizing;
 
-const fn alg(k: KdfAlgorithm) -> aws_lc_rs::hkdf::Algorithm {
+fn alg(k: KdfAlgorithm) -> Result<aws_lc_rs::hkdf::Algorithm, CryptoError> {
     match k {
-        KdfAlgorithm::HkdfSha256 => aws_lc_rs::hkdf::HKDF_SHA256,
-        KdfAlgorithm::HkdfSha384 => aws_lc_rs::hkdf::HKDF_SHA384,
-        KdfAlgorithm::HkdfSha512 => aws_lc_rs::hkdf::HKDF_SHA512,
+        KdfAlgorithm::HkdfSha256 => Ok(aws_lc_rs::hkdf::HKDF_SHA256),
+        KdfAlgorithm::HkdfSha384 => Ok(aws_lc_rs::hkdf::HKDF_SHA384),
+        KdfAlgorithm::HkdfSha512 => Ok(aws_lc_rs::hkdf::HKDF_SHA512),
+        KdfAlgorithm::OneStepSha256 | KdfAlgorithm::OneStepSha384 | KdfAlgorithm::OneStepSha512 => {
+            Err(CryptoError::KdfSpecMismatch { algorithm: k })
+        }
+        _ => Err(CryptoError::Unavailable(Algorithm::Kdf(k))),
     }
 }
 
 const ZERO_SALT: [u8; 64] = [0; 64];
 
-const _: () = {
-    let [a, b, c] = KdfAlgorithm::ALL;
-    assert!(a.hash().output_len() <= ZERO_SALT.len());
-    assert!(b.hash().output_len() <= ZERO_SALT.len());
-    assert!(c.hash().output_len() <= ZERO_SALT.len());
+const _: () = match HashAlgorithm::ALL {
+    [a, b, c] => {
+        assert!(a.output_len() <= ZERO_SALT.len());
+        assert!(b.output_len() <= ZERO_SALT.len());
+        assert!(c.output_len() <= ZERO_SALT.len());
+    }
+    _ => panic!("a new HashAlgorithm: check ZERO_SALT covers its output length"),
 };
 
 struct Len(usize);
@@ -47,26 +53,50 @@ impl fmt::Debug for DerivedKey {
     }
 }
 
-/// RFC 5869 HKDF (SP 800-56C Rev. 2 §5) in one call: extract, then expand. The pseudorandom key
-/// never leaves the module. `salt` `None` or empty is RFC 5869's default, HashLen zero bytes.
-/// `salt` and `info` are treated as non-secret: the module's binding copies them without wiping.
-/// `info` binds the key to its use: a purpose label, the parties' identifiers, the public keys
-/// each contributed. Refuses, in this order: an algorithm `a`'s profile does not admit, or its
-/// module line lacks (`Admitted::admit_kdf`); an empty `info` unless `kdf_info_may_be_empty`; an
-/// output outside `1..=algorithm.max_output_len()` bytes; an empty `secret`.
+/// A key derivation: the KDF and every input but the secret.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Spec<'a> {
+    /// RFC 5869 HKDF (SP 800-56C Rev. 2 §5) in one call: extract, then expand. The pseudorandom
+    /// key never leaves the module. `salt` `None` or empty is RFC 5869's default, HashLen zero
+    /// bytes. `salt` and `info` are treated as non-secret: the module's binding copies them without
+    /// wiping. `info` binds the key to its use: a purpose label, the parties' identifiers, the
+    /// public keys each contributed.
+    Hkdf {
+        /// An HKDF algorithm.
+        algorithm: KdfAlgorithm,
+        /// The salt.
+        salt: Option<&'a [u8]>,
+        /// The context and application-specific information.
+        info: &'a [u8],
+    },
+}
+
+/// Derives `len` bytes from `secret` as `spec` says. Refuses, in this order: a `spec` whose
+/// algorithm is not of its kind (`CryptoError::KdfSpecMismatch`); an algorithm `a`'s profile does
+/// not admit, or its module line lacks (`Admitted::admit_kdf`); an empty `info` unless
+/// `kdf_info_may_be_empty`; an output outside `1..=algorithm.max_output_len()` bytes; an empty
+/// `secret`.
 pub fn derive(
     a: &Admitted,
-    algorithm: KdfAlgorithm,
     secret: &[u8],
-    salt: Option<&[u8]>,
-    info: &[u8],
+    spec: &Spec<'_>,
     len: usize,
 ) -> Result<DerivedKey, CryptoError> {
-    check(a, algorithm, info)?;
-    extract_and_expand(algorithm, secret, salt, info, len)
+    match *spec {
+        Spec::Hkdf {
+            algorithm,
+            salt,
+            info,
+        } => {
+            check(a, algorithm, info)?;
+            extract_and_expand(algorithm, secret, salt, info, len)
+        }
+    }
 }
 
 fn check(a: &Admitted, algorithm: KdfAlgorithm, info: &[u8]) -> Result<(), CryptoError> {
+    alg(algorithm)?;
     a.admit_kdf(algorithm)?;
     if info.is_empty() && !kdf_info_may_be_empty(a.profile()) {
         return Err(CryptoError::KdfInfoEmpty {
@@ -76,10 +106,10 @@ fn check(a: &Admitted, algorithm: KdfAlgorithm, info: &[u8]) -> Result<(), Crypt
     Ok(())
 }
 
-/// HKDF without a profile's admission or `info` rule, for derivations inside the crate. Refuses
-/// an output outside `1..=algorithm.max_output_len()` bytes, then an empty `secret`. Callers apply
-/// the profile's `info` rule (`kdf_info_may_be_empty`) first: an empty `info` reaches the module's
-/// non-approved service.
+/// HKDF without a profile's admission or `info` rule, for derivations inside the crate. Refuses a
+/// one-step algorithm, then an output outside `1..=algorithm.max_output_len()` bytes, then an empty
+/// `secret`. Callers apply the profile's `info` rule (`kdf_info_may_be_empty`) first: an empty
+/// `info` reaches the module's non-approved service.
 pub(crate) fn extract_and_expand(
     algorithm: KdfAlgorithm,
     secret: &[u8],
@@ -87,6 +117,7 @@ pub(crate) fn extract_and_expand(
     info: &[u8],
     len: usize,
 ) -> Result<DerivedKey, CryptoError> {
+    let hkdf = alg(algorithm)?;
     let max_bytes = algorithm.max_output_len();
     if len == 0 || len > max_bytes {
         return Err(CryptoError::KdfOutputLength {
@@ -98,7 +129,7 @@ pub(crate) fn extract_and_expand(
     if secret.is_empty() {
         return Err(CryptoError::KdfSecretEmpty);
     }
-    let prk = aws_lc_rs::hkdf::Salt::new(alg(algorithm), salt_for(algorithm, salt)).extract(secret);
+    let prk = aws_lc_rs::hkdf::Salt::new(hkdf, salt_for(algorithm, salt)).extract(secret);
     let info = [info];
     let okm = prk
         .expand(&info, Len(len))
@@ -123,11 +154,19 @@ mod tests {
     use KdfAlgorithm as K;
     use crypto_profile::conformance::__hex;
 
-    const ON: Options = Options {
-        peer_certificates_match_profile: false,
-        pq_key_exchange_required: false,
-        cnsa1_unclassified_nss: true,
-    };
+    fn on() -> Options {
+        let mut o = Options::default();
+        o.cnsa1_unclassified_nss = true;
+        o
+    }
+
+    fn hkdf<'a>(algorithm: KdfAlgorithm, salt: Option<&'a [u8]>, info: &'a [u8]) -> Spec<'a> {
+        Spec::Hkdf {
+            algorithm,
+            salt,
+            info,
+        }
+    }
 
     fn under(
         p: Profile,
@@ -136,8 +175,13 @@ mod tests {
         info: &[u8],
         len: usize,
     ) -> Result<Vec<u8>, CryptoError> {
-        derive(&admit(p, Options::default()), k, secret, None, info, len)
-            .map(|d| d.as_bytes().to_vec())
+        derive(
+            &admit(p, Options::default()),
+            secret,
+            &hkdf(k, None, info),
+            len,
+        )
+        .map(|d| d.as_bytes().to_vec())
     }
 
     fn rfc_case_3_okm() -> Vec<u8> {
@@ -147,8 +191,20 @@ mod tests {
         .unwrap()
     }
 
+    const HKDF: [KdfAlgorithm; 3] = [K::HkdfSha256, K::HkdfSha384, K::HkdfSha512];
+
     #[test]
-    fn refusals_come_in_admission_info_length_secret_order() {
+    fn refusals_come_in_mismatch_admission_info_length_secret_order() {
+        for k in [K::OneStepSha256, K::OneStepSha384, K::OneStepSha512] {
+            assert_eq!(
+                under(Profile::Cnsa2, k, b"", b"", 0),
+                Err(CryptoError::KdfSpecMismatch { algorithm: k })
+            );
+            assert_eq!(
+                extract_and_expand(k, b"", None, b"", 0).err(),
+                Some(CryptoError::KdfSpecMismatch { algorithm: k })
+            );
+        }
         assert_eq!(
             under(Profile::Cnsa2, K::HkdfSha256, b"", b"", 0),
             Err(CryptoError::NotInProfile {
@@ -178,7 +234,7 @@ mod tests {
 
     #[test]
     fn an_empty_info_derives_under_unrestricted_only() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let got = under(p, K::HkdfSha384, &[7; 32], b"", 48);
             if p == Profile::Unrestricted {
                 assert_eq!(got.map(|v| v.len()), Ok(48));
@@ -195,7 +251,7 @@ mod tests {
 
     #[test]
     fn output_length_is_one_to_255_hash_lengths() {
-        for k in KdfAlgorithm::ALL {
+        for k in HKDF {
             let max = k.max_output_len();
             assert_eq!(max, 255 * k.hash().output_len());
             for len in [1, 257, max] {
@@ -232,7 +288,7 @@ mod tests {
 
     #[test]
     fn an_empty_or_absent_salt_becomes_hash_length_zeros_before_the_module() {
-        for k in KdfAlgorithm::ALL {
+        for &k in KdfAlgorithm::ALL {
             let zeros = vec![0; k.hash().output_len()];
             assert_eq!(salt_for(k, None), zeros.as_slice(), "{k:?}");
             assert_eq!(salt_for(k, Some(&[])), zeros.as_slice(), "{k:?}");
@@ -249,7 +305,7 @@ mod tests {
             (K::HkdfSha512, 128),
         ] {
             let with = |salt: Option<&[u8]>| {
-                derive(&a, k, &[7; 32], salt, b"x", 64)
+                derive(&a, &[7; 32], &hkdf(k, salt, b"x"), 64)
                     .unwrap()
                     .as_bytes()
                     .to_vec()
@@ -263,10 +319,8 @@ mod tests {
         assert_eq!(
             derive(
                 &admit(Profile::Unrestricted, Options::default()),
-                K::HkdfSha256,
                 &[0x0b; 22],
-                None,
-                b"",
+                &hkdf(K::HkdfSha256, None, b""),
                 42
             )
             .unwrap()
@@ -281,7 +335,7 @@ mod tests {
         let info: Vec<u8> = (0xf0..=0xf9).collect();
         let a = admit(Profile::Fips1403, Options::default());
         assert_eq!(
-            derive(&a, K::HkdfSha256, &[0x0b; 22], Some(&salt), &info, 42)
+            derive(&a, &[0x0b; 22], &hkdf(K::HkdfSha256, Some(&salt), &info), 42)
                 .unwrap()
                 .as_bytes(),
             __hex::decode(
@@ -295,11 +349,9 @@ mod tests {
     fn the_unclassified_nss_option_admits_hkdf_sha256_under_cnsa1_only() {
         assert!(
             derive(
-                &admit(Profile::Cnsa1, ON),
-                K::HkdfSha256,
+                &admit(Profile::Cnsa1, on()),
                 &[7; 32],
-                None,
-                b"x",
+                &hkdf(K::HkdfSha256, None, b"x"),
                 32
             )
             .is_ok()
@@ -313,11 +365,9 @@ mod tests {
         );
         assert_eq!(
             derive(
-                &admit(Profile::Cnsa2, ON),
-                K::HkdfSha256,
+                &admit(Profile::Cnsa2, on()),
                 &[7; 32],
-                None,
-                b"x",
+                &hkdf(K::HkdfSha256, None, b"x"),
                 32
             )
             .err(),
@@ -354,10 +404,8 @@ mod tests {
     fn debug_shows_no_derived_bytes() {
         let d = derive(
             &admit(Profile::Unrestricted, Options::default()),
-            K::HkdfSha384,
             &[7; 32],
-            None,
-            b"x",
+            &hkdf(K::HkdfSha384, None, b"x"),
             32,
         )
         .unwrap();

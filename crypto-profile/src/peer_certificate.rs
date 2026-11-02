@@ -3,6 +3,7 @@ use crate::{HashAlgorithm, Profile};
 
 /// A finite certificate-policy identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PeerCertificateRuleId {
     /// The unrestricted profile rule.
     Unrestricted,
@@ -22,6 +23,7 @@ pub enum PeerCertificateRuleId {
 
 /// A supported named elliptic curve.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum PeerCurve {
     /// NIST P-256.
     P256,
@@ -44,6 +46,7 @@ pub enum MlDsaParameterSet {
 
 /// The published RSA modulus-size condition, separate from implementation limits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum RsaSizeRule {
     /// A minimum modulus bit length.
     Minimum(u16),
@@ -53,6 +56,7 @@ pub enum RsaSizeRule {
 
 /// The key families and parameters admitted for a certificate role.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PeerKeyRule {
     /// Admitted EC curves.
     pub ec_curves: &'static [PeerCurve],
@@ -68,6 +72,7 @@ pub struct PeerKeyRule {
 
 /// A bounded public-key descriptor, carrying no key bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PeerKey {
     /// An EC key on the named curve.
     Ec(PeerCurve),
@@ -83,6 +88,7 @@ pub enum PeerKey {
 
 /// A certificate signature algorithm, independent of CertificateVerify schemes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CertificateSignature {
     /// ECDSA with issuer curve and digest.
     Ecdsa(PeerCurve, HashAlgorithm),
@@ -100,6 +106,7 @@ pub enum CertificateSignature {
 
 /// Why a peer certificate failed the profile rule. Descriptors never carry DER or key bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PeerCertificateViolation {
     /// The leaf public key is outside the rule.
     LeafKey(PeerKey),
@@ -126,6 +133,7 @@ impl std::error::Error for PeerCertificateViolation {}
 
 /// Immutable cited certificate-policy data.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PeerCertificateRule {
     /// Canonical cache identity.
     pub id: PeerCertificateRuleId,

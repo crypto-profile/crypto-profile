@@ -220,6 +220,15 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
             KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => {
                 (true, yes)
             }
+            KdfAlgorithm::OneStepSha256
+            | KdfAlgorithm::OneStepSha384
+            | KdfAlgorithm::OneStepSha512 => (false, Approval::Unverified),
+        },
+        Algorithm::KeyAgreement(k) => match k {
+            KeyAgreementAlgorithm::EcdhP256
+            | KeyAgreementAlgorithm::EcdhP384
+            | KeyAgreementAlgorithm::EcdhP521
+            | KeyAgreementAlgorithm::X25519 => (false, Approval::Unverified),
         },
     };
     Capability {
@@ -230,10 +239,34 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
 
 const fn four_x(l: Linkage, a: Algorithm) -> Capability {
     Capability {
-        available: true,
+        available: four_x_available(a),
         approval: match l {
             Linkage::Static => Approval::Unverified,
             Linkage::Dynamic => four_x_dynamic(a),
+        },
+    }
+}
+
+const fn four_x_available(a: Algorithm) -> bool {
+    match a {
+        Algorithm::Signature(_)
+        | Algorithm::Scheme(_)
+        | Algorithm::Kx(_)
+        | Algorithm::Cipher(_)
+        | Algorithm::Hash(_)
+        | Algorithm::Protocol(_)
+        | Algorithm::Mac(_) => true,
+        Algorithm::Kdf(k) => match k {
+            KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => true,
+            KdfAlgorithm::OneStepSha256
+            | KdfAlgorithm::OneStepSha384
+            | KdfAlgorithm::OneStepSha512 => false,
+        },
+        Algorithm::KeyAgreement(k) => match k {
+            KeyAgreementAlgorithm::EcdhP256
+            | KeyAgreementAlgorithm::EcdhP384
+            | KeyAgreementAlgorithm::EcdhP521
+            | KeyAgreementAlgorithm::X25519 => false,
         },
     }
 }
@@ -344,6 +377,15 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             KdfAlgorithm::HkdfSha512 => tested(
                 "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
             ),
+            KdfAlgorithm::OneStepSha256
+            | KdfAlgorithm::OneStepSha384
+            | KdfAlgorithm::OneStepSha512 => Approval::Unverified,
+        },
+        Algorithm::KeyAgreement(k) => match k {
+            KeyAgreementAlgorithm::EcdhP256
+            | KeyAgreementAlgorithm::EcdhP384
+            | KeyAgreementAlgorithm::EcdhP521
+            | KeyAgreementAlgorithm::X25519 => Approval::Unverified,
         },
     }
 }
@@ -391,6 +433,18 @@ mod tests {
         [M3S, M3D, M4S, M4D]
     }
 
+    fn implemented_by_no_backend(a: Algorithm) -> bool {
+        matches!(
+            a,
+            Algorithm::KeyAgreement(_)
+                | Algorithm::Kdf(
+                    KdfAlgorithm::OneStepSha256
+                        | KdfAlgorithm::OneStepSha384
+                        | KdfAlgorithm::OneStepSha512
+                )
+        )
+    }
+
     #[test]
     fn certificates_name_their_module() {
         let c = certificate(M3S);
@@ -433,16 +487,38 @@ mod tests {
     }
 
     #[test]
-    fn four_x_static_is_available_and_unverified_everywhere() {
+    fn four_x_static_is_unverified_everywhere() {
         for a in Algorithm::all() {
             assert_eq!(
                 capability(M4S, a),
                 Capability {
-                    available: true,
+                    available: !implemented_by_no_backend(a),
                     approval: Approval::Unverified
                 },
                 "{a:?}"
             );
+        }
+    }
+
+    #[test]
+    fn no_module_has_or_approves_key_agreement_or_the_one_step_kdf_yet() {
+        let pending: Vec<Algorithm> = Algorithm::all()
+            .into_iter()
+            .filter(|a| implemented_by_no_backend(*a))
+            .collect();
+        assert_eq!(pending.len(), 7);
+        for m in modules() {
+            for a in &pending {
+                assert_eq!(
+                    capability(m, *a),
+                    Capability {
+                        available: false,
+                        approval: Approval::Unverified
+                    },
+                    "{m:?} {a:?}"
+                );
+                assert_eq!(ensure_available(m, *a), Err(CryptoError::Unavailable(*a)));
+            }
         }
     }
 
@@ -455,7 +531,7 @@ mod tests {
         use SignatureAlgorithm as S;
         use TlsSignatureScheme as T;
         use TlsVersion as V;
-        let expected: [(Algorithm, Option<&'static str>); 47] = [
+        let expected: [(Algorithm, Option<&'static str>); 54] = [
             (
                 A::Signature(S::MlDsa87),
                 Some("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)"),
@@ -594,6 +670,13 @@ mod tests {
                     "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
                 ),
             ),
+            (A::Kdf(KdfAlgorithm::OneStepSha256), None),
+            (A::Kdf(KdfAlgorithm::OneStepSha384), None),
+            (A::Kdf(KdfAlgorithm::OneStepSha512), None),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256), None),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384), None),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521), None),
+            (A::KeyAgreement(KeyAgreementAlgorithm::X25519), None),
         ];
         assert!(
             Algorithm::all()
@@ -609,7 +692,7 @@ mod tests {
             assert_eq!(
                 capability(M4D, a),
                 Capability {
-                    available: true,
+                    available: !implemented_by_no_backend(a),
                     approval
                 },
                 "{a:?}"
@@ -619,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn three_x_lacks_ml_dsa_only() {
+    fn three_x_lacks_ml_dsa_and_what_no_backend_implements() {
         for m in [M3S, M3D] {
             for a in Algorithm::all() {
                 let ml_dsa = matches!(
@@ -627,7 +710,11 @@ mod tests {
                     Algorithm::Signature(SignatureAlgorithm::MlDsa87)
                         | Algorithm::Scheme(TlsSignatureScheme::MlDsa87)
                 );
-                assert_eq!(capability(m, a).available, !ml_dsa, "{m:?} {a:?}");
+                assert_eq!(
+                    capability(m, a).available,
+                    !ml_dsa && !implemented_by_no_backend(a),
+                    "{m:?} {a:?}"
+                );
             }
         }
     }
@@ -694,7 +781,7 @@ mod tests {
             Unverified,
         }
         use K::{Approved as Y, NotApproved as N, Unverified as U};
-        let expected: [(Algorithm, bool, K); 47] = [
+        let expected: [(Algorithm, bool, K); 54] = [
             (A::Signature(S::MlDsa87), false, N),
             (A::Signature(S::EcdsaP256Sha256), true, Y),
             (A::Signature(S::EcdsaP384Sha384), true, Y),
@@ -766,6 +853,13 @@ mod tests {
             (A::Kdf(KdfAlgorithm::HkdfSha256), true, Y),
             (A::Kdf(KdfAlgorithm::HkdfSha384), true, Y),
             (A::Kdf(KdfAlgorithm::HkdfSha512), true, Y),
+            (A::Kdf(KdfAlgorithm::OneStepSha256), false, U),
+            (A::Kdf(KdfAlgorithm::OneStepSha384), false, U),
+            (A::Kdf(KdfAlgorithm::OneStepSha512), false, U),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256), false, U),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384), false, U),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521), false, U),
+            (A::KeyAgreement(KeyAgreementAlgorithm::X25519), false, U),
         ];
         assert_eq!(expected.len(), Algorithm::all().len());
         for m in [M3S, M3D] {

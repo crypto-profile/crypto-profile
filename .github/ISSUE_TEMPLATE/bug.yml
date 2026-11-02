@@ -48,4 +48,4 @@ body:
     id: profile
     attributes:
       label: Profile and Options, if relevant
-      placeholder: "cnsa2, Options { pq_key_exchange_required: true, .. }"
+      placeholder: "cnsa2, pq_key_exchange_required"

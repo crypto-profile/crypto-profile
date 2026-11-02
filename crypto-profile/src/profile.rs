@@ -13,6 +13,7 @@ use std::str::FromStr;
 /// A named profile. Each one that is named for a regime follows that regime's published text, in
 /// the edition [`Profile::governing_text`] names, and changes only when a new edition is published.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Profile {
     /// Every algorithm in the inventory, post-quantum key exchange first. Not a government profile.
     Unrestricted,
@@ -35,6 +36,7 @@ pub enum Profile {
 
 /// The text a profile follows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum GoverningText {
     /// The crate's own recommendation, following no published text.
     CrateRecommendation,
@@ -47,7 +49,7 @@ pub enum GoverningText {
 
 impl Profile {
     /// Every profile.
-    pub const ALL: [Profile; 7] = [
+    pub const ALL: &'static [Profile] = &[
         Profile::Unrestricted,
         Profile::Preferred,
         Profile::Cnsa2,
@@ -133,6 +135,7 @@ impl fmt::Display for Profile {
 /// A name that is not one of the crate's profiles. Names are matched exactly: no trimming and no
 /// case folding.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParseProfileError(pub String);
 
 impl fmt::Display for ParseProfileError {
@@ -147,15 +150,18 @@ impl FromStr for Profile {
     type Err = ParseProfileError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Profile::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|p| p.as_str() == s)
             .ok_or_else(|| ParseProfileError(s.to_string()))
     }
 }
 
 /// Options applied on top of any profile. The default changes nothing; `cnsa1_unclassified_nss`
-/// widens `cnsa1`'s MACs and KDFs, and the others narrow.
+/// widens `cnsa1`'s MACs and KDFs, and the others narrow. Outside this crate, build it from
+/// `Options::default()` and set the fields you need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Options {
     /// Keep only post-quantum key exchange (pure ML-KEM and hybrid groups), and so remove TLS 1.2,
     /// which has none. Signatures are not narrowed.
@@ -195,6 +201,7 @@ impl fmt::Display for Options {
 
 /// A profile's contents, each list in preference order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ProfileSpec {
     /// Protocol versions.
     pub versions: &'static [V],
@@ -208,7 +215,7 @@ pub struct ProfileSpec {
     pub key_algorithms: &'static [S],
     /// Message authentication codes, for `hmac`; admitted through `admit`, not `resolve`.
     pub macs: &'static [MacAlgorithm],
-    /// Key-derivation functions, for `hkdf`; admitted through `admit`, not `resolve`.
+    /// Key-derivation functions, for `kdf`; admitted through `admit`, not `resolve`.
     pub kdfs: &'static [KdfAlgorithm],
 }
 
@@ -605,6 +612,7 @@ pub const FIPS1402: ProfileSpec = ProfileSpec {
 /// A profile narrowed by its options, every entry implemented by the module's backend, in the
 /// profile's preference order.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Selection {
     /// Protocol versions.
     pub versions: Vec<V>,
@@ -705,6 +713,7 @@ fn select_spec(
 /// backend, in preference order. Never refused: an empty family means every constructor of that
 /// family refuses under the profile.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct AdmittedSelection {
     /// Message authentication codes.
     pub macs: Vec<MacAlgorithm>,
@@ -832,7 +841,7 @@ mod tests {
             Profile::Unrestricted.spec().signature_schemes.len(),
             TlsSignatureScheme::ALL.len()
         );
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let s = p.spec().signature_schemes;
             assert!(
                 s.windows(2).all(|w| w[0].preference() < w[1].preference()),
@@ -868,7 +877,7 @@ mod tests {
 
     #[test]
     fn every_spec_is_well_formed() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let s = p.spec();
             no_duplicates(s.versions);
             no_duplicates(s.cipher_suites);
@@ -1056,7 +1065,7 @@ mod tests {
 
     #[test]
     fn select_without_options_is_the_spec_on_a_module_that_has_everything() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let s = select(p, Options::default(), M4S).unwrap();
             let spec = p.spec();
             assert!(s.excluded.is_empty());
@@ -1070,7 +1079,7 @@ mod tests {
 
     #[test]
     fn the_option_keeps_post_quantum_groups_tls13_and_no_pkcs1_schemes() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let refused = match p {
                 Profile::Unrestricted | Profile::Preferred | Profile::Cnsa2 | Profile::Fips1403 => {
                     false
@@ -1153,7 +1162,11 @@ mod tests {
     #[test]
     fn profile_names_are_stable_and_exact() {
         assert_eq!(
-            Profile::ALL.map(Profile::as_str),
+            Profile::ALL
+                .iter()
+                .copied()
+                .map(Profile::as_str)
+                .collect::<Vec<_>>(),
             [
                 "unrestricted",
                 "preferred",
@@ -1164,7 +1177,7 @@ mod tests {
                 "fips1402"
             ]
         );
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             assert_eq!(p.as_str().parse::<Profile>(), Ok(p));
             assert_eq!(p.to_string(), p.as_str());
         }
@@ -1199,7 +1212,11 @@ mod tests {
     #[test]
     fn profile_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
-            Profile::ALL.map(Profile::ordinal),
+            Profile::ALL
+                .iter()
+                .copied()
+                .map(Profile::ordinal)
+                .collect::<Vec<_>>(),
             std::array::from_fn::<usize, 7, _>(|i| i)
         );
     }
@@ -1301,7 +1318,7 @@ mod tests {
                 cnsa1_unclassified_nss: false,
             };
             assert_eq!(options.to_string(), display);
-            for profile in Profile::ALL {
+            for &profile in Profile::ALL {
                 for module in [M3S, M4S] {
                     let baseline = Options {
                         peer_certificates_match_profile: false,
@@ -1349,7 +1366,7 @@ mod tests {
             .to_string(),
             "post-quantum key exchange required, peer certificates match profile, cnsa1 UNCLASSIFIED NSS"
         );
-        for profile in Profile::ALL {
+        for &profile in Profile::ALL {
             for module in [M3S, M4S] {
                 for pq in [false, true] {
                     let off = Options {
@@ -1423,7 +1440,7 @@ mod tests {
             cnsa1_unclassified_nss: true,
             ..Options::default()
         };
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let mut want = select_admitted(p, Options::default(), M4S).macs;
             if p == Profile::Cnsa1 {
                 want.push(MacAlgorithm::HmacSha256);
@@ -1438,7 +1455,7 @@ mod tests {
             cnsa1_unclassified_nss: true,
             ..Options::default()
         };
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let mut want = select_admitted(p, Options::default(), M4S).kdfs;
             if p == Profile::Cnsa1 {
                 want.push(KdfAlgorithm::HkdfSha256);
@@ -1449,7 +1466,7 @@ mod tests {
 
     #[test]
     fn an_empty_kdf_info_is_admitted_under_unrestricted_only() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let may = match p {
                 Profile::Unrestricted => true,
                 Profile::Preferred
@@ -1465,7 +1482,7 @@ mod tests {
 
     #[test]
     fn mac_keys_are_bounded_by_the_module_and_by_bsi() {
-        for p in Profile::ALL {
+        for &p in Profile::ALL {
             let floor = match p {
                 Profile::Bsi => 128,
                 Profile::Unrestricted

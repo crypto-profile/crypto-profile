@@ -289,11 +289,12 @@ fn key_allowed(rule: &crate::PeerKeyRule, key: PeerKey) -> bool {
                     Some(RsaSizeRule::Minimum(min)) => bits >= min,
                     Some(RsaSizeRule::Exact(sizes)) => sizes.contains(&bits),
                     None => false,
+                    Some(_) => false,
                 }
         }
         PeerKey::Ed25519 => rule.ed25519,
         PeerKey::MlDsa(set) => rule.ml_dsa.contains(&set),
-        PeerKey::Unknown => false,
+        _ => false,
     }
 }
 
@@ -333,9 +334,7 @@ fn signature(
             };
             match issuer {
                 PeerKey::Ec(curve) => S::Ecdsa(curve, hash),
-                PeerKey::Rsa(_) | PeerKey::Ed25519 | PeerKey::MlDsa(_) | PeerKey::Unknown => {
-                    S::Unknown
-                }
+                _ => S::Unknown,
             }
         }
         [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, hash @ 11..=13] => {
@@ -370,12 +369,7 @@ fn signature(
                     if mgf_oid == [0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 1, 1, 8]
                         && mgf_hash == Some(hash)
                         && trailer_ok
-                        && salt_value
-                            == [match hash {
-                                Sha256 => 32,
-                                Sha384 => 48,
-                                Sha512 => 64,
-                            }] =>
+                        && u8::try_from(hash.output_len()).is_ok_and(|len| salt_value == [len]) =>
                 {
                     S::RsaPss(hash)
                 }

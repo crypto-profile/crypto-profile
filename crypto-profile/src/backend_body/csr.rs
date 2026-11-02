@@ -5,6 +5,7 @@ use std::net::IpAddr;
 
 /// An extended key usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum ExtendedKeyUsage {
     /// TLS server authentication.
     ServerAuth,
@@ -14,6 +15,7 @@ pub enum ExtendedKeyUsage {
 
 /// A key usage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum KeyUsage {
     /// Digital signature.
     DigitalSignature,
@@ -25,6 +27,7 @@ pub enum KeyUsage {
 
 /// What a request asks for. An empty value leaves that part out.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct CsrParams {
     /// The subject common name.
     pub common_name: Option<String>,
@@ -125,7 +128,7 @@ mod tests {
             key_usage: vec![KeyUsage::DigitalSignature],
             ..Default::default()
         };
-        for a in S::ALL {
+        for &a in S::ALL {
             if !crate::capability(crate::MODULE, crate::Algorithm::Signature(a)).available {
                 assert_eq!(
                     generate_csr(a, &params).err(),
@@ -141,7 +144,7 @@ mod tests {
             let info = &csr.certification_request_info;
             assert_eq!(
                 info.subject_pki.subject_public_key.data.as_ref(),
-                key.public_key().as_slice(),
+                key.public_key(),
                 "{a}"
             );
             assert_eq!(
@@ -173,7 +176,7 @@ mod tests {
             assert!(
                 oracle
                     .verify_signature(
-                        &key.public_key(),
+                        key.public_key(),
                         info.raw,
                         csr.signature_value.data.as_ref()
                     )

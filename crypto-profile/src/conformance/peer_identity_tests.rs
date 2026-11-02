@@ -78,15 +78,9 @@ macro_rules! __conformance_peer_identity_tests {
             }
 
             pub(super) fn policy(strict: bool) -> Policy {
-                let mut p = resolve(
-                    P::Preferred,
-                    Options {
-                        peer_certificates_match_profile: strict,
-                        ..Options::default()
-                    },
-                )
-                .unwrap()
-                .tls;
+                let mut options = Options::default();
+                options.peer_certificates_match_profile = strict;
+                let mut p = resolve(P::Preferred, options).unwrap().tls;
                 p.versions = vec![V::Tls13];
                 p.cipher_suites.retain(|s| s.version() == V::Tls13);
                 p.kx_groups = vec![K::Secp384r1];
@@ -113,15 +107,9 @@ macro_rules! __conformance_peer_identity_tests {
             }
 
             fn cnsa1_rsa() -> Policy {
-                let mut p = resolve(
-                    P::Cnsa1,
-                    Options {
-                        peer_certificates_match_profile: true,
-                        ..Options::default()
-                    },
-                )
-                .unwrap()
-                .tls;
+                let mut options = Options::default();
+                options.peer_certificates_match_profile = true;
+                let mut p = resolve(P::Cnsa1, options).unwrap().tls;
                 p.versions = vec![V::Tls13];
                 p.cipher_suites.retain(|s| s.version() == V::Tls13);
                 p.kx_groups = vec![K::Secp384r1];
@@ -540,6 +528,7 @@ macro_rules! __conformance_peer_identity_tests {
                 match version {
                     V::Tls13 => rustls::ProtocolVersion::TLSv1_3,
                     V::Tls12 => rustls::ProtocolVersion::TLSv1_2,
+                    _ => panic!("{version:?}: no protocol version"),
                 }
             }
 

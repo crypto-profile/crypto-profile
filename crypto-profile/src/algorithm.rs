@@ -1,10 +1,11 @@
 //! The algorithms the crate names: signature keys, TLS signature schemes, key-exchange groups,
-//! cipher suites, hashes and TLS versions.
+//! cipher suites, hashes, TLS versions, MACs, KDFs and key agreements.
 use std::fmt;
 use std::str::FromStr;
 
 /// A signature key algorithm: what a key is generated as, and what its CSR is signed with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum SignatureAlgorithm {
     /// ML-DSA-87 (FIPS 204).
     MlDsa87,
@@ -28,7 +29,7 @@ pub enum SignatureAlgorithm {
 
 impl SignatureAlgorithm {
     /// Every signature key algorithm.
-    pub const ALL: [SignatureAlgorithm; 9] = [
+    pub const ALL: &'static [SignatureAlgorithm] = &[
         SignatureAlgorithm::MlDsa87,
         SignatureAlgorithm::EcdsaP256Sha256,
         SignatureAlgorithm::EcdsaP384Sha384,
@@ -114,13 +115,14 @@ impl SignatureAlgorithm {
     }
 }
 
-/// A name that is not one of the crate's algorithms.
+/// A name that is not one of the crate's algorithms of the type parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParseAlgorithmError(pub String);
 
 impl fmt::Display for ParseAlgorithmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "unknown signature algorithm {:?}", self.0)
+        write!(f, "unknown algorithm name {:?}", self.0)
     }
 }
 
@@ -130,7 +132,8 @@ impl FromStr for SignatureAlgorithm {
     type Err = ParseAlgorithmError;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         SignatureAlgorithm::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .find(|a| a.as_str() == s)
             .ok_or_else(|| ParseAlgorithmError(s.to_string()))
     }
@@ -144,6 +147,7 @@ impl fmt::Display for SignatureAlgorithm {
 
 /// A TLS handshake signature scheme.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TlsSignatureScheme {
     /// `ecdsa_secp256r1_sha256`.
     EcdsaNistp256Sha256,
@@ -224,7 +228,7 @@ impl TlsSignatureScheme {
     }
 
     /// Every TLS signature scheme.
-    pub const ALL: [TlsSignatureScheme; 11] = [
+    pub const ALL: &'static [TlsSignatureScheme] = &[
         TlsSignatureScheme::EcdsaNistp256Sha256,
         TlsSignatureScheme::EcdsaNistp384Sha384,
         TlsSignatureScheme::EcdsaNistp521Sha512,
@@ -257,8 +261,13 @@ impl TlsSignatureScheme {
     }
 }
 
+// `PeerVerifierIdentity::Owned::handshake_schemes` is a u64 with bit `preference()` per scheme,
+// and the preferences are exactly `0..ALL.len()`.
+const _: () = assert!(TlsSignatureScheme::ALL.len() <= u64::BITS as usize);
+
 /// A TLS cipher suite.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CipherSuite {
     /// `TLS_AES_256_GCM_SHA384`.
     Tls13Aes256GcmSha384,
@@ -314,7 +323,7 @@ impl CipherSuite {
     }
 
     /// Every cipher suite.
-    pub const ALL: [CipherSuite; 9] = [
+    pub const ALL: &'static [CipherSuite] = &[
         CipherSuite::Tls13Aes256GcmSha384,
         CipherSuite::Tls13Aes128GcmSha256,
         CipherSuite::Tls13Chacha20Poly1305Sha256,
@@ -375,6 +384,7 @@ impl CipherSuite {
 
 /// A TLS key-exchange group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KxGroup {
     /// ML-KEM-1024 (FIPS 203).
     MlKem1024,
@@ -433,7 +443,7 @@ impl KxGroup {
     }
 
     /// Every key-exchange group.
-    pub const ALL: [KxGroup; 7] = [
+    pub const ALL: &'static [KxGroup] = &[
         KxGroup::MlKem1024,
         KxGroup::Secp384r1MlKem1024,
         KxGroup::X25519MlKem768,
@@ -460,6 +470,7 @@ impl KxGroup {
 
 /// A hash function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum HashAlgorithm {
     /// SHA-256.
     Sha256,
@@ -471,7 +482,7 @@ pub enum HashAlgorithm {
 
 impl HashAlgorithm {
     /// Every hash function.
-    pub const ALL: [HashAlgorithm; 3] = [
+    pub const ALL: &'static [HashAlgorithm] = &[
         HashAlgorithm::Sha256,
         HashAlgorithm::Sha384,
         HashAlgorithm::Sha512,
@@ -499,6 +510,7 @@ impl HashAlgorithm {
 
 /// A message authentication code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum MacAlgorithm {
     /// HMAC with SHA-256 (FIPS 198-1).
     HmacSha256,
@@ -510,7 +522,7 @@ pub enum MacAlgorithm {
 
 impl MacAlgorithm {
     /// Every message authentication code.
-    pub const ALL: [MacAlgorithm; 3] = [
+    pub const ALL: &'static [MacAlgorithm] = &[
         MacAlgorithm::HmacSha256,
         MacAlgorithm::HmacSha384,
         MacAlgorithm::HmacSha512,
@@ -543,6 +555,7 @@ impl MacAlgorithm {
 
 /// A key-derivation function.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum KdfAlgorithm {
     /// HKDF with SHA-256 (RFC 5869; SP 800-56C Rev. 2 §5).
     HkdfSha256,
@@ -550,14 +563,23 @@ pub enum KdfAlgorithm {
     HkdfSha384,
     /// HKDF with SHA-512 (RFC 5869; SP 800-56C Rev. 2 §5).
     HkdfSha512,
+    /// The one-step KDF with SHA-256 as its auxiliary function (SP 800-56C Rev. 2 §4.1, option 1).
+    OneStepSha256,
+    /// The one-step KDF with SHA-384 as its auxiliary function (SP 800-56C Rev. 2 §4.1, option 1).
+    OneStepSha384,
+    /// The one-step KDF with SHA-512 as its auxiliary function (SP 800-56C Rev. 2 §4.1, option 1).
+    OneStepSha512,
 }
 
 impl KdfAlgorithm {
     /// Every key-derivation function.
-    pub const ALL: [KdfAlgorithm; 3] = [
+    pub const ALL: &'static [KdfAlgorithm] = &[
         KdfAlgorithm::HkdfSha256,
         KdfAlgorithm::HkdfSha384,
         KdfAlgorithm::HkdfSha512,
+        KdfAlgorithm::OneStepSha256,
+        KdfAlgorithm::OneStepSha384,
+        KdfAlgorithm::OneStepSha512,
     ];
 
     /// The position of `self` in [`Self::ALL`].
@@ -567,26 +589,104 @@ impl KdfAlgorithm {
             KdfAlgorithm::HkdfSha256 => 0,
             KdfAlgorithm::HkdfSha384 => 1,
             KdfAlgorithm::HkdfSha512 => 2,
+            KdfAlgorithm::OneStepSha256 => 3,
+            KdfAlgorithm::OneStepSha384 => 4,
+            KdfAlgorithm::OneStepSha512 => 5,
         }
     }
 
-    /// The hash function HKDF's HMAC is built on.
+    /// The hash function the KDF is built on: HKDF's HMAC, or the one-step KDF's auxiliary
+    /// function.
     pub const fn hash(self) -> HashAlgorithm {
         match self {
-            KdfAlgorithm::HkdfSha256 => HashAlgorithm::Sha256,
-            KdfAlgorithm::HkdfSha384 => HashAlgorithm::Sha384,
-            KdfAlgorithm::HkdfSha512 => HashAlgorithm::Sha512,
+            KdfAlgorithm::HkdfSha256 | KdfAlgorithm::OneStepSha256 => HashAlgorithm::Sha256,
+            KdfAlgorithm::HkdfSha384 | KdfAlgorithm::OneStepSha384 => HashAlgorithm::Sha384,
+            KdfAlgorithm::HkdfSha512 | KdfAlgorithm::OneStepSha512 => HashAlgorithm::Sha512,
         }
     }
 
-    /// The longest output in bytes: 255 times the hash length (RFC 5869 §2.3).
+    /// The longest output in bytes. HKDF: 255 times the hash length (RFC 5869 §2.3). The one-step
+    /// KDF: 2^30 bytes, the bound AWS-LC's `SSKDF` enforces on both module lines
+    /// (`SSKDF_MAX_INPUT_LEN`, `crypto/fipsmodule/kdf/sskdf.c`), inside SP 800-56C Rev. 2 §4.1's
+    /// (2^32 − 1) × HashLen bits.
     pub const fn max_output_len(self) -> usize {
-        255 * self.hash().output_len()
+        match self {
+            KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => {
+                255 * self.hash().output_len()
+            }
+            KdfAlgorithm::OneStepSha256
+            | KdfAlgorithm::OneStepSha384
+            | KdfAlgorithm::OneStepSha512 => 1 << 30,
+        }
+    }
+}
+
+/// A key-agreement algorithm outside TLS: Diffie-Hellman on a curve (SP 800-56A Rev. 3; RFC
+/// 7748). TLS key exchange is [`KxGroup`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum KeyAgreementAlgorithm {
+    /// ECDH on P-256 (SP 800-56A Rev. 3, SP 800-186).
+    EcdhP256,
+    /// ECDH on P-384 (SP 800-56A Rev. 3, SP 800-186).
+    EcdhP384,
+    /// ECDH on P-521 (SP 800-56A Rev. 3, SP 800-186).
+    EcdhP521,
+    /// X25519 (RFC 7748).
+    X25519,
+}
+
+impl KeyAgreementAlgorithm {
+    /// Every key-agreement algorithm.
+    pub const ALL: &'static [KeyAgreementAlgorithm] = &[
+        KeyAgreementAlgorithm::EcdhP256,
+        KeyAgreementAlgorithm::EcdhP384,
+        KeyAgreementAlgorithm::EcdhP521,
+        KeyAgreementAlgorithm::X25519,
+    ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            KeyAgreementAlgorithm::EcdhP256 => 0,
+            KeyAgreementAlgorithm::EcdhP384 => 1,
+            KeyAgreementAlgorithm::EcdhP521 => 2,
+            KeyAgreementAlgorithm::X25519 => 3,
+        }
+    }
+
+    /// The algorithm's stable configuration name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            KeyAgreementAlgorithm::EcdhP256 => "ecdh-p256",
+            KeyAgreementAlgorithm::EcdhP384 => "ecdh-p384",
+            KeyAgreementAlgorithm::EcdhP521 => "ecdh-p521",
+            KeyAgreementAlgorithm::X25519 => "x25519",
+        }
+    }
+}
+
+impl FromStr for KeyAgreementAlgorithm {
+    type Err = ParseAlgorithmError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        KeyAgreementAlgorithm::ALL
+            .iter()
+            .copied()
+            .find(|a| a.as_str() == s)
+            .ok_or_else(|| ParseAlgorithmError(s.to_string()))
+    }
+}
+
+impl fmt::Display for KeyAgreementAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
 /// A TLS protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum TlsVersion {
     /// TLS 1.2.
     Tls12,
@@ -604,7 +704,7 @@ impl TlsVersion {
     }
 
     /// Every TLS version.
-    pub const ALL: [TlsVersion; 2] = [TlsVersion::Tls12, TlsVersion::Tls13];
+    pub const ALL: &'static [TlsVersion] = &[TlsVersion::Tls12, TlsVersion::Tls13];
 
     /// The position of `self` in [`Self::ALL`].
     #[cfg(test)]
@@ -618,6 +718,7 @@ impl TlsVersion {
 
 /// Any algorithm the capability table has a cell for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum Algorithm {
     /// A signature key algorithm.
     Signature(SignatureAlgorithm),
@@ -635,20 +736,77 @@ pub enum Algorithm {
     Mac(MacAlgorithm),
     /// A key-derivation function.
     Kdf(KdfAlgorithm),
+    /// A key-agreement algorithm outside TLS.
+    KeyAgreement(KeyAgreementAlgorithm),
 }
 
 impl Algorithm {
     /// Every algorithm, in family order.
     pub fn all() -> Vec<Algorithm> {
         let mut v = Vec::new();
-        v.extend(SignatureAlgorithm::ALL.map(Algorithm::Signature));
-        v.extend(TlsSignatureScheme::ALL.map(Algorithm::Scheme));
-        v.extend(KxGroup::ALL.map(Algorithm::Kx));
-        v.extend(CipherSuite::ALL.map(Algorithm::Cipher));
-        v.extend(HashAlgorithm::ALL.map(Algorithm::Hash));
-        v.extend(TlsVersion::ALL.map(Algorithm::Protocol));
-        v.extend(MacAlgorithm::ALL.map(Algorithm::Mac));
-        v.extend(KdfAlgorithm::ALL.map(Algorithm::Kdf));
+        v.extend(
+            SignatureAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Signature)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            TlsSignatureScheme::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Scheme)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            KxGroup::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Kx)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            CipherSuite::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Cipher)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            HashAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Hash)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            TlsVersion::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Protocol)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            MacAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Mac)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            KdfAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Kdf)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            KeyAgreementAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::KeyAgreement)
+                .collect::<Vec<_>>(),
+        );
         v
     }
 }
@@ -681,24 +839,45 @@ mod tests {
 
     #[test]
     fn preference_is_the_canonical_order() {
-        let mut all = TlsSignatureScheme::ALL;
+        let mut all = TlsSignatureScheme::ALL.to_vec();
         all.sort_by_key(|t| t.preference());
         assert_eq!(
-            all.map(TlsSignatureScheme::iana),
+            all.into_iter()
+                .map(TlsSignatureScheme::iana)
+                .collect::<Vec<_>>(),
             [
                 0x0906, 0x0503, 0x0403, 0x0603, 0x0807, 0x0805, 0x0806, 0x0804, 0x0501, 0x0601,
                 0x0401
             ]
         );
-        let mut ranks = TlsSignatureScheme::ALL.map(TlsSignatureScheme::preference);
+        let mut ranks = TlsSignatureScheme::ALL
+            .iter()
+            .copied()
+            .map(TlsSignatureScheme::preference)
+            .collect::<Vec<_>>();
         ranks.sort_unstable();
         assert_eq!(ranks, std::array::from_fn::<u8, 11, _>(|i| i as u8));
     }
 
     #[test]
+    fn every_preference_is_a_bit_of_the_handshake_scheme_mask() {
+        for &t in TlsSignatureScheme::ALL {
+            assert!(u32::from(t.preference()) < u64::BITS, "{t:?}");
+            assert!(
+                usize::from(t.preference()) < TlsSignatureScheme::ALL.len(),
+                "{t:?}"
+            );
+        }
+    }
+
+    #[test]
     fn post_quantum_groups_are_the_ml_kem_ones() {
         assert_eq!(
-            KxGroup::ALL.map(KxGroup::is_post_quantum),
+            KxGroup::ALL
+                .iter()
+                .copied()
+                .map(KxGroup::is_post_quantum)
+                .collect::<Vec<_>>(),
             [true, true, true, true, false, false, false]
         );
     }
@@ -706,7 +885,11 @@ mod tests {
     #[test]
     fn signature_names_are_stable_and_round_trip() {
         assert_eq!(
-            SignatureAlgorithm::ALL.map(SignatureAlgorithm::as_str),
+            SignatureAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(SignatureAlgorithm::as_str)
+                .collect::<Vec<_>>(),
             [
                 "ml-dsa-87",
                 "ecdsa-p256-sha256",
@@ -719,13 +902,13 @@ mod tests {
                 "rsa4096-sha384",
             ]
         );
-        for a in SignatureAlgorithm::ALL {
+        for &a in SignatureAlgorithm::ALL {
             assert_eq!(a.as_str().parse::<SignatureAlgorithm>().unwrap(), a);
             assert_eq!(a.to_string(), a.as_str());
         }
         assert_eq!(
             ParseAlgorithmError("p384".to_string()).to_string(),
-            "unknown signature algorithm \"p384\""
+            "unknown algorithm name \"p384\""
         );
         for bad in [
             "",
@@ -768,7 +951,11 @@ mod tests {
     fn cipher_suites_know_their_version() {
         use TlsVersion::{Tls12, Tls13};
         assert_eq!(
-            CipherSuite::ALL.map(CipherSuite::version),
+            CipherSuite::ALL
+                .iter()
+                .copied()
+                .map(CipherSuite::version)
+                .collect::<Vec<_>>(),
             [
                 Tls13, Tls13, Tls13, Tls12, Tls12, Tls12, Tls12, Tls12, Tls12
             ]
@@ -781,30 +968,41 @@ mod tests {
         use KxGroup as K;
         use TlsSignatureScheme as T;
         assert_eq!(
-            C::ALL.map(C::iana),
+            C::ALL.iter().copied().map(C::iana).collect::<Vec<_>>(),
             [
                 0x1302, 0x1301, 0x1303, 0xC02C, 0xC02B, 0xCCA9, 0xC030, 0xC02F, 0xCCA8
             ]
         );
         assert_eq!(
-            K::ALL.map(K::iana),
+            K::ALL.iter().copied().map(K::iana).collect::<Vec<_>>(),
             [0x0202, 0x11ED, 0x11EC, 0x11EB, 0x0018, 0x0017, 0x001D]
         );
         assert_eq!(
-            T::ALL.map(T::iana),
+            T::ALL.iter().copied().map(T::iana).collect::<Vec<_>>(),
             [
                 0x0403, 0x0503, 0x0603, 0x0807, 0x0804, 0x0805, 0x0806, 0x0401, 0x0501, 0x0601,
                 0x0906
             ]
         );
-        assert_eq!(TlsVersion::ALL.map(TlsVersion::iana), [0x0303, 0x0304]);
+        assert_eq!(
+            TlsVersion::ALL
+                .iter()
+                .copied()
+                .map(TlsVersion::iana)
+                .collect::<Vec<_>>(),
+            [0x0303, 0x0304]
+        );
     }
 
     #[test]
     fn signature_oids_are_the_registry_values() {
         use SignatureAlgorithm as S;
         assert_eq!(
-            S::ALL.map(S::signature_oid),
+            S::ALL
+                .iter()
+                .copied()
+                .map(S::signature_oid)
+                .collect::<Vec<_>>(),
             [
                 "2.16.840.1.101.3.4.3.19",
                 "1.2.840.10045.4.3.2",
@@ -822,7 +1020,11 @@ mod tests {
     #[test]
     fn hash_lengths() {
         assert_eq!(
-            HashAlgorithm::ALL.map(HashAlgorithm::output_len),
+            HashAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(HashAlgorithm::output_len)
+                .collect::<Vec<_>>(),
             [32, 48, 64]
         );
     }
@@ -837,17 +1039,37 @@ mod tests {
             + HashAlgorithm::ALL.len()
             + TlsVersion::ALL.len()
             + MacAlgorithm::ALL.len()
-            + KdfAlgorithm::ALL.len();
+            + KdfAlgorithm::ALL.len()
+            + KeyAgreementAlgorithm::ALL.len();
         assert_eq!(all.len(), expected);
-        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3 + 3);
+        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3 + 6 + 4);
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
         assert_eq!(
-            all[all.len() - 6..all.len() - 3],
-            MacAlgorithm::ALL.map(Algorithm::Mac)
+            all[all.len() - 13..all.len() - 10],
+            MacAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Mac)
+                .collect::<Vec<_>>()
         );
-        assert_eq!(all[all.len() - 3..], KdfAlgorithm::ALL.map(Algorithm::Kdf));
+        assert_eq!(
+            all[all.len() - 10..all.len() - 4],
+            KdfAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Kdf)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            all[all.len() - 4..],
+            KeyAgreementAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::KeyAgreement)
+                .collect::<Vec<_>>()
+        );
     }
 
     #[test]
@@ -860,16 +1082,34 @@ mod tests {
                 MacAlgorithm::HmacSha512
             ]
         );
-        assert_eq!(MacAlgorithm::ALL.map(MacAlgorithm::ordinal), [0, 1, 2]);
+        assert_eq!(
+            MacAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(MacAlgorithm::ordinal)
+                .collect::<Vec<_>>(),
+            [0, 1, 2]
+        );
     }
 
     #[test]
     fn each_mac_names_its_hash_and_a_full_length_tag() {
         assert_eq!(
-            MacAlgorithm::ALL.map(MacAlgorithm::hash),
+            MacAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(MacAlgorithm::hash)
+                .collect::<Vec<_>>(),
             HashAlgorithm::ALL
         );
-        assert_eq!(MacAlgorithm::ALL.map(MacAlgorithm::tag_len), [32, 48, 64]);
+        assert_eq!(
+            MacAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(MacAlgorithm::tag_len)
+                .collect::<Vec<_>>(),
+            [32, 48, 64]
+        );
     }
 
     #[test]
@@ -879,28 +1119,102 @@ mod tests {
             [
                 KdfAlgorithm::HkdfSha256,
                 KdfAlgorithm::HkdfSha384,
-                KdfAlgorithm::HkdfSha512
+                KdfAlgorithm::HkdfSha512,
+                KdfAlgorithm::OneStepSha256,
+                KdfAlgorithm::OneStepSha384,
+                KdfAlgorithm::OneStepSha512,
             ]
         );
-        assert_eq!(KdfAlgorithm::ALL.map(KdfAlgorithm::ordinal), [0, 1, 2]);
+        assert_eq!(
+            KdfAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(KdfAlgorithm::ordinal)
+                .collect::<Vec<_>>(),
+            std::array::from_fn::<usize, 6, _>(|i| i)
+        );
     }
 
     #[test]
-    fn each_kdf_names_its_hash_and_rfc_5869s_output_limit() {
+    fn each_kdf_names_its_hash_and_its_output_limit() {
+        use HashAlgorithm::{Sha256, Sha384, Sha512};
         assert_eq!(
-            KdfAlgorithm::ALL.map(KdfAlgorithm::hash),
-            HashAlgorithm::ALL
+            KdfAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(KdfAlgorithm::hash)
+                .collect::<Vec<_>>(),
+            [Sha256, Sha384, Sha512, Sha256, Sha384, Sha512]
         );
         assert_eq!(
-            KdfAlgorithm::ALL.map(KdfAlgorithm::max_output_len),
-            [8160, 12240, 16320]
+            KdfAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(KdfAlgorithm::max_output_len)
+                .collect::<Vec<_>>(),
+            [
+                8160,
+                12240,
+                16320,
+                1_073_741_824,
+                1_073_741_824,
+                1_073_741_824
+            ]
         );
+    }
+
+    #[test]
+    fn key_agreement_algorithm_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            KeyAgreementAlgorithm::ALL,
+            [
+                KeyAgreementAlgorithm::EcdhP256,
+                KeyAgreementAlgorithm::EcdhP384,
+                KeyAgreementAlgorithm::EcdhP521,
+                KeyAgreementAlgorithm::X25519,
+            ]
+        );
+        assert_eq!(
+            KeyAgreementAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(KeyAgreementAlgorithm::ordinal)
+                .collect::<Vec<_>>(),
+            std::array::from_fn::<usize, 4, _>(|i| i)
+        );
+    }
+
+    #[test]
+    fn key_agreement_names_are_stable_and_round_trip() {
+        assert_eq!(
+            KeyAgreementAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(KeyAgreementAlgorithm::as_str)
+                .collect::<Vec<_>>(),
+            ["ecdh-p256", "ecdh-p384", "ecdh-p521", "x25519"]
+        );
+        for &a in KeyAgreementAlgorithm::ALL {
+            assert_eq!(a.as_str().parse::<KeyAgreementAlgorithm>(), Ok(a));
+            assert_eq!(a.to_string(), a.as_str());
+        }
+        for bad in ["", "p384", "ECDH-P384", "ecdh-p384 ", "x448", "secp384r1"] {
+            assert_eq!(
+                bad.parse::<KeyAgreementAlgorithm>(),
+                Err(ParseAlgorithmError(bad.to_string())),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]
     fn signature_algorithm_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
-            SignatureAlgorithm::ALL.map(SignatureAlgorithm::ordinal),
+            SignatureAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(SignatureAlgorithm::ordinal)
+                .collect::<Vec<_>>(),
             std::array::from_fn::<usize, 9, _>(|i| i)
         );
     }
@@ -908,7 +1222,11 @@ mod tests {
     #[test]
     fn tls_signature_scheme_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
-            TlsSignatureScheme::ALL.map(TlsSignatureScheme::ordinal),
+            TlsSignatureScheme::ALL
+                .iter()
+                .copied()
+                .map(TlsSignatureScheme::ordinal)
+                .collect::<Vec<_>>(),
             std::array::from_fn::<usize, 11, _>(|i| i)
         );
     }
@@ -916,7 +1234,11 @@ mod tests {
     #[test]
     fn cipher_suite_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
-            CipherSuite::ALL.map(CipherSuite::ordinal),
+            CipherSuite::ALL
+                .iter()
+                .copied()
+                .map(CipherSuite::ordinal)
+                .collect::<Vec<_>>(),
             std::array::from_fn::<usize, 9, _>(|i| i)
         );
     }
@@ -924,7 +1246,11 @@ mod tests {
     #[test]
     fn kx_group_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
-            KxGroup::ALL.map(KxGroup::ordinal),
+            KxGroup::ALL
+                .iter()
+                .copied()
+                .map(KxGroup::ordinal)
+                .collect::<Vec<_>>(),
             std::array::from_fn::<usize, 7, _>(|i| i)
         );
     }
@@ -932,7 +1258,11 @@ mod tests {
     #[test]
     fn hash_algorithm_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
-            HashAlgorithm::ALL.map(HashAlgorithm::ordinal),
+            HashAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(HashAlgorithm::ordinal)
+                .collect::<Vec<_>>(),
             std::array::from_fn::<usize, 3, _>(|i| i)
         );
     }
@@ -940,7 +1270,11 @@ mod tests {
     #[test]
     fn tls_version_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
-            TlsVersion::ALL.map(TlsVersion::ordinal),
+            TlsVersion::ALL
+                .iter()
+                .copied()
+                .map(TlsVersion::ordinal)
+                .collect::<Vec<_>>(),
             std::array::from_fn::<usize, 2, _>(|i| i)
         );
     }

@@ -339,7 +339,7 @@ mod tests {
             crypto_profile::SignatureAlgorithm::EcdsaP256Sha256,
         )
         .unwrap();
-        let pk = k.public_key();
+        let pk = k.public_key().to_vec();
         let sig = k.sign(b"m").unwrap();
         assert!(ECDSA_P256_SHA256.verify_signature(&pk, b"m", &sig).is_ok());
         let mut flipped = sig.clone();

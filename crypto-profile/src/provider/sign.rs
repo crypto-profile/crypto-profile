@@ -376,7 +376,7 @@ mod tests {
 
     fn load(a: S) -> (crate::signature::KeyPair, Arc<dyn SigningKey>) {
         let k = crate::signature::KeyPair::generate(a).unwrap();
-        let der = PrivateKeyDer::Pkcs8(k.pkcs8_der().to_vec().into());
+        let der = PrivateKeyDer::Pkcs8(k.to_pkcs8_der().to_vec().into());
         let key = any_supported_type(&der).unwrap();
         (k, key)
     }
@@ -440,7 +440,7 @@ mod tests {
                 .unwrap();
             assert_eq!(signer.scheme(), scheme);
             assert!(
-                verifies(verify, &k.public_key(), &signer.sign(b"message").unwrap()),
+                verifies(verify, k.public_key(), &signer.sign(b"message").unwrap()),
                 "{a}"
             );
         }
@@ -499,7 +499,7 @@ mod tests {
             let signer = key.choose_scheme(&offered).unwrap();
             assert_eq!(signer.scheme(), want);
             assert!(
-                verifies(verify, &k.public_key(), &signer.sign(b"message").unwrap()),
+                verifies(verify, k.public_key(), &signer.sign(b"message").unwrap()),
                 "{want:?}"
             );
         }

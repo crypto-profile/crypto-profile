@@ -20,6 +20,14 @@ impl Fixture {
     }
 }
 
+fn refusal<T: std::fmt::Debug>(f: impl FnOnce() -> T + std::panic::UnwindSafe) -> String {
+    let error = std::panic::catch_unwind(f).unwrap_err();
+    error
+        .downcast_ref::<String>()
+        .cloned()
+        .unwrap_or_else(|| panic!("a non-String panic"))
+}
+
 impl Drop for Fixture {
     fn drop(&mut self) {
         std::fs::remove_dir_all(&self.0).unwrap();
@@ -52,10 +60,8 @@ fn body_index_enforces_visibility_purpose_and_cfg_pairing() {
         "//!mod backend {\n    pub(crate) use crate::backend_arms::*;\n}\n",
     ] {
         fixture.write("mod.rs", index);
-        assert!(
-            std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err(),
-            "{index}"
-        );
+        let message = refusal(|| modules(&fixture.0, true));
+        assert!(message.contains("invalid index line"), "{index}: {message}");
     }
 }
 
@@ -126,13 +132,8 @@ fn provider_bridge_name_cannot_be_redeclared() {
         "mod backend {\n    pub(crate) use crate::provider_arms::*;\n}\npub(crate) mod backend;\n",
     );
     fixture.write("backend.rs", "");
-    let error = std::panic::catch_unwind(|| modules(&fixture.0, false)).unwrap_err();
-    assert!(
-        error
-            .downcast_ref::<String>()
-            .unwrap()
-            .contains("duplicate module: backend")
-    );
+    let message = refusal(|| modules(&fixture.0, false));
+    assert!(message.contains("duplicate module: backend"), "{message}");
 }
 
 #[test]
@@ -140,7 +141,11 @@ fn cfg_cannot_cross_the_backend_bridge() {
     let fixture = Fixture::new();
     fixture.write("mod.rs", "#[cfg(any(test, feature = \"test-support\"))]\nmod backend {\n    pub(crate) use crate::backend_arms::*;\n}\npub mod test_support;\n");
     fixture.write("test_support.rs", "");
-    assert!(std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err());
+    let message = refusal(|| modules(&fixture.0, true));
+    assert!(
+        message.contains("invalid index line: unpaired test_support cfg"),
+        "{message}"
+    );
 }
 
 #[test]
@@ -158,9 +163,10 @@ fn child_declaration_text_in_strings_is_refused() {
         "\u{00a0}\nmod keys;\n",
     ] {
         fixture.write("sealbox.rs", source);
+        let message = refusal(|| modules(&fixture.0, true));
         assert!(
-            std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err(),
-            "{source}"
+            message.contains("expected exactly one `mod keys;` child declaration"),
+            "{source}: {message}"
         );
     }
 }
@@ -175,12 +181,20 @@ fn body_index_accepts_the_hmac_module() {
 }
 
 #[test]
-fn body_index_accepts_the_hkdf_module() {
+fn body_index_accepts_the_kdf_module_and_no_longer_hkdf() {
     let fixture = Fixture::new();
-    fixture.write("hkdf.rs", "pub const VALUE: u8 = 1;\n");
-    fixture.write("mod.rs", "pub mod hkdf;\n");
+    fixture.write("kdf.rs", "pub const VALUE: u8 = 1;\n");
+    fixture.write("mod.rs", "pub mod kdf;\n");
     let (output, _) = modules(&fixture.0, true);
-    assert!(output.contains("pub mod hkdf {"), "{output}");
+    assert!(output.contains("pub mod kdf {"), "{output}");
+    let removed = Fixture::new();
+    removed.write("hkdf.rs", "pub const VALUE: u8 = 1;\n");
+    removed.write("mod.rs", "pub mod hkdf;\n");
+    let message = refusal(|| modules(&removed.0, true));
+    assert!(
+        message.contains("invalid index line: \"pub mod hkdf;\""),
+        "{message}"
+    );
 }
 
 #[test]
@@ -190,7 +204,11 @@ fn profile_exports_are_exact_and_require_the_module() {
     let admitted = "pub use profiles::{Admitted, admit, assert_admitted_approved};\n";
     for exports in [resolved, admitted] {
         fixture.write("mod.rs", exports);
-        assert!(std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err());
+        let message = refusal(|| modules(&fixture.0, true));
+        assert!(
+            message.contains("profile exports require profiles module"),
+            "{message}"
+        );
     }
     fixture.write(
         "profiles.rs",
@@ -217,9 +235,10 @@ fn profile_exports_are_exact_and_require_the_module() {
             "mod.rs",
             &format!("mod profiles;\n{resolved}{admitted}{suffix}"),
         );
+        let message = refusal(|| modules(&fixture.0, true));
         assert!(
-            std::panic::catch_unwind(|| modules(&fixture.0, true)).is_err(),
-            "{suffix}"
+            message.contains("invalid index line"),
+            "{suffix}: {message}"
         );
     }
 }

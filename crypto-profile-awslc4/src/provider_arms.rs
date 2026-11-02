@@ -237,7 +237,7 @@ mod tests {
             crypto_profile::SignatureAlgorithm::EcdsaP384Sha384,
         )
         .unwrap();
-        assert!(load_pqdsa(&PrivatePkcs8KeyDer::from(k.pkcs8_der().to_vec())).is_none());
+        assert!(load_pqdsa(&PrivatePkcs8KeyDer::from(k.to_pkcs8_der().to_vec())).is_none());
         assert!(load_pqdsa(&PrivatePkcs8KeyDer::from(b"x".to_vec())).is_none());
     }
 
@@ -268,11 +268,11 @@ mod tests {
             .unwrap();
         let pk = k.public_key();
         let sig = k.sign(b"m").unwrap();
-        assert!(ML_DSA_87.verify_signature(&pk, b"m", &sig).is_ok());
+        assert!(ML_DSA_87.verify_signature(pk, b"m", &sig).is_ok());
         let mut flipped = sig.clone();
         if let Some(b) = flipped.last_mut() {
             *b ^= 1;
         }
-        assert!(ML_DSA_87.verify_signature(&pk, b"m", &flipped).is_err());
+        assert!(ML_DSA_87.verify_signature(pk, b"m", &flipped).is_err());
     }
 }

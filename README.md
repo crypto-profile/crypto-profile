@@ -17,7 +17,7 @@ One reviewed place for an application's cryptographic choices:
   - random bytes;
   - AEAD with module-chosen nonces;
   - HMAC under a profile, admitted with `admit` outside TLS and keyed through `hmac::Key`;
-  - HKDF under a profile, admitted with `admit` and derived through `hkdf::derive`;
+  - key derivation (HKDF) under a profile, admitted with `admit` and derived through `kdf::derive`;
   - a sealed box;
   - signature keys, signing and verification;
   - certificate-request generation.
@@ -65,7 +65,7 @@ A profile is an algorithm set, not a validation claim.
 
 Resolution intersects the published profile set with module-line availability after Options, preserving preference order and reporting every line exclusion. This changes neither the governing text nor the module approval claim. See [per-line resolution](docs/decisions/0006-per-line-profile-resolution.md).
 
-The option "post-quantum key exchange required" (`Options { pq_key_exchange_required: true, ..Options::default() }`) keeps only ML-KEM and hybrid key exchange on any profile, and so TLS 1.3 only. Whether the running module is validated for a resolved profile is a separate call, `assert_module_approves`, which fails closed.
+The option "post-quantum key exchange required" (`pq_key_exchange_required`, set on `Options::default()`) keeps only ML-KEM and hybrid key exchange on any profile, and so TLS 1.3 only. Whether the running module is validated for a resolved profile is a separate call, `assert_module_approves`, which fails closed.
 
 ## Documentation
 

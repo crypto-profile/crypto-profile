@@ -122,11 +122,25 @@ pub fn __cavp_short(file: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
     out
 }
 
+/// The fields of a `CryptoError::EmptyProfile`, which a backend cannot build to compare against.
+#[doc(hidden)]
+pub fn __empty_profile(e: &CryptoError) -> Option<(crate::Profile, crate::Options, crate::Family)> {
+    match *e {
+        CryptoError::EmptyProfile {
+            profile,
+            options,
+            category,
+        } => Some((profile, options, category)),
+        _ => None,
+    }
+}
+
 /// The handshake schemes a test peer offers on `module`: every scheme the module has.
 #[doc(hidden)]
 pub fn __peer_schemes(module: Module) -> Vec<TlsSignatureScheme> {
     TlsSignatureScheme::ALL
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|t| capability(module, Algorithm::Scheme(*t)).available)
         .collect()
 }
@@ -160,7 +174,7 @@ pub fn __library_basename(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Linkage, ModuleLine, Options};
+    use crate::{KdfAlgorithm, KeyAgreementAlgorithm, Linkage, ModuleLine, Options};
 
     const M3S: Module = Module {
         line: ModuleLine::AwsLcFips3,
@@ -197,7 +211,14 @@ mod tests {
                 missing,
                 [
                     Algorithm::Signature(ml_dsa),
-                    Algorithm::Scheme(TlsSignatureScheme::MlDsa87)
+                    Algorithm::Scheme(TlsSignatureScheme::MlDsa87),
+                    Algorithm::Kdf(KdfAlgorithm::OneStepSha256),
+                    Algorithm::Kdf(KdfAlgorithm::OneStepSha384),
+                    Algorithm::Kdf(KdfAlgorithm::OneStepSha512),
+                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP256),
+                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
+                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP521),
+                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::X25519),
                 ],
                 "{m:?}"
             );
@@ -582,13 +603,12 @@ macro_rules! conformance_tests {
             k: &[KxGroup],
             t: &[TlsSignatureScheme],
         ) -> Policy {
-            Policy {
-                peer_certificate_rule: None,
-                versions: v.to_vec(),
-                cipher_suites: c.to_vec(),
-                kx_groups: k.to_vec(),
-                signature_schemes: t.to_vec(),
-            }
+            let mut p = Policy::default();
+            p.versions = v.to_vec();
+            p.cipher_suites = c.to_vec();
+            p.kx_groups = k.to_vec();
+            p.signature_schemes = t.to_vec();
+            p
         }
 
         fn suite_key(c: CipherSuite) -> SignatureAlgorithm {
@@ -606,6 +626,7 @@ macro_rules! conformance_tests {
                 | CipherSuite::Tls12EcdheEcdsaChacha20Poly1305Sha256 => {
                     SignatureAlgorithm::EcdsaP384Sha384
                 }
+                _ => panic!("{c:?}: no conformance key for this suite"),
             }
         }
 
@@ -635,6 +656,7 @@ macro_rules! conformance_tests {
                     (SignatureAlgorithm::Rsa2048Sha384, rsa12.0, rsa12.1)
                 }
                 TlsSignatureScheme::MlDsa87 => (SignatureAlgorithm::MlDsa87, t13.0, t13.1),
+                _ => panic!("{t:?}: no conformance setup for this scheme"),
             }
         }
 
@@ -680,10 +702,11 @@ macro_rules! conformance_tests {
                 let want = match h {
                     HashAlgorithm::Sha256 => 65,
                     HashAlgorithm::Sha384 | HashAlgorithm::Sha512 => 129,
+                    _ => panic!("{h:?}: no CAVP file"),
                 };
                 assert_eq!(cases.len(), want, "{h:?}");
                 for (m, d) in cases {
-                    assert_eq!(digest::digest(h, &m), d, "{h:?}");
+                    assert_eq!(digest::digest(h, &m), Ok(d), "{h:?}");
                 }
             }
         }
@@ -811,6 +834,7 @@ macro_rules! conformance_tests {
                 | SignatureAlgorithm::EcdsaP521Sha384
                 | SignatureAlgorithm::EcdsaP521Sha512
                 | SignatureAlgorithm::Ed25519 => None,
+                _ => panic!("{a}: no expected RSA key length"),
             }
         }
 
@@ -904,14 +928,12 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_hmac_refusal_matrix() {
-            for (p, off, on) in $crate::conformance::golden::MAC_GOLDEN {
+            for &(p, off, on) in $crate::conformance::golden::MAC_GOLDEN {
                 for (unclassified, admitted) in [(false, off), (true, on)] {
-                    let o = Options {
-                        cnsa1_unclassified_nss: unclassified,
-                        ..Options::default()
-                    };
+                    let mut o = Options::default();
+                    o.cnsa1_unclassified_nss = unclassified;
                     let a = admit(p, o);
-                    for m in MacAlgorithm::ALL {
+                    for &m in MacAlgorithm::ALL {
                         let want = if admitted.contains(&m) {
                             Ok(m)
                         } else {
@@ -939,25 +961,26 @@ macro_rules! conformance_tests {
             };
             let cases = v.as_array().unwrap();
             assert_eq!(cases.len(), 3);
-            let on = Options {
-                cnsa1_unclassified_nss: true,
-                ..Options::default()
-            };
+            let mut on = Options::default();
+            on.cnsa1_unclassified_nss = true;
             let mut profiles = 0;
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 let a = admit(p, on);
                 if !a.kdfs().contains(&KdfAlgorithm::HkdfSha256) {
                     continue;
                 }
                 profiles += 1;
                 for t in cases {
-                    let info = d(&t["info"]);
-                    let got = hkdf::derive(
+                    let (salt, info) = (d(&t["salt"]), d(&t["info"]));
+                    let spec = kdf::Spec::Hkdf {
+                        algorithm: KdfAlgorithm::HkdfSha256,
+                        salt: Some(&salt),
+                        info: &info,
+                    };
+                    let got = kdf::derive(
                         &a,
-                        KdfAlgorithm::HkdfSha256,
                         &d(&t["ikm"]),
-                        Some(&d(&t["salt"])),
-                        &info,
+                        &spec,
                         t["len"].as_u64().unwrap() as usize,
                     )
                     .map(|k| k.as_bytes().to_vec());
@@ -974,10 +997,8 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_wycheproof_hkdf() {
-            let on = Options {
-                cnsa1_unclassified_nss: true,
-                ..Options::default()
-            };
+            let mut on = Options::default();
+            on.cnsa1_unclassified_nss = true;
             for (k, file, total, valid, empty_info, profiles) in [
                 (
                     KdfAlgorithm::HkdfSha256,
@@ -1007,7 +1028,7 @@ macro_rules! conformance_tests {
                 let cases = $crate::conformance::__wycheproof_kdf_cases(file);
                 assert_eq!(cases.len(), total, "{k:?}");
                 let mut exercised = 0;
-                for p in Profile::ALL {
+                for &p in Profile::ALL {
                     let a = admit(p, on);
                     if !a.kdfs().contains(&k) {
                         continue;
@@ -1015,8 +1036,13 @@ macro_rules! conformance_tests {
                     exercised += 1;
                     let (mut derived, mut refused_info, mut too_long) = (0, 0, 0);
                     for c in &cases {
-                        let got = hkdf::derive(&a, k, &c.ikm, Some(&c.salt), &c.info, c.size)
-                            .map(|d| d.as_bytes().to_vec());
+                        let spec = kdf::Spec::Hkdf {
+                            algorithm: k,
+                            salt: Some(&c.salt),
+                            info: &c.info,
+                        };
+                        let got =
+                            kdf::derive(&a, &c.ikm, &spec, c.size).map(|d| d.as_bytes().to_vec());
                         match c.result.as_str() {
                             "valid" if c.info.is_empty() && p != Profile::Unrestricted => {
                                 refused_info += 1;
@@ -1060,22 +1086,34 @@ macro_rules! conformance_tests {
 
         #[test]
         fn conformance_hkdf_refusal_matrix() {
-            for (p, off, on) in $crate::conformance::golden::KDF_GOLDEN {
+            for &(p, off, on) in $crate::conformance::golden::KDF_GOLDEN {
                 for (unclassified, admitted) in [(false, off), (true, on)] {
-                    let o = Options {
-                        cnsa1_unclassified_nss: unclassified,
-                        ..Options::default()
-                    };
+                    let mut o = Options::default();
+                    o.cnsa1_unclassified_nss = unclassified;
                     let a = admit(p, o);
                     assert_eq!(a.kdfs(), admitted, "{p} {o}");
-                    for k in KdfAlgorithm::ALL {
+                    for &k in KdfAlgorithm::ALL {
                         let len = |info: &[u8]| {
-                            hkdf::derive(&a, k, &[7; 32], None, info, 32)
-                                .map(|d| d.as_bytes().len())
+                            let spec = kdf::Spec::Hkdf {
+                                algorithm: k,
+                                salt: None,
+                                info,
+                            };
+                            kdf::derive(&a, &[7; 32], &spec, 32).map(|d| d.as_bytes().len())
                         };
-                        let refused = Err(CryptoError::NotInProfile {
-                            profile: p,
-                            algorithm: Algorithm::Kdf(k),
+                        let one_step = matches!(
+                            k,
+                            KdfAlgorithm::OneStepSha256
+                                | KdfAlgorithm::OneStepSha384
+                                | KdfAlgorithm::OneStepSha512
+                        );
+                        let refused = Err(if one_step {
+                            CryptoError::KdfSpecMismatch { algorithm: k }
+                        } else {
+                            CryptoError::NotInProfile {
+                                profile: p,
+                                algorithm: Algorithm::Kdf(k),
+                            }
                         });
                         let (want, want_empty_info) = if !admitted.contains(&k) {
                             (refused, refused)
@@ -1137,7 +1175,7 @@ macro_rules! conformance_tests {
                     },
                     Algorithm::Hash(h) => {
                         assert!(cap.available, "{a:?}");
-                        assert_eq!(digest::digest(h, b"").len(), h.output_len());
+                        assert_eq!(digest::digest(h, b"").map(|d| d.len()), Ok(h.output_len()));
                     }
                     Algorithm::Mac(m) => {
                         assert!(cap.available, "{m:?}");
@@ -1150,17 +1188,29 @@ macro_rules! conformance_tests {
                         assert_eq!(key.sign(b"").as_ref().len(), m.tag_len(), "{m:?}");
                     }
                     Algorithm::Kdf(k) => {
-                        assert!(cap.available, "{k:?}");
-                        let key = hkdf::derive(
-                            &admit(Profile::Unrestricted, Options::default()),
-                            k,
-                            &[7; 32],
-                            None,
-                            b"capability",
-                            k.max_output_len(),
-                        )
-                        .unwrap_or_else(|e| panic!("{k:?}: {e}"));
-                        assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
+                        let unrestricted = admit(Profile::Unrestricted, Options::default());
+                        let spec = kdf::Spec::Hkdf {
+                            algorithm: k,
+                            salt: None,
+                            info: b"capability",
+                        };
+                        if cap.available {
+                            let key =
+                                kdf::derive(&unrestricted, &[7; 32], &spec, k.max_output_len())
+                                    .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                            assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
+                        } else {
+                            assert!(!unrestricted.kdfs().contains(&k), "{k:?}");
+                            assert_eq!(
+                                kdf::derive(&unrestricted, &[7; 32], &spec, 32).err(),
+                                Some(CryptoError::KdfSpecMismatch { algorithm: k }),
+                                "{k:?}"
+                            );
+                        }
+                    }
+                    Algorithm::KeyAgreement(k) => {
+                        assert!(!cap.available, "{k:?}");
+                        assert_eq!(cap.approval, Approval::Unverified, "{k:?}");
                     }
                     Algorithm::Kx(k) => {
                         let p = policy(
@@ -1200,7 +1250,8 @@ macro_rules! conformance_tests {
                     }
                     Algorithm::Protocol(v) => {
                         let suites: Vec<_> = CipherSuite::ALL
-                            .into_iter()
+                            .iter()
+                            .copied()
                             .filter(|c| c.version() == v)
                             .collect();
                         let p = policy(
@@ -1240,6 +1291,7 @@ macro_rules! conformance_tests {
                             );
                         }
                     }
+                    _ => panic!("{a:?}: no capability check for this family"),
                 }
             }
         }
@@ -1247,7 +1299,7 @@ macro_rules! conformance_tests {
         fn sign_and_verify(s: SignatureAlgorithm) -> Result<(), CryptoError> {
             let k = signature::KeyPair::generate(s)?;
             let sig = k.sign(b"m")?;
-            signature::verify(s, &k.public_key(), b"m", &sig)
+            signature::verify(s, k.public_key(), b"m", &sig)
         }
 
         #[test]

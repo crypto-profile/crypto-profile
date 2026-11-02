@@ -65,7 +65,7 @@ pub use backend_body::test_support;
 pub use backend_body::{
     Admitted, Resolved, admit, assert_admitted_approved, assert_module_approves, resolve,
 };
-pub use backend_body::{aead, csr, digest, fips, hkdf, hmac, random, sealbox, signature, tls};
+pub use backend_body::{aead, csr, digest, fips, hmac, kdf, random, sealbox, signature, tls};
 
 /// The AWS-LC FIPS module (line and linkage) this build links. Its certificate status is
 /// [`fips::certificate()`]; for 4.x the module is in CMVP review.
@@ -90,6 +90,25 @@ pub(crate) fn ensure(alg: Algorithm) -> Result<(), CryptoError> {
 }
 
 #[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ensure_refuses_what_this_backend_does_not_implement() {
+        for algorithm in [
+            Algorithm::Kdf(KdfAlgorithm::OneStepSha384),
+            Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
+        ] {
+            assert_eq!(ensure(algorithm), Err(CryptoError::Unavailable(algorithm)));
+        }
+        assert_eq!(
+            ensure(Algorithm::Signature(SignatureAlgorithm::MlDsa87)),
+            Ok(())
+        );
+    }
+}
+
+#[cfg(test)]
 mod shared_body_tests {
     #[test]
     fn shared_exports_and_facade_agree() {
@@ -97,7 +116,7 @@ mod shared_body_tests {
             crate::backend_body::signature::KeyPair::generate(crate::SignatureAlgorithm::MlDsa87)
                 .unwrap();
         assert_eq!(
-            crate::backend_arms::MlDsa::public_key(key.pkcs8_der()).unwrap(),
+            crate::backend_arms::MlDsa::public_key(key.to_pkcs8_der()).unwrap(),
             key.public_key()
         );
         assert_eq!(

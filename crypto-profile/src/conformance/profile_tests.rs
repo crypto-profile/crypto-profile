@@ -19,11 +19,11 @@ macro_rules! __conformance_profile_tests {
         use $crate::conformance::golden::{GOLDEN, expected};
         use $crate::conformance::{__peer_schemes, __unlisted_key};
 
-        const PQ: Options = Options {
-            peer_certificates_match_profile: false,
-            pq_key_exchange_required: true,
-            cnsa1_unclassified_nss: false,
-        };
+        fn pq() -> Options {
+            let mut o = Options::default();
+            o.pq_key_exchange_required = true;
+            o
+        }
         const NO_GROUP: &str = "peer is incompatible: NoKxGroupsInCommon";
         const NO_SUITE: &str = "peer is incompatible: NoCipherSuitesInCommon";
         const NO_SCHEME: &str = "peer is incompatible: NoSignatureSchemesInCommon";
@@ -35,13 +35,12 @@ macro_rules! __conformance_profile_tests {
         }
 
         fn peer(v: V, c: C, k: &[K]) -> Policy {
-            Policy {
-                peer_certificate_rule: None,
-                versions: vec![v],
-                cipher_suites: vec![c],
-                kx_groups: k.to_vec(),
-                signature_schemes: __peer_schemes(MODULE),
-            }
+            let mut p = Policy::default();
+            p.versions = vec![v];
+            p.cipher_suites = vec![c];
+            p.kx_groups = k.to_vec();
+            p.signature_schemes = __peer_schemes(MODULE);
+            p
         }
 
         fn tls13(k: &[K]) -> Policy {
@@ -66,23 +65,10 @@ macro_rules! __conformance_profile_tests {
         }
 
         fn pkcs1(client: &Resolved, v: V) -> Policy {
-            Policy {
-                versions: client
-                    .tls
-                    .versions
-                    .iter()
-                    .copied()
-                    .filter(|x| *x == v)
-                    .collect(),
-                signature_schemes: client
-                    .tls
-                    .signature_schemes
-                    .iter()
-                    .copied()
-                    .filter(|t| PKCS1.contains(&t.iana()))
-                    .collect(),
-                ..client.tls.clone()
-            }
+            let mut p = client.tls.clone();
+            p.versions.retain(|x| *x == v);
+            p.signature_schemes.retain(|t| PKCS1.contains(&t.iana()));
+            p
         }
 
         fn has_pkcs1(r: &Resolved) -> bool {
@@ -105,47 +91,45 @@ macro_rules! __conformance_profile_tests {
         fn open_peer() -> Resolved {
             let s = Profile::Unrestricted.spec();
             let on = |a: Algorithm| capability(MODULE, a).available;
-            Resolved {
-                profile: Profile::Unrestricted,
-                options: Options::default(),
-                excluded: expected(MODULE, Profile::Unrestricted, Options::default())
-                    .unwrap()
-                    .excluded
-                    .to_vec(),
-                tls: Policy {
-                    peer_certificate_rule: None,
-                    versions: s
-                        .versions
-                        .iter()
-                        .copied()
-                        .filter(|x| on(Algorithm::Protocol(*x)))
-                        .collect(),
-                    cipher_suites: s
-                        .cipher_suites
-                        .iter()
-                        .copied()
-                        .filter(|x| on(Algorithm::Cipher(*x)))
-                        .collect(),
-                    kx_groups: s
-                        .kx_groups
-                        .iter()
-                        .copied()
-                        .filter(|x| on(Algorithm::Kx(*x)))
-                        .collect(),
-                    signature_schemes: s
-                        .signature_schemes
-                        .iter()
-                        .copied()
-                        .filter(|x| on(Algorithm::Scheme(*x)))
-                        .collect(),
-                },
-                keys: s
-                    .key_algorithms
-                    .iter()
-                    .copied()
-                    .filter(|x| on(Algorithm::Signature(*x)))
-                    .collect(),
-            }
+            let mut r = resolve(Profile::Unrestricted, Options::default()).unwrap();
+            r.profile = Profile::Unrestricted;
+            r.options = Options::default();
+            r.excluded = expected(MODULE, Profile::Unrestricted, Options::default())
+                .unwrap()
+                .excluded
+                .to_vec();
+            r.tls = Policy::default();
+            r.tls.versions = s
+                .versions
+                .iter()
+                .copied()
+                .filter(|x| on(Algorithm::Protocol(*x)))
+                .collect();
+            r.tls.cipher_suites = s
+                .cipher_suites
+                .iter()
+                .copied()
+                .filter(|x| on(Algorithm::Cipher(*x)))
+                .collect();
+            r.tls.kx_groups = s
+                .kx_groups
+                .iter()
+                .copied()
+                .filter(|x| on(Algorithm::Kx(*x)))
+                .collect();
+            r.tls.signature_schemes = s
+                .signature_schemes
+                .iter()
+                .copied()
+                .filter(|x| on(Algorithm::Scheme(*x)))
+                .collect();
+            r.keys = s
+                .key_algorithms
+                .iter()
+                .copied()
+                .filter(|x| on(Algorithm::Signature(*x)))
+                .collect();
+            r
         }
 
         fn verifies(client: &Policy, key: S) -> Result<u16, String> {
@@ -162,13 +146,10 @@ macro_rules! __conformance_profile_tests {
         #[test]
         fn resolve_matches_the_golden_tables() {
             let (mut compared, mut refused) = (0, 0);
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 for pq in [false, true] {
-                    let options = Options {
-                        peer_certificates_match_profile: false,
-                        pq_key_exchange_required: pq,
-                        cnsa1_unclassified_nss: false,
-                    };
+                    let mut options = Options::default();
+                    options.pq_key_exchange_required = pq;
                     let got = resolve(p, options);
                     match expected(MODULE, p, options) {
                         Err(e) => {
@@ -222,16 +203,9 @@ macro_rules! __conformance_profile_tests {
                 GOLDEN
                     .iter()
                     .filter(|g| {
-                        expected(
-                            MODULE,
-                            g.profile,
-                            Options {
-                                peer_certificates_match_profile: false,
-                                pq_key_exchange_required: g.pq,
-                                cnsa1_unclassified_nss: false,
-                            },
-                        )
-                        .is_ok()
+                        let mut options = Options::default();
+                        options.pq_key_exchange_required = g.pq;
+                        expected(MODULE, g.profile, options).is_ok()
                     })
                     .count()
             );
@@ -475,13 +449,11 @@ macro_rules! __conformance_profile_tests {
 
         #[test]
         fn every_resolved_profile_builds_a_provider() {
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 for (pq, peer) in [(false, false), (true, false), (false, true), (true, true)] {
-                    let o = Options {
-                        pq_key_exchange_required: pq,
-                        peer_certificates_match_profile: peer,
-                        cnsa1_unclassified_nss: false,
-                    };
+                    let mut o = Options::default();
+                    o.pq_key_exchange_required = pq;
+                    o.peer_certificates_match_profile = peer;
                     if let Some(r) = admitted(p, o) {
                         assert_eq!(tls::crypto_provider(&r.tls).err(), None, "{p} {o}");
                     }
@@ -491,7 +463,7 @@ macro_rules! __conformance_profile_tests {
 
         #[test]
         fn preferred_with_the_option_refuses_a_classical_only_peer() {
-            if let Some(p) = admitted(Profile::Preferred, PQ) {
+            if let Some(p) = admitted(Profile::Preferred, pq()) {
                 let classical = tls13(&[K::Secp384r1, K::Secp256r1, K::X25519]);
                 assert_eq!(served(&classical, &p, |n| n.kx.iana()), err(NO_GROUP));
                 let hybrid = tls13(&[K::Secp256r1MlKem768]);
@@ -503,7 +475,7 @@ macro_rules! __conformance_profile_tests {
         fn cnsa2_with_the_option_is_cnsa2() {
             let (a, b) = (
                 admitted(Profile::Cnsa2, Options::default()),
-                admitted(Profile::Cnsa2, PQ),
+                admitted(Profile::Cnsa2, pq()),
             );
             if let (Some(a), Some(b)) = (a, b) {
                 assert_eq!((a.tls, a.keys), (b.tls, b.keys));
@@ -512,7 +484,7 @@ macro_rules! __conformance_profile_tests {
 
         #[test]
         fn the_option_refuses_a_tls12_peer() {
-            if let Some(f) = admitted(Profile::Fips1403, PQ) {
+            if let Some(f) = admitted(Profile::Fips1403, pq()) {
                 assert_eq!(served(&tls12(), &f, |n| n.version.iana()), err(NO_TLS12));
             }
         }
@@ -523,7 +495,7 @@ macro_rules! __conformance_profile_tests {
                 if let Some(r) = admitted(p, Options::default()) {
                     assert!(has_pkcs1(&r), "{p}");
                 }
-                if let Some(r) = admitted(p, PQ) {
+                if let Some(r) = admitted(p, pq()) {
                     assert!(!has_pkcs1(&r), "{p}");
                 }
             }
@@ -583,7 +555,7 @@ macro_rules! __conformance_profile_tests {
 
         #[test]
         fn rustls_classifies_every_profile_but_unrestricted_as_fips() {
-            for p in Profile::ALL {
+            for &p in Profile::ALL {
                 let Some(r) = admitted(p, Options::default()) else {
                     continue;
                 };
@@ -595,6 +567,7 @@ macro_rules! __conformance_profile_tests {
                     | Profile::Bsi
                     | Profile::Fips1403
                     | Profile::Fips1402 => true,
+                    _ => panic!("{p}: no expected FIPS classification"),
                 };
                 let cfg = client_builder(&r.tls)
                     .unwrap()
@@ -633,14 +606,10 @@ macro_rules! __conformance_profile_tests {
         #[test]
         fn cnsa1_signs_only_with_a_scheme_it_lists() {
             let one = admitted(Profile::Cnsa1, Options::default());
-            let permissive = Policy {
-                signature_schemes: vec![T::RsaPssSha512, T::RsaPssSha384],
-                ..tls13(&[K::Secp384r1])
-            };
-            let outside = Policy {
-                signature_schemes: vec![T::RsaPssSha512, T::RsaPssSha256],
-                ..tls13(&[K::Secp384r1])
-            };
+            let mut permissive = tls13(&[K::Secp384r1]);
+            permissive.signature_schemes = vec![T::RsaPssSha512, T::RsaPssSha384];
+            let mut outside = tls13(&[K::Secp384r1]);
+            outside.signature_schemes = vec![T::RsaPssSha512, T::RsaPssSha256];
             let scheme = |client: &Policy, server: &Policy| {
                 handshake(client, server, S::Rsa3072Sha384).map(|n| n.scheme.iana())
             };
@@ -654,14 +623,10 @@ macro_rules! __conformance_profile_tests {
         #[test]
         fn a_certified_key_signs_only_with_a_scheme_the_profile_lists() {
             let one = admitted(Profile::Cnsa1, Options::default());
-            let permissive = Policy {
-                signature_schemes: vec![T::RsaPssSha512, T::RsaPssSha384],
-                ..tls13(&[K::Secp384r1])
-            };
-            let outside = Policy {
-                signature_schemes: vec![T::RsaPssSha512, T::RsaPssSha256],
-                ..tls13(&[K::Secp384r1])
-            };
+            let mut permissive = tls13(&[K::Secp384r1]);
+            permissive.signature_schemes = vec![T::RsaPssSha512, T::RsaPssSha384];
+            let mut outside = tls13(&[K::Secp384r1]);
+            outside.signature_schemes = vec![T::RsaPssSha512, T::RsaPssSha256];
             let scheme = |client: &Policy, server: &Resolved| {
                 handshake_certified(client, server, S::Rsa3072Sha384).map(|n| n.scheme.iana())
             };

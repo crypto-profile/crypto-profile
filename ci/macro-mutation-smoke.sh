@@ -23,8 +23,8 @@ for tree in provider backend_body; do
       ;;
     backend_body)
       file=crypto-profile/src/backend_body/signature.rs
-      original='self.public.clone()'
-      replacement='Vec::new()'
+      original=$'pub fn public_key(&self) -> &[u8] {\n        &self.public\n'
+      replacement=$'pub fn public_key(&self) -> &[u8] {\n        &[]\n'
       assertion=every_algorithm_generates_signs_and_verifies
       ;;
   esac

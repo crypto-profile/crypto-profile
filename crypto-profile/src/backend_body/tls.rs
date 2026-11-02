@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 /// What a TLS configuration may use: versions, suites and groups in preference order, and a set
 /// of signature schemes. No list may name an entry twice.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
 pub struct Policy {
     /// Protocol versions.
     pub versions: Vec<V>,
@@ -34,9 +35,9 @@ pub struct Policy {
 pub(crate) use crate::provider::assembly::group as rustls_group;
 pub(crate) use crate::provider::assembly::suite as rustls_suite;
 
-fn rustls_scheme(t: T) -> rustls::SignatureScheme {
+fn rustls_scheme(t: T) -> Result<rustls::SignatureScheme, CryptoError> {
     use rustls::SignatureScheme as R;
-    match t {
+    Ok(match t {
         T::EcdsaNistp256Sha256 => R::ECDSA_NISTP256_SHA256,
         T::EcdsaNistp384Sha384 => R::ECDSA_NISTP384_SHA384,
         T::EcdsaNistp521Sha512 => R::ECDSA_NISTP521_SHA512,
@@ -48,13 +49,15 @@ fn rustls_scheme(t: T) -> rustls::SignatureScheme {
         T::RsaPkcs1Sha384 => R::RSA_PKCS1_SHA384,
         T::RsaPkcs1Sha512 => R::RSA_PKCS1_SHA512,
         T::MlDsa87 => R::ML_DSA_87,
-    }
+        _ => return Err(CryptoError::Unavailable(Algorithm::Scheme(t))),
+    })
 }
 
-fn rustls_version(v: V) -> &'static rustls::SupportedProtocolVersion {
+fn rustls_version(v: V) -> Result<&'static rustls::SupportedProtocolVersion, CryptoError> {
     match v {
-        V::Tls12 => &rustls::version::TLS12,
-        V::Tls13 => &rustls::version::TLS13,
+        V::Tls12 => Ok(&rustls::version::TLS12),
+        V::Tls13 => Ok(&rustls::version::TLS13),
+        _ => Err(CryptoError::Unavailable(Algorithm::Protocol(v))),
     }
 }
 
@@ -74,8 +77,9 @@ fn select_schemes(
     schemes
         .iter()
         .map(|t| {
+            let scheme = rustls_scheme(*t)?;
             base.iter()
-                .find(|(s, _)| *s == rustls_scheme(*t))
+                .find(|(s, _)| *s == scheme)
                 .copied()
                 .ok_or(CryptoError::Unavailable(Algorithm::Scheme(*t)))
         })
@@ -131,14 +135,14 @@ impl KeyProvider for PolicyKeyProvider {
 }
 
 struct SchemeSet {
-    bits: u16,
+    bits: u64,
     ordered: Vec<T>,
 }
 
 fn scheme_set(schemes: &[T]) -> Result<SchemeSet, CryptoError> {
-    let mut bits = 0u16;
+    let mut bits = 0u64;
     for t in schemes {
-        let bit = 1u16 << t.preference();
+        let bit = 1u64 << t.preference();
         if bits & bit != 0 {
             return Err(CryptoError::PolicyDuplicate(Algorithm::Scheme(*t)));
         }
@@ -157,7 +161,7 @@ struct Tables {
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct TableKey {
-    scheme_bits: u16,
+    scheme_bits: u64,
     rule: Option<crypto_profile::PeerCertificateRuleId>,
 }
 
@@ -205,6 +209,11 @@ fn cached_tables(
     let base = base_provider();
     let verify = base.signature_verification_algorithms;
     let mapping = select_schemes(verify.mapping, &set.ordered)?;
+    let schemes: Vec<_> = set
+        .ordered
+        .iter()
+        .map(|t| rustls_scheme(*t))
+        .collect::<Result<_, _>>()?;
     let t = Tables {
         verification: Box::leak(Box::new(WebPkiSupportedAlgorithms {
             all: verify.all,
@@ -212,7 +221,7 @@ fn cached_tables(
         })),
         keys: Box::leak(Box::new(PolicyKeyProvider {
             base: base.key_provider,
-            schemes: Box::leak(set.ordered.iter().map(|t| rustls_scheme(*t)).collect()),
+            schemes: Box::leak(schemes.into_boxed_slice()),
         })),
     };
     cache.insert(key, t);
@@ -277,7 +286,7 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
         .iter()
         .filter(|c| p.versions.contains(&c.version()))
         .map(|c| rustls_suite(*c))
-        .collect();
+        .collect::<Result<_, _>>()?;
     if suites.is_empty() {
         return Err(CryptoError::PolicyEmpty(Family::CipherSuite));
     }
@@ -309,14 +318,18 @@ pub fn crypto_provider(p: &Policy) -> Result<CryptoProvider, CryptoError> {
     let tables = tables_for_rule(&schemes, p.peer_certificate_rule)?;
     Ok(CryptoProvider {
         cipher_suites: suites,
-        kx_groups: p.kx_groups.iter().map(|k| rustls_group(*k)).collect(),
+        kx_groups: p
+            .kx_groups
+            .iter()
+            .map(|k| rustls_group(*k))
+            .collect::<Result<_, _>>()?,
         signature_verification_algorithms: *tables.verification,
         key_provider: tables.keys,
         ..base_provider()
     })
 }
 
-fn versions(p: &Policy) -> Vec<&'static rustls::SupportedProtocolVersion> {
+fn versions(p: &Policy) -> Result<Vec<&'static rustls::SupportedProtocolVersion>, CryptoError> {
     p.versions.iter().map(|v| rustls_version(*v)).collect()
 }
 
@@ -331,7 +344,7 @@ pub fn client_builder(
         }));
     }
     rustls::ClientConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
-        .with_protocol_versions(&versions(p))
+        .with_protocol_versions(&versions(p)?)
         .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))
 }
 
@@ -346,7 +359,7 @@ pub fn server_builder(
         }));
     }
     rustls::ServerConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
-        .with_protocol_versions(&versions(p))
+        .with_protocol_versions(&versions(p)?)
         .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))
 }
 
@@ -475,16 +488,19 @@ fn compatible(p: &Policy, actual: PeerVerifierIdentity) -> Result<(), CryptoErro
     Ok(())
 }
 
-fn rule_profile(rule: PeerCertificateRuleId) -> crate::Profile {
+fn rule_profile(rule: PeerCertificateRuleId) -> Result<crate::Profile, rustls::Error> {
     use crate::Profile as P;
     match rule {
-        PeerCertificateRuleId::Unrestricted => P::Unrestricted,
-        PeerCertificateRuleId::Preferred => P::Preferred,
-        PeerCertificateRuleId::Cnsa2 => P::Cnsa2,
-        PeerCertificateRuleId::Cnsa1 => P::Cnsa1,
-        PeerCertificateRuleId::Bsi => P::Bsi,
-        PeerCertificateRuleId::Fips1403 => P::Fips1403,
-        PeerCertificateRuleId::Fips1402 => P::Fips1402,
+        PeerCertificateRuleId::Unrestricted => Ok(P::Unrestricted),
+        PeerCertificateRuleId::Preferred => Ok(P::Preferred),
+        PeerCertificateRuleId::Cnsa2 => Ok(P::Cnsa2),
+        PeerCertificateRuleId::Cnsa1 => Ok(P::Cnsa1),
+        PeerCertificateRuleId::Bsi => Ok(P::Bsi),
+        PeerCertificateRuleId::Fips1403 => Ok(P::Fips1403),
+        PeerCertificateRuleId::Fips1402 => Ok(P::Fips1402),
+        _ => Err(rustls::Error::InvalidCertificate(
+            rustls::CertificateError::ApplicationVerificationFailure,
+        )),
     }
 }
 
@@ -574,7 +590,7 @@ impl ProfileVerifier {
             PeerVerifierIdentity::Owned {
                 rule: Some(rule), ..
             } => {
-                super::peer_certificates::check_verified_path(rule_profile(rule), &path)
+                super::peer_certificates::check_verified_path(rule_profile(rule)?, &path)
                     .map_err(certificate_error)?;
             }
             PeerVerifierIdentity::Owned { rule: None, .. } | PeerVerifierIdentity::Opaque => {}
@@ -979,7 +995,7 @@ pub fn strict_client_builder(
     };
     Ok(
         rustls::ClientConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
-            .with_protocol_versions(&versions(p))
+            .with_protocol_versions(&versions(p)?)
             .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))?
             .dangerous()
             .with_custom_certificate_verifier(verifier),
@@ -1009,7 +1025,7 @@ pub fn strict_server_builder(
     };
     Ok(
         rustls::ServerConfig::builder_with_provider(Arc::new(crypto_provider(p)?))
-            .with_protocol_versions(&versions(p))
+            .with_protocol_versions(&versions(p)?)
             .map_err(|_| CryptoError::Tls(TlsError::ProtocolVersions))?
             .with_client_cert_verifier(verifier),
     )
@@ -1248,7 +1264,8 @@ mod tests {
 
     fn available_schemes() -> Vec<T> {
         T::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|s| crate::capability(crate::MODULE, Algorithm::Scheme(*s)).available)
             .collect()
     }
@@ -1268,7 +1285,7 @@ mod tests {
     }
 
     fn one13(k: K) -> Policy {
-        policy(&[V::Tls13], &[C::Tls13Aes256GcmSha384], &[k], &T::ALL)
+        policy(&[V::Tls13], &[C::Tls13Aes256GcmSha384], &[k], T::ALL)
     }
 
     fn cp(bytes: [u8; 2]) -> u16 {
@@ -1277,14 +1294,10 @@ mod tests {
 
     #[test]
     fn peer_certificates_old_builders_require_strict_completion() {
-        for profile in crate::Profile::ALL {
-            let resolved = crate::resolve(
-                profile,
-                crate::Options {
-                    peer_certificates_match_profile: true,
-                    ..Default::default()
-                },
-            );
+        for &profile in crate::Profile::ALL {
+            let mut options = crate::Options::default();
+            options.peer_certificates_match_profile = true;
+            let resolved = crate::resolve(profile, options);
             let Ok(resolved) = resolved else {
                 assert_eq!(profile, crate::Profile::Cnsa2);
                 continue;
@@ -1530,7 +1543,7 @@ mod tests {
     }
     impl rcgen::SigningKey for Sha256<'_> {
         fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
-            let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.pkcs8_der()).unwrap();
+            let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.to_pkcs8_der()).unwrap();
             let mut sig = vec![0; key.public_modulus_len()];
             key.sign(
                 &aws_lc_rs::signature::RSA_PKCS1_SHA256,
@@ -2184,7 +2197,7 @@ mod tests {
         let client_config = client_builder
             .with_client_auth_cert(
                 client_pki.chain,
-                PrivateKeyDer::Pkcs8(client_pki.key.pkcs8_der().to_vec().into()),
+                PrivateKeyDer::Pkcs8(client_pki.key.to_pkcs8_der().to_vec().into()),
             )
             .unwrap();
         let server_builder = if server_checks_client {
@@ -2202,7 +2215,7 @@ mod tests {
         let server_config = server_builder
             .with_single_cert(
                 server_pki.chain,
-                PrivateKeyDer::Pkcs8(server_pki.key.pkcs8_der().to_vec().into()),
+                PrivateKeyDer::Pkcs8(server_pki.key.to_pkcs8_der().to_vec().into()),
             )
             .unwrap();
         let mut client = rustls::ClientConnection::new(
@@ -2286,15 +2299,9 @@ mod tests {
         for version in [V::Tls12, V::Tls13] {
             for server_checks_client in [false, true] {
                 for key in [S::EcdsaP384Sha384, S::Rsa2048Sha384] {
-                    let mut resolved = crate::resolve(
-                        crate::Profile::Cnsa1,
-                        crate::Options {
-                            peer_certificates_match_profile: true,
-                            ..Default::default()
-                        },
-                    )
-                    .unwrap()
-                    .tls;
+                    let mut options = crate::Options::default();
+                    options.peer_certificates_match_profile = true;
+                    let mut resolved = crate::resolve(crate::Profile::Cnsa1, options).unwrap().tls;
                     resolved.versions = vec![version];
                     let result = peer_certificate_handshake(&resolved, server_checks_client, key);
                     if key == S::EcdsaP384Sha384 {
@@ -2550,7 +2557,7 @@ mod tests {
             &[V::Tls13],
             &[C::Tls13Aes256GcmSha384],
             &[K::Secp384r1MlKem1024, K::Secp384r1],
-            &T::ALL,
+            T::ALL,
         );
         let n = handshake(&client, &one13(K::Secp384r1), S::EcdsaP384Sha384).unwrap();
         assert_eq!(n.kx.iana(), 0x0018);
@@ -2563,7 +2570,7 @@ mod tests {
             &[V::Tls13],
             &[C::Tls13Aes256GcmSha384],
             &[K::Secp384r1, K::Secp384r1MlKem1024],
-            &T::ALL,
+            T::ALL,
         );
         let n = handshake(&client, &one13(K::Secp384r1MlKem1024), S::EcdsaP384Sha384).unwrap();
         assert_eq!(n.kx.iana(), 0x11ED);
@@ -2572,17 +2579,29 @@ mod tests {
 
     #[test]
     fn every_mapping_carries_its_registry_codepoint() {
-        for c in C::ALL {
-            assert_eq!(cp(rustls_suite(c).suite().to_array()), c.iana(), "{c:?}");
+        for &c in C::ALL {
+            assert_eq!(
+                cp(rustls_suite(c).unwrap().suite().to_array()),
+                c.iana(),
+                "{c:?}"
+            );
         }
-        for k in K::ALL {
-            assert_eq!(cp(rustls_group(k).name().to_array()), k.iana(), "{k:?}");
+        for &k in K::ALL {
+            assert_eq!(
+                cp(rustls_group(k).unwrap().name().to_array()),
+                k.iana(),
+                "{k:?}"
+            );
         }
-        for t in T::ALL {
-            assert_eq!(cp(rustls_scheme(t).to_array()), t.iana(), "{t:?}");
+        for &t in T::ALL {
+            assert_eq!(cp(rustls_scheme(t).unwrap().to_array()), t.iana(), "{t:?}");
         }
-        for v in V::ALL {
-            assert_eq!(cp(rustls_version(v).version.to_array()), v.iana(), "{v:?}");
+        for &v in V::ALL {
+            assert_eq!(
+                cp(rustls_version(v).unwrap().version.to_array()),
+                v.iana(),
+                "{v:?}"
+            );
         }
     }
 
@@ -2615,7 +2634,7 @@ mod tests {
             .unwrap()
             .self_signed(&key)
             .unwrap();
-        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into());
         let fips = server_builder(&one13(K::Secp384r1))
             .unwrap()
             .with_no_client_auth()
@@ -2840,7 +2859,7 @@ mod tests {
 
     #[test]
     fn each_group_is_the_one_negotiated() {
-        for k in K::ALL {
+        for &k in K::ALL {
             let n = handshake(&one13(k), &one13(k), S::EcdsaP384Sha384)
                 .unwrap_or_else(|e| panic!("{k:?}: {e}"));
             assert_eq!(
@@ -2858,7 +2877,7 @@ mod tests {
 
     #[test]
     fn each_suite_is_the_one_negotiated() {
-        for s in C::ALL {
+        for &s in C::ALL {
             let key = match s {
                 C::Tls12EcdheRsaAes256GcmSha384
                 | C::Tls12EcdheRsaAes128GcmSha256
@@ -2869,8 +2888,9 @@ mod tests {
                 | C::Tls12EcdheEcdsaAes256GcmSha384
                 | C::Tls12EcdheEcdsaAes128GcmSha256
                 | C::Tls12EcdheEcdsaChacha20Poly1305Sha256 => S::EcdsaP384Sha384,
+                _ => panic!("{s:?}: no key for this suite"),
             };
-            let p = policy(&[s.version()], &[s], &[K::Secp384r1], &T::ALL);
+            let p = policy(&[s.version()], &[s], &[K::Secp384r1], T::ALL);
             let n = handshake(&p, &p, key).unwrap_or_else(|e| panic!("{s:?}: {e}"));
             let scheme = match key {
                 S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => T::RsaPssSha512,
@@ -2880,6 +2900,7 @@ mod tests {
                 | S::EcdsaP521Sha384
                 | S::EcdsaP521Sha512
                 | S::Ed25519 => key.tls_scheme(),
+                _ => panic!("{key}: no expected scheme"),
             };
             assert_eq!(
                 n,
@@ -2897,7 +2918,7 @@ mod tests {
 
     #[test]
     fn every_key_algorithm_authenticates_a_tls13_server() {
-        for a in S::ALL {
+        for &a in S::ALL {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
                     crate::signature::KeyPair::generate(a).err(),
@@ -2915,6 +2936,7 @@ mod tests {
                 | S::EcdsaP521Sha384
                 | S::EcdsaP521Sha512
                 | S::Ed25519 => a.tls_scheme(),
+                _ => panic!("{a}: no expected scheme"),
             };
             assert_eq!(n.scheme, full_offer, "{a}");
         }
@@ -2924,7 +2946,8 @@ mod tests {
     fn a_one_scheme_offer_gets_that_scheme() {
         let rsa = [T::RsaPssSha256, T::RsaPssSha384, T::RsaPssSha512];
         let cases = S::ALL
-            .into_iter()
+            .iter()
+            .copied()
             .map(|a| (a, a.tls_scheme()))
             .chain(rsa.into_iter().map(|t| (S::Rsa2048Sha384, t)));
         for (a, t) in cases {
@@ -2954,7 +2977,7 @@ mod tests {
             &[V::Tls13],
             &[C::Tls13Aes128GcmSha256],
             &[K::Secp384r1],
-            &T::ALL,
+            T::ALL,
         );
         assert_eq!(
             handshake(&client, &server, S::EcdsaP384Sha384),
@@ -2974,8 +2997,8 @@ mod tests {
 
     fn chosen(p: &Policy, a: S, offered: &[T]) -> Option<u16> {
         let key = crate::signature::KeyPair::generate(a).unwrap();
-        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
-        let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t)).collect();
+        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into());
+        let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t).unwrap()).collect();
         load_private_key(p, der)
             .unwrap()
             .choose_scheme(&offered)
@@ -2994,7 +3017,7 @@ mod tests {
         };
         let offer = [T::RsaPssSha512, T::RsaPssSha384, T::RsaPssSha256];
         let a = S::Rsa3072Sha384;
-        assert_eq!(chosen(&rsa(&T::ALL), a, &offer), Some(0x0806));
+        assert_eq!(chosen(&rsa(T::ALL), a, &offer), Some(0x0806));
         assert_eq!(chosen(&rsa(&[T::RsaPssSha384]), a, &offer), Some(0x0805));
         assert_eq!(
             chosen(&rsa(&[T::RsaPssSha256, T::RsaPssSha384]), a, &offer),
@@ -3016,7 +3039,7 @@ mod tests {
         );
         if crate::capability(crate::MODULE, Algorithm::Scheme(T::MlDsa87)).available {
             assert_eq!(
-                chosen(&rsa(&[T::MlDsa87]), S::EcdsaP384Sha384, &T::ALL),
+                chosen(&rsa(&[T::MlDsa87]), S::EcdsaP384Sha384, T::ALL),
                 None
             );
         } else {
@@ -3051,7 +3074,7 @@ mod tests {
 
     #[test]
     fn tls12_with_only_post_quantum_groups_is_refused() {
-        for k in K::ALL.into_iter().filter(|k| k.is_post_quantum()) {
+        for k in K::ALL.iter().copied().filter(|k| k.is_post_quantum()) {
             assert!(
                 crate::capability(crate::MODULE, Algorithm::Kx(k)).available,
                 "{k:?}"
@@ -3178,14 +3201,14 @@ mod tests {
 
     #[test]
     fn kx_usability_matches_the_provider() {
-        for k in K::ALL {
+        for &k in K::ALL {
             for (v, wire) in [
                 (V::Tls12, rustls::ProtocolVersion::TLSv1_2),
                 (V::Tls13, rustls::ProtocolVersion::TLSv1_3),
             ] {
                 assert_eq!(
                     k.usable_in(v),
-                    rustls_group(k).usable_for_version(wire),
+                    rustls_group(k).unwrap().usable_for_version(wire),
                     "{k:?} {v:?}"
                 );
             }
@@ -3194,10 +3217,12 @@ mod tests {
 
     #[test]
     fn suite_signing_matches_the_provider() {
-        for c in C::ALL {
-            for t in T::ALL {
-                let provider = match rustls_suite(c) {
-                    rustls::SupportedCipherSuite::Tls12(s) => s.sign.contains(&rustls_scheme(t)),
+        for &c in C::ALL {
+            for &t in T::ALL {
+                let provider = match rustls_suite(c).unwrap() {
+                    rustls::SupportedCipherSuite::Tls12(s) => {
+                        s.sign.contains(&rustls_scheme(t).unwrap())
+                    }
                     rustls::SupportedCipherSuite::Tls13(_) => {
                         !matches!(t, T::RsaPkcs1Sha256 | T::RsaPkcs1Sha384 | T::RsaPkcs1Sha512)
                     }
@@ -3253,7 +3278,7 @@ mod tests {
     }
 
     fn subsets() -> impl Iterator<Item = Vec<T>> {
-        (1u16..1 << available_schemes().len()).map(|m| {
+        (1u64..1 << available_schemes().len()).map(|m| {
             available_schemes()
                 .into_iter()
                 .enumerate()
@@ -3414,7 +3439,7 @@ mod tests {
                         .collect::<Vec<_>>(),
                     set.ordered
                         .iter()
-                        .map(|s| rustls_scheme(*s))
+                        .map(|s| rustls_scheme(*s).unwrap())
                         .collect::<Vec<_>>()
                 );
             }
