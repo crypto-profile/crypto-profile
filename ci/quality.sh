@@ -8,6 +8,10 @@ root="$(git rev-parse --show-toplevel)"
 if [ "$kind" = mutants-diff ]; then
   base="${3:?expected base revision}"
   git -C "$root" rev-parse --verify --quiet "$base^{commit}" >/dev/null || { echo "unknown base revision: $base" >&2; exit 1; }
+  if [ -n "$(git -C "$root" status --porcelain)" ]; then
+    echo "mutants-diff runs on a clean tree: commit or stash first" >&2
+    exit 1
+  fi
 fi
 work="$(mktemp -d "${TMPDIR:-/opt/rust/tmp}/crypto-profile-quality.XXXXXXXX")"
 trap 'rm -rf -- "$work"' EXIT
@@ -45,17 +49,25 @@ else
   if [ "$backend" = crypto-profile-awslc3 ]; then cd crypto-profile-awslc3; fi
   if [ "$kind" = mutants-diff ]; then
     cargo mutants --list-files --workspace > "$work/mutated.files"
+    if [ ! -s "$work/mutated.files" ]; then
+      echo "cargo-mutants listed no files to mutate for $backend" >&2
+      exit 1
+    fi
     sed -nE 's#^\+\+\+ b/(.*)$#\1#p' "$work/branch.diff" > "$work/changed.files"
+    declare -A canonical=()
+    while IFS= read -r known; do
+      norm="$(realpath -m --relative-to=. -- "$known")" && [ -n "$norm" ] || { echo "cannot normalise $known with realpath -m" >&2; exit 1; }
+      canonical["$norm"]=1
+    done < "$work/mutated.files"
     overlap=0
     while IFS= read -r changed; do
       if grep -Fxq -- "$changed" "$work/mutated.files"; then overlap=1; continue; fi
       # a changed path that names a mutated file by another spelling means the diff rewrite drifted
-      while IFS= read -r known; do
-        if [ "$(realpath -m --relative-to=. -- "$changed")" = "$(realpath -m --relative-to=. -- "$known")" ]; then
-          echo "the diff's paths do not match cargo-mutants' file names for $backend; the path mapping is broken" >&2
-          exit 1
-        fi
-      done < "$work/mutated.files"
+      norm="$(realpath -m --relative-to=. -- "$changed")" && [ -n "$norm" ] || { echo "cannot normalise $changed with realpath -m" >&2; exit 1; }
+      if [ -n "${canonical[$norm]:-}" ]; then
+        echo "the diff's paths do not match cargo-mutants' file names for $backend; the path mapping is broken" >&2
+        exit 1
+      fi
     done < "$work/changed.files"
     if [ "$overlap" = 0 ]; then
       echo "no mutated source changed for $backend since $base"
