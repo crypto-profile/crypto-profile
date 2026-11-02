@@ -358,11 +358,49 @@ mod tests {
     }
 
     #[test]
+    fn ecdh_cases_carry_every_field() {
+        assert!(__wycheproof_ecdh_cases("not json").is_empty());
+        for (file, total, first_private) in [
+            (vectors::ECDH_P256, 355, 32),
+            (vectors::ECDH_P384, 790, 48),
+            (vectors::ECDH_P521, 661, 66),
+            (vectors::X25519, 518, 32),
+        ] {
+            let cases = __wycheproof_ecdh_cases(file);
+            assert_eq!(cases.len(), total);
+            let first = &cases[0];
+            assert_eq!((first.tc_id, first.private.len()), (1, first_private));
+            assert_eq!(first.result, "valid");
+            assert!(!first.public.is_empty() && !first.shared.is_empty());
+            assert!(!first.flags.is_empty());
+        }
+    }
+
+    #[test]
     fn a_scalar_is_fixed_to_the_field_length() {
         assert_eq!(__fixed_len_scalar(&[0, 0, 1, 2], 3), [0, 1, 2]);
         assert_eq!(__fixed_len_scalar(&[1, 2], 4), [0, 0, 1, 2]);
         assert_eq!(__fixed_len_scalar(&[0, 0], 2), [0, 0]);
         assert_eq!(__fixed_len_scalar(&[3, 2, 1], 2), [3, 2, 1]);
+    }
+
+    #[test]
+    fn one_step_cases_carry_every_field() {
+        assert!(__acvp_one_step_cases("not json").is_empty());
+        let cases = __acvp_one_step_cases(vectors::KDA_ONE_STEP);
+        assert_eq!(cases.len(), 78);
+        for (hash, count) in [("SHA2-256", 23), ("SHA2-384", 10), ("SHA2-512", 45)] {
+            assert_eq!(
+                cases.iter().filter(|c| c.hash == hash).count(),
+                count,
+                "{hash}"
+            );
+        }
+        assert!(cases.iter().all(|c| !c.z.is_empty()
+            && !c.fixed_info.is_empty()
+            && !c.dkm.is_empty()
+            && c.tc_id > 0
+            && (c.source == "KDA-OneStep-Sp800-56Cr2" || c.source == "KAS-IFC-Sp800-56Br2")));
     }
 
     #[test]
@@ -470,6 +508,50 @@ pub fn __wycheproof_kdf_cases(file: &str) -> Vec<KdfCase> {
     out
 }
 
+/// One Wycheproof ECDH (`EcdhEcpointTest`) or X25519 (`XdhComp`) case.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct EcdhCase {
+    /// The peer's public key: a SEC 1 point, or 32 bytes for X25519.
+    pub public: Vec<u8>,
+    /// The private key: a big-endian integer of any length, or 32 bytes for X25519.
+    pub private: Vec<u8>,
+    /// The shared secret; empty for an invalid case.
+    pub shared: Vec<u8>,
+    /// `valid`, `acceptable` or `invalid`.
+    pub result: String,
+    /// The case's flags.
+    pub flags: Vec<String>,
+    /// The Wycheproof test-case id.
+    pub tc_id: u64,
+}
+
+/// Every case of a Wycheproof ECDH point or X25519 file.
+#[doc(hidden)]
+pub fn __wycheproof_ecdh_cases(file: &str) -> Vec<EcdhCase> {
+    let v: serde_json::Value = serde_json::from_str(file).unwrap_or_default();
+    let d = |x: &serde_json::Value| hex::decode(x.as_str().unwrap_or_default()).unwrap_or_default();
+    let mut out = Vec::new();
+    for g in v["testGroups"].as_array().into_iter().flatten() {
+        for t in g["tests"].as_array().into_iter().flatten() {
+            out.push(EcdhCase {
+                public: d(&t["public"]),
+                private: d(&t["private"]),
+                shared: d(&t["shared"]),
+                result: t["result"].as_str().unwrap_or_default().to_string(),
+                flags: t["flags"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|f| f.as_str().map(str::to_string))
+                    .collect(),
+                tc_id: t["tcId"].as_u64().unwrap_or_default(),
+            });
+        }
+    }
+    out
+}
+
 /// A big-endian integer as exactly `len` bytes: leading zero bytes dropped, then left-padded with
 /// zeros. One that is still longer than `len` is returned unpadded.
 #[doc(hidden)]
@@ -478,6 +560,43 @@ pub fn __fixed_len_scalar(integer: &[u8], len: usize) -> Vec<u8> {
     let mut out = vec![0; len.saturating_sub(digits.len())];
     out.extend_from_slice(digits);
     out
+}
+
+/// One one-step KDF known answer, transcribed from a NIST ACVP sample.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct OneStepCase {
+    /// The ACVP algorithm file it comes from.
+    pub source: String,
+    /// The ACVP test-case id within that file.
+    pub tc_id: u64,
+    /// The auxiliary hash: `SHA2-256`, `SHA2-384` or `SHA2-512`.
+    pub hash: String,
+    /// The shared secret.
+    pub z: Vec<u8>,
+    /// The fixed information, assembled from the case's fields.
+    pub fixed_info: Vec<u8>,
+    /// The derived keying material.
+    pub dkm: Vec<u8>,
+}
+
+/// Every case of the transcribed ACVP one-step KDF file.
+#[doc(hidden)]
+pub fn __acvp_one_step_cases(file: &str) -> Vec<OneStepCase> {
+    let v: serde_json::Value = serde_json::from_str(file).unwrap_or_default();
+    let d = |x: &serde_json::Value| hex::decode(x.as_str().unwrap_or_default()).unwrap_or_default();
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| OneStepCase {
+            source: t["source"].as_str().unwrap_or_default().to_string(),
+            tc_id: t["tcId"].as_u64().unwrap_or_default(),
+            hash: t["hash"].as_str().unwrap_or_default().to_string(),
+            z: d(&t["z"]),
+            fixed_info: d(&t["fixedInfo"]),
+            dkm: d(&t["dkm"]),
+        })
+        .collect()
 }
 
 /// Known-answer data every backend's conformance run checks.
@@ -518,12 +637,43 @@ pub mod vectors {
     pub const HKDF_SHA384: &str = include_str!("vectors/hkdf_sha384_test.json");
     /// Wycheproof HKDF-SHA512.
     pub const HKDF_SHA512: &str = include_str!("vectors/hkdf_sha512_test.json");
+    /// Wycheproof ECDH on P-256, raw points.
+    pub const ECDH_P256: &str = include_str!("vectors/ecdh_secp256r1_ecpoint_test.json");
+    /// Wycheproof ECDH on P-384, raw points.
+    pub const ECDH_P384: &str = include_str!("vectors/ecdh_secp384r1_ecpoint_test.json");
+    /// Wycheproof ECDH on P-521, raw points.
+    pub const ECDH_P521: &str = include_str!("vectors/ecdh_secp521r1_ecpoint_test.json");
+    /// Wycheproof X25519.
+    pub const X25519: &str = include_str!("vectors/x25519_test.json");
+    /// NIST ACVP one-step KDF samples, SHA2-256, SHA2-384 and SHA2-512.
+    pub const KDA_ONE_STEP: &str = include_str!("vectors/kda_onestep_acvp.json");
     /// NIST CAVP SHA-256 short messages.
     pub const SHA256_SHORT: &str = include_str!("vectors/SHA256ShortMsg.rsp");
     /// NIST CAVP SHA-384 short messages.
     pub const SHA384_SHORT: &str = include_str!("vectors/SHA384ShortMsg.rsp");
     /// NIST CAVP SHA-512 short messages.
     pub const SHA512_SHORT: &str = include_str!("vectors/SHA512ShortMsg.rsp");
+
+    /// RFC 7518 Appendix C: ECDH-ES on P-256 with the Concat KDF (SHA-256), for A128GCM.
+    pub mod rfc7518 {
+        /// Alice's (the producer's) ephemeral private key `d`, big-endian.
+        pub const ALICE_D_HEX: &str =
+            "d3f3716913d4310a0026de741b3f18893afc8114f0c84682ba677e313a13988a";
+        /// Alice's ephemeral public key `epk`, an uncompressed point.
+        pub const ALICE_EPK_HEX: &str = "04808d060082c176eed3e776a4ac598cc8672c1779f974eecc9b03411ca5b9495d48b5bfc527dfce53d6ac7115237d031ccff87a0570b77350a9e503ee7305a69b";
+        /// Bob's (the consumer's) private key `d`, big-endian.
+        pub const BOB_D_HEX: &str =
+            "5449836690d75caf29f0dd029ddb31b3ddb8aba9d2d515c5012465e817d4a9dc";
+        /// Bob's public key, an uncompressed point.
+        pub const BOB_PUBLIC_HEX: &str = "04c1e349cb61ec70248ce801034c3834e1b88ebe1161cb25af38741f785fcfc4c47bc96708ef80952b53f8d2555fe72b841ed04588628b1d378a594939500ec9c9";
+        /// The shared secret Z.
+        pub const Z_HEX: &str = "9e56d91d817135d372834283bf84269cfb316ea3da806a48f6daa7798cfe90c4";
+        /// The OtherInfo: AlgorithmID "A128GCM", PartyUInfo "Alice", PartyVInfo "Bob", SuppPubInfo 128.
+        pub const OTHER_INFO_HEX: &str =
+            "000000074131323847434d00000005416c69636500000003426f6200000080";
+        /// The derived content-encryption key.
+        pub const CEK_HEX: &str = "56aa8deaf8236d205c2228cd71a7101a";
+    }
 
     /// RFC 9180 Appendix A, base mode: the DHKEM key pairs and shared secret of every suite the
     /// appendix carries (A.1.1, A.3.1, A.6.1).
@@ -1261,6 +1411,34 @@ macro_rules! conformance_tests {
                     assert_eq!(derive(&[7; 32], b"x", 1), Ok(1), "{p} {k:?}");
                 }
             }
+        }
+
+        #[test]
+        fn conformance_acvp_one_step_kdf() {
+            let a = admit(Profile::Fips1403, Options::default());
+            let cases = $crate::conformance::__acvp_one_step_cases(vectors::KDA_ONE_STEP);
+            let mut counts = [0; 3];
+            for c in &cases {
+                let (k, i) = match c.hash.as_str() {
+                    "SHA2-256" => (KdfAlgorithm::OneStepSha256, 0),
+                    "SHA2-384" => (KdfAlgorithm::OneStepSha384, 1),
+                    "SHA2-512" => (KdfAlgorithm::OneStepSha512, 2),
+                    other => panic!("{} tcId {}: {other}", c.source, c.tc_id),
+                };
+                counts[i] += 1;
+                let spec = kdf::Spec::OneStep {
+                    algorithm: k,
+                    fixed_info: &c.fixed_info,
+                };
+                assert_eq!(
+                    kdf::derive(&a, &c.z, &spec, c.dkm.len()).map(|d| d.as_bytes().to_vec()),
+                    Ok(c.dkm.clone()),
+                    "{} tcId {}",
+                    c.source,
+                    c.tc_id
+                );
+            }
+            assert_eq!(counts, [23, 10, 45]);
         }
 
         #[test]

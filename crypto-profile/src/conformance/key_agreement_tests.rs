@@ -6,7 +6,7 @@ macro_rules! __conformance_key_agreement_tests {
         use $b::KeyAgreementAlgorithm as E;
         use $b::*;
         use $crate::conformance::golden::KEY_AGREEMENT_GOLDEN;
-        use $crate::conformance::{__fixed_len_scalar, __hex, vectors};
+        use $crate::conformance::{__fixed_len_scalar, __hex, __wycheproof_ecdh_cases, vectors};
 
         const ORDER_P256: &str = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551";
         const ORDER_P384: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973";
@@ -395,6 +395,136 @@ macro_rules! __conformance_key_agreement_tests {
                     };
                     assert_eq!(got, want, "{k:?} {d:?}");
                 }
+            }
+        }
+
+        fn one_step(algorithm: KdfAlgorithm, fixed_info: &[u8]) -> kdf::Spec<'_> {
+            kdf::Spec::OneStep {
+                algorithm,
+                fixed_info,
+            }
+        }
+
+        #[test]
+        fn conformance_wycheproof_ecdh() {
+            let a = unrestricted();
+            let specs = [
+                hkdf(KdfAlgorithm::HkdfSha384, b"wycheproof"),
+                one_step(KdfAlgorithm::OneStepSha256, b"wycheproof"),
+            ];
+            for (k, file, counts) in [
+                (E::EcdhP256, vectors::ECDH_P256, (330, 1, 24)),
+                (E::EcdhP384, vectors::ECDH_P384, (771, 1, 18)),
+                (E::EcdhP521, vectors::ECDH_P521, (632, 1, 28)),
+            ] {
+                let (mut valid, mut acceptable, mut invalid) = (0, 0, 0);
+                for c in __wycheproof_ecdh_cases(file) {
+                    let key = ecdh::StaticKey::from_scalar(
+                        &a,
+                        k,
+                        &__fixed_len_scalar(&c.private, scalar_len(k)),
+                    )
+                    .unwrap_or_else(|e| panic!("{k:?} tcId {}: {e}", c.tc_id));
+                    match c.result.as_str() {
+                        "valid" => {
+                            valid += 1;
+                            assert_eq!(
+                                test_support::ecdh_shared_secret(&key, &c.public)
+                                    .map(|z| z.to_vec()),
+                                Ok(c.shared.clone()),
+                                "{k:?} tcId {}",
+                                c.tc_id
+                            );
+                            for spec in &specs {
+                                assert_eq!(
+                                    bytes(key.agree(&c.public, spec, 48)),
+                                    bytes(kdf::derive(&a, &c.shared, spec, 48)),
+                                    "{k:?} tcId {} {spec:?}",
+                                    c.tc_id
+                                );
+                            }
+                        }
+                        "acceptable" | "invalid" => {
+                            if c.result == "acceptable" {
+                                acceptable += 1;
+                            } else {
+                                invalid += 1;
+                            }
+                            for spec in &specs {
+                                assert_eq!(
+                                    bytes(key.agree(&c.public, spec, 48)),
+                                    Err(CryptoError::KeyAgreementPeerKey { algorithm: k }),
+                                    "{k:?} tcId {} {:?}",
+                                    c.tc_id,
+                                    c.flags
+                                );
+                            }
+                        }
+                        other => panic!("{k:?} tcId {}: unknown result {other:?}", c.tc_id),
+                    }
+                }
+                assert_eq!((valid, acceptable, invalid), counts, "{k:?}");
+            }
+        }
+
+        #[test]
+        fn conformance_wycheproof_x25519() {
+            let a = unrestricted();
+            let spec = hkdf(KdfAlgorithm::HkdfSha256, b"wycheproof");
+            let (mut derived, mut zero) = (0, 0);
+            for c in __wycheproof_ecdh_cases(vectors::X25519) {
+                assert!(
+                    c.result == "valid" || c.result == "acceptable",
+                    "tcId {}",
+                    c.tc_id
+                );
+                let key = ecdh::StaticKey::from_scalar(&a, E::X25519, &c.private)
+                    .unwrap_or_else(|e| panic!("tcId {}: {e}", c.tc_id));
+                let got = bytes(key.agree(&c.public, &spec, 32));
+                if c.shared.iter().all(|b| *b == 0) {
+                    zero += 1;
+                    assert_eq!(
+                        got,
+                        Err(CryptoError::KeyAgreementPeerKey {
+                            algorithm: E::X25519
+                        }),
+                        "tcId {}",
+                        c.tc_id
+                    );
+                } else {
+                    derived += 1;
+                    assert_eq!(
+                        got,
+                        bytes(kdf::derive(&a, &c.shared, &spec, 32)),
+                        "tcId {}",
+                        c.tc_id
+                    );
+                }
+            }
+            assert_eq!((derived, zero), (487, 31));
+        }
+
+        #[test]
+        fn conformance_rfc7518_ecdh_es() {
+            use vectors::rfc7518 as v;
+            let a = fips();
+            let other_info = unhex(v::OTHER_INFO_HEX);
+            let spec = one_step(KdfAlgorithm::OneStepSha256, &other_info);
+            let bob = ecdh::StaticKey::from_scalar(&a, E::EcdhP256, &unhex(v::BOB_D_HEX)).unwrap();
+            assert_eq!(bob.public_key(), unhex(v::BOB_PUBLIC_HEX));
+            let alice =
+                ecdh::StaticKey::from_scalar(&a, E::EcdhP256, &unhex(v::ALICE_D_HEX)).unwrap();
+            assert_eq!(alice.public_key(), unhex(v::ALICE_EPK_HEX));
+            assert_eq!(
+                test_support::ecdh_shared_secret(&bob, &unhex(v::ALICE_EPK_HEX))
+                    .map(|z| z.to_vec()),
+                Ok(unhex(v::Z_HEX))
+            );
+            for (key, peer) in [(&bob, v::ALICE_EPK_HEX), (&alice, v::BOB_PUBLIC_HEX)] {
+                assert_eq!(
+                    bytes(key.agree(&unhex(peer), &spec, 16)),
+                    Ok(unhex(v::CEK_HEX))
+                );
             }
         }
     };
