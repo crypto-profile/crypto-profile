@@ -89,31 +89,128 @@ fn split_tlv(der: &[u8]) -> Option<(u8, &[u8], &[u8])> {
     Some((tag, value, rest))
 }
 
-// The module accepts a key followed by trailing bytes, and checks an RFC 5915 ECPrivateKey to its
-// end but not the PrivateKeyInfo around one; this requires one SEQUENCE spanning the input and,
-// after a PrivateKeyInfo's privateKey, only RFC 5958's [0] attributes and [1] publicKey.
-fn is_well_formed(der: &[u8]) -> bool {
-    let Some((0x30, mut rest, [])) = split_tlv(der) else {
-        return false;
-    };
-    let mut fields = Vec::new();
-    // one past the most fields either form has, so a longer key is refused
-    for _ in 0..6 {
-        let Some((tag, value, next)) = split_tlv(rest) else {
-            break;
-        };
-        fields.push((tag, value));
-        rest = next;
+// RFC 5480 §2.1.1: the AlgorithmIdentifier id-ecPublicKey with its namedCurve.
+const P256_ALGORITHM: &[u8] = &[
+    0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48,
+    0xce, 0x3d, 0x03, 0x01, 0x07,
+];
+const P384_ALGORITHM: &[u8] = &[
+    0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b, 0x81, 0x04,
+    0x00, 0x22,
+];
+const P521_ALGORITHM: &[u8] = &[
+    0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b, 0x81, 0x04,
+    0x00, 0x23,
+];
+const ALGORITHM_HEADER: usize = 11;
+
+struct EcKey {
+    algorithm: &'static [u8],
+    scalar_len: usize,
+    point_len: usize,
+}
+
+impl EcKey {
+    fn named_curve(&self) -> &'static [u8] {
+        &self.algorithm[ALGORITHM_HEADER..]
     }
-    rest.is_empty()
-        && match fields.as_slice() {
-            [(0x02, [1]), (0x04, _), ..] => true,
-            [(0x02, [0 | 1]), (0x30, _), (0x04, _), tail @ ..] => matches!(
-                tail,
-                [] | [(0xa0, _)] | [(0x81, _)] | [(0xa0, _), (0x81, _)]
-            ),
-            _ => false,
+}
+
+fn ec_key(k: KeyAgreementAlgorithm) -> Option<EcKey> {
+    let (algorithm, scalar_len, point_len) = match k {
+        KeyAgreementAlgorithm::EcdhP256 => (P256_ALGORITHM, 32, 65),
+        KeyAgreementAlgorithm::EcdhP384 => (P384_ALGORITHM, 48, 97),
+        KeyAgreementAlgorithm::EcdhP521 => (P521_ALGORITHM, 66, 133),
+        _ => return None,
+    };
+    Some(EcKey {
+        algorithm,
+        scalar_len,
+        point_len,
+    })
+}
+
+/// The publicKey point a key's ECPrivateKey carries, if any, once the key is an RFC 5958 §2
+/// PrivateKeyInfo or an RFC 5915 §3 ECPrivateKey on `k`'s curve, as `from_pkcs8_der` lists.
+fn checked(k: KeyAgreementAlgorithm, der: &[u8]) -> Result<Option<&[u8]>, CryptoError> {
+    let carried = match (ec_key(k), split_tlv(der)) {
+        (Some(e), Some((0x30, body, []))) => match body {
+            [0x02, 0x01, 0x00, rest @ ..] => private_key_info(&e, rest),
+            _ => ec_private_key(&e, body, true),
+        },
+        _ => None,
+    };
+    carried.ok_or(CryptoError::KeyAgreementPrivateKey { algorithm: k })
+}
+
+// RFC 5958 §2 after version v1: privateKeyAlgorithm, privateKey and [0] attributes. RFC 5915 §1
+// puts an EC public key in ECPrivateKey, so v2 and its [1] publicKey never apply.
+fn private_key_info<'a>(e: &EcKey, der: &'a [u8]) -> Option<Option<&'a [u8]>> {
+    let rest = der.strip_prefix(e.algorithm)?;
+    let Some((0x04, private_key, rest)) = split_tlv(rest) else {
+        return None;
+    };
+    match split_tlv(rest) {
+        None if rest.is_empty() => {}
+        Some((0xa0, attributes, [])) if are_attributes(attributes) => {}
+        _ => return None,
+    }
+    let Some((0x30, body, [])) = split_tlv(private_key) else {
+        return None;
+    };
+    ec_private_key(e, body, false)
+}
+
+// RFC 5958 §2 Attributes, IMPLICIT: Attribute ::= SEQUENCE { type OBJECT IDENTIFIER, values SET }.
+fn are_attributes(mut der: &[u8]) -> bool {
+    for _ in 0..=der.len() {
+        let Some((0x30, attribute, rest)) = split_tlv(der) else {
+            return der.is_empty();
+        };
+        let Some((0x06, [_, ..], values)) = split_tlv(attribute) else {
+            return false;
+        };
+        if !matches!(split_tlv(values), Some((0x31, _, []))) {
+            return false;
         }
+        der = rest;
+    }
+    false
+}
+
+// RFC 5915 §3 (EXPLICIT TAGS). §3 requires parameters; inside a PrivateKeyInfo, §1 a) puts the
+// curve in privateKeyAlgorithm.
+fn ec_private_key<'a>(e: &EcKey, body: &'a [u8], bare: bool) -> Option<Option<&'a [u8]>> {
+    let rest = body.strip_prefix(&[0x02, 0x01, 0x01])?;
+    let Some((0x04, scalar, rest)) = split_tlv(rest) else {
+        return None;
+    };
+    let (parameters, rest) = optional(0xa0, rest);
+    let (public_key, rest) = optional(0xa1, rest);
+    let curve = match parameters {
+        Some(named_curve) => named_curve == e.named_curve(),
+        None => !bare,
+    };
+    if scalar.len() != e.scalar_len || !curve || !rest.is_empty() {
+        return None;
+    }
+    match public_key.map(split_tlv) {
+        None => Some(None),
+        // RFC 5480 §2.2: an uncompressed point, the crate's only peer-key form.
+        Some(Some((0x03, [0x00, point @ ..], [])))
+            if point.len() == e.point_len && point.first() == Some(&UNCOMPRESSED) =>
+        {
+            Some(Some(point))
+        }
+        Some(_) => None,
+    }
+}
+
+fn optional(tag: u8, der: &[u8]) -> (Option<&[u8]>, &[u8]) {
+    match split_tlv(der) {
+        Some((t, value, rest)) if t == tag => (Some(value), rest),
+        _ => (None, der),
+    }
 }
 
 /// RFC 9180 §7.1 Table 2: the DHKEM `kem_id` of a curve with its HKDF.
@@ -259,11 +356,20 @@ impl fmt::Debug for StaticKey {
 }
 
 impl StaticKey {
-    /// Imports an unencrypted PKCS#8 private key (an RFC 5915 `ECPrivateKey` is also accepted) on
-    /// `algorithm`'s curve. Refuses a curve `a`'s profile does not admit, then a key that is
-    /// malformed, holds a field RFC 5958 or RFC 5915 does not define, is followed by other bytes,
-    /// is on another curve, or fails the module's checks (`CryptoError::KeyAgreementPrivateKey`).
-    /// An X25519 key is imported with [`StaticKey::from_scalar`].
+    /// Imports a P-256, P-384 or P-521 private key, DER-encoded, in one of two forms:
+    ///
+    /// - an RFC 5958 §2 `PrivateKeyInfo`, version v1: privateKeyAlgorithm `id-ecPublicKey` with
+    ///   `algorithm`'s namedCurve (RFC 5480 §2.1.1), privateKey an RFC 5915 `ECPrivateKey`, then
+    ///   optional `[0]` attributes;
+    /// - an RFC 5915 §3 `ECPrivateKey` with its parameters.
+    ///
+    /// The `ECPrivateKey` is version 1, a privateKey of exactly 32, 48 or 66 bytes, then optional
+    /// parameters naming `algorithm`'s curve and an optional publicKey holding the key's own
+    /// uncompressed point (RFC 5915 §3, RFC 5480 §2.2). Refuses a curve `a`'s profile does not
+    /// admit, then anything else, a field or version these sections do not define, BER, `id-ecDH`
+    /// and `id-ecMQV`, other bytes after the key, and a key the module refuses
+    /// (`CryptoError::KeyAgreementPrivateKey`). An X25519 key is imported with
+    /// [`StaticKey::from_scalar`].
     pub fn from_pkcs8_der(
         a: &Admitted,
         algorithm: KeyAgreementAlgorithm,
@@ -272,11 +378,21 @@ impl StaticKey {
         a.admit_key_agreement(algorithm)?;
         let c = curve(algorithm)?;
         let refused = CryptoError::KeyAgreementPrivateKey { algorithm };
-        if !is_well_formed(der) {
-            return Err(refused);
-        }
+        let carried = checked(algorithm, der)?;
         let key = ag::PrivateKey::from_private_key_der(c.agreement, der).map_err(|_| refused)?;
-        Self::new(a, algorithm, key)
+        let key = Self::new(a, algorithm, key)?;
+        key.matches_carried(carried)?;
+        Ok(key)
+    }
+
+    // RFC 5915 §3: publicKey is a convenience; one that is not this key's marks a corrupt key.
+    fn matches_carried(&self, carried: Option<&[u8]>) -> Result<(), CryptoError> {
+        match carried {
+            Some(point) if point != self.public => Err(CryptoError::KeyAgreementPrivateKey {
+                algorithm: self.algorithm,
+            }),
+            _ => Ok(()),
+        }
     }
 
     /// Imports a raw private key: a big-endian scalar of exactly the field length (32, 48 or 66
@@ -562,70 +678,529 @@ mod tests {
         tlv(0x30, &fields.concat())
     }
 
+    const EC_CURVES: [KeyAgreementAlgorithm; 3] = [
+        KeyAgreementAlgorithm::EcdhP256,
+        KeyAgreementAlgorithm::EcdhP384,
+        KeyAgreementAlgorithm::EcdhP521,
+    ];
+    const ID_EC_PUBLIC_KEY: &[u8] = &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01];
+    const ID_EC_DH: &[u8] = &[0x2b, 0x81, 0x04, 0x01, 0x0c];
+    const ID_EC_MQV: &[u8] = &[0x2b, 0x81, 0x04, 0x01, 0x0d];
+
+    fn named_curve(k: KeyAgreementAlgorithm) -> Vec<u8> {
+        use KeyAgreementAlgorithm as E;
+        let oid: &[u8] = match k {
+            E::EcdhP256 => &[0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07],
+            E::EcdhP384 => &[0x2b, 0x81, 0x04, 0x00, 0x22],
+            E::EcdhP521 => &[0x2b, 0x81, 0x04, 0x00, 0x23],
+            other => panic!("{other:?} has no RFC 5480 namedCurve"),
+        };
+        tlv(0x06, oid)
+    }
+
+    fn another(k: KeyAgreementAlgorithm) -> KeyAgreementAlgorithm {
+        let at = EC_CURVES.iter().position(|&c| c == k).unwrap();
+        EC_CURVES[(at + 1) % EC_CURVES.len()]
+    }
+
+    fn bits(unused: u8, point: &[u8]) -> Vec<u8> {
+        tlv(0x03, &[&[unused][..], point].concat())
+    }
+
+    fn attribute(oid: &[u8], values: &[u8]) -> Vec<u8> {
+        sequence(&[tlv(0x06, oid), tlv(0x31, values)])
+    }
+
+    fn local_key_id() -> Vec<u8> {
+        attribute(
+            &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x15],
+            &tlv(0x04, &[1, 2, 3, 4]),
+        )
+    }
+
+    fn friendly_name() -> Vec<u8> {
+        attribute(
+            &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, 0x14],
+            &tlv(0x1e, &[0x00, 0x6b]),
+        )
+    }
+
+    // One curve's key, taken apart into RFC 5915 and RFC 5958 fields to rebuild variants from.
+    struct Parts {
+        k: KeyAgreementAlgorithm,
+        key: StaticKey,
+        scalar: Vec<u8>,
+    }
+
+    impl Parts {
+        fn of(key: StaticKey) -> Self {
+            let info = fields(&key.to_pkcs8_der().unwrap());
+            let ec_key = fields(split_tlv(&info[2]).unwrap().1);
+            let scalar = split_tlv(&ec_key[1]).unwrap().1.to_vec();
+            Self {
+                k: key.algorithm(),
+                key,
+                scalar,
+            }
+        }
+
+        fn version(&self) -> Vec<u8> {
+            vec![0x02, 0x01, 0x01]
+        }
+
+        fn scalar(&self) -> Vec<u8> {
+            tlv(0x04, &self.scalar)
+        }
+
+        fn parameters(&self) -> Vec<u8> {
+            tlv(0xa0, &named_curve(self.k))
+        }
+
+        fn public(&self) -> Vec<u8> {
+            tlv(0xa1, &bits(0, self.key.public_key()))
+        }
+
+        fn ec_key(&self) -> Vec<Vec<u8>> {
+            vec![
+                self.version(),
+                self.scalar(),
+                self.parameters(),
+                self.public(),
+            ]
+        }
+
+        fn algorithm(&self) -> Vec<u8> {
+            sequence(&[tlv(0x06, ID_EC_PUBLIC_KEY), named_curve(self.k)])
+        }
+
+        fn info_fields(&self, ec_key: &[Vec<u8>]) -> Vec<Vec<u8>> {
+            vec![
+                vec![0x02, 0x01, 0x00],
+                self.algorithm(),
+                tlv(0x04, &sequence(ec_key)),
+            ]
+        }
+
+        fn info(&self, ec_key: &[Vec<u8>], after: &[Vec<u8>]) -> Vec<u8> {
+            sequence(&[&self.info_fields(ec_key)[..], after].concat())
+        }
+
+        fn info_with(&self, at: usize, field: Vec<u8>) -> Vec<u8> {
+            let mut f = self.info_fields(&self.ec_key());
+            f[at] = field;
+            sequence(&f)
+        }
+    }
+
+    fn assert_taken(a: &Admitted, k: KeyAgreementAlgorithm, der: &[u8], public: &[u8]) {
+        let carried = checked(k, der).unwrap_or_else(|e| panic!("{k:?} {e:?} {der:02x?}"));
+        assert!(carried.is_none_or(|p| p == public), "{k:?} {der:02x?}");
+        let imported = StaticKey::from_pkcs8_der(a, k, der).unwrap();
+        assert_eq!(imported.public_key(), public, "{k:?} {der:02x?}");
+    }
+
+    fn assert_refused(a: &Admitted, k: KeyAgreementAlgorithm, why: &str, der: &[u8]) {
+        assert!(
+            checked(k, der).is_err(),
+            "validator: {k:?} {why} {der:02x?}"
+        );
+        assert_eq!(
+            StaticKey::from_pkcs8_der(a, k, der).map(|_| ()),
+            Err(CryptoError::KeyAgreementPrivateKey { algorithm: k }),
+            "import: {k:?} {why} {der:02x?}"
+        );
+    }
+
     #[test]
-    fn a_private_key_info_holds_rfc_5958s_fields_and_nothing_else() {
+    fn emitted_keys_and_every_rfc_form_are_taken() {
         use aws_lc_rs::encoding::EcPrivateKeyRfc5915Der;
         let a = admit(Profile::Unrestricted, Options::default());
-        let null = || vec![0x05, 0x00];
-        for k in [
-            KeyAgreementAlgorithm::EcdhP256,
-            KeyAgreementAlgorithm::EcdhP384,
-            KeyAgreementAlgorithm::EcdhP521,
-        ] {
-            let key = StaticKey::generate(&a, k).unwrap();
-            let info = fields(&key.to_pkcs8_der().unwrap());
-            let point = [&[0][..], key.public_key()].concat();
-            let with = |at: usize, field: Vec<u8>| {
-                let mut f = info.clone();
-                f[at] = field;
-                f
-            };
-            let then = |extra: &[Vec<u8>]| [&info[..], extra].concat();
-            for good in [
-                info.clone(),
-                with(0, vec![0x02, 0x01, 0x01]),
-                then(&[tlv(0xa0, &[])]),
+        for k in EC_CURVES {
+            let p = Parts::of(StaticKey::generate(&a, k).unwrap());
+            let public = p.key.public_key();
+            let emitted = p.key.to_pkcs8_der().unwrap();
+            assert_eq!(checked(k, &emitted), Ok(Some(public)), "{k:?}");
+            assert_taken(&a, k, &emitted, public);
+            let sec1: EcPrivateKeyRfc5915Der<'static> = p.key.key.as_der().unwrap();
+            assert_eq!(checked(k, sec1.as_ref()), Ok(Some(public)), "{k:?}");
+            assert_taken(&a, k, sec1.as_ref(), public);
+            let [v, d, params, q] = <[Vec<u8>; 4]>::try_from(p.ec_key()).unwrap();
+            for (inner, carried) in [
+                (vec![v.clone(), d.clone()], None),
+                (vec![v.clone(), d.clone(), params.clone()], None),
+                (vec![v.clone(), d.clone(), q.clone()], Some(public)),
+                (p.ec_key(), Some(public)),
             ] {
-                let imported = StaticKey::from_pkcs8_der(&a, k, &sequence(&good)).unwrap();
-                assert_eq!(imported.public_key(), key.public_key(), "{k:?} {good:02x?}");
+                let der = p.info(&inner, &[]);
+                assert_eq!(checked(k, &der), Ok(carried), "{k:?} {der:02x?}");
+                assert_taken(&a, k, &der, public);
             }
-            let ec_key = fields(split_tlv(&info[2]).unwrap().1);
-            let sec1: EcPrivateKeyRfc5915Der<'static> = key.key.as_der().unwrap();
-            let refused = Err(CryptoError::KeyAgreementPrivateKey { algorithm: k });
-            for bad in [
-                then(&[null()]),
-                then(&[vec![0x05]]),
-                then(&[tlv(0xa0, &[]), null()]),
-                then(&[tlv(0xa0, &[]), tlv(0xa0, &[])]),
-                then(&[tlv(0xa2, &null())]),
-                then(&[tlv(0xa1, &tlv(0x03, &point))]),
-                with(0, vec![0x02, 0x01, 0x02]),
-                with(2, tlv(0x04, &sequence(&[&ec_key[..], &[null()]].concat()))),
-                with(2, tlv(0x04, &[sequence(&ec_key), null()].concat())),
-                [&fields(sec1.as_ref())[..], &[null()]].concat(),
+            for bare in [
+                sequence(&[v.clone(), d.clone(), params.clone()]),
+                sequence(&p.ec_key()),
             ] {
+                assert_taken(&a, k, &bare, public);
+            }
+            for attributes in [
+                Vec::new(),
+                local_key_id(),
+                [local_key_id(), friendly_name()].concat(),
+            ] {
+                assert_taken(
+                    &a,
+                    k,
+                    &p.info(&p.ec_key(), &[tlv(0xa0, &attributes)]),
+                    public,
+                );
+            }
+            let mut d = vec![0x11; p.scalar.len()];
+            d[0] = 0;
+            let led = StaticKey::from_scalar(&a, k, &d).unwrap();
+            assert_taken(&a, k, &led.to_pkcs8_der().unwrap(), led.public_key());
+        }
+    }
+
+    #[test]
+    fn the_sealbox_golden_keys_are_well_formed() {
+        use crypto_profile::conformance::vectors::sealbox;
+        let a = admit(Profile::Unrestricted, Options::default());
+        let k = KeyAgreementAlgorithm::EcdhP384;
+        for hex in [
+            sealbox::PRIVATE_KEY_PKCS8_HEX,
+            sealbox::release_0_9_0::PRIVATE_KEY_PKCS8_HEX,
+        ] {
+            let der = __hex::decode(hex).unwrap();
+            let key = StaticKey::from_pkcs8_der(&a, k, &der).unwrap();
+            assert_eq!(checked(k, &der), Ok(Some(key.public_key())));
+        }
+    }
+
+    #[test]
+    fn a_private_key_info_is_rfc_5958_v1_with_rfc_5480s_algorithm_and_nothing_else() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        let null = || vec![0x05, 0x00];
+        for k in EC_CURVES {
+            let p = Parts::of(StaticKey::generate(&a, k).unwrap());
+            let point = [&[0][..], p.key.public_key()].concat();
+            let ec = p.ec_key();
+            let v2 = |after: &[Vec<u8>]| {
+                let mut f = p.info_fields(&ec);
+                f[0] = vec![0x02, 0x01, 0x01];
+                sequence(&[&f[..], after].concat())
+            };
+            let algorithm = |fields: &[Vec<u8>]| p.info_with(1, sequence(fields));
+            let ec_pk = || tlv(0x06, ID_EC_PUBLIC_KEY);
+            let attributes = |content: &[u8]| p.info(&ec, &[tlv(0xa0, content)]);
+            for (why, der) in [
+                ("v1 with a [1]", p.info(&ec, &[tlv(0x81, &point)])),
+                (
+                    "v1 with a constructed [1]",
+                    p.info(&ec, &[tlv(0xa1, &bits(0, p.key.public_key()))]),
+                ),
+                (
+                    "v1 with [0] then [1]",
+                    p.info(&ec, &[tlv(0xa0, &[]), tlv(0x81, &point)]),
+                ),
+                ("v2 without a [1]", v2(&[])),
+                ("v2 with a [1]", v2(&[tlv(0x81, &point)])),
+                (
+                    "v2 with [0] and [1]",
+                    v2(&[tlv(0xa0, &[]), tlv(0x81, &point)]),
+                ),
+                ("version 2", p.info_with(0, vec![0x02, 0x01, 0x02])),
+                (
+                    "version 0 in two bytes",
+                    p.info_with(0, vec![0x02, 0x02, 0x00, 0x00]),
+                ),
+                ("id-ecDH", algorithm(&[tlv(0x06, ID_EC_DH), named_curve(k)])),
+                (
+                    "id-ecMQV",
+                    algorithm(&[tlv(0x06, ID_EC_MQV), named_curve(k)]),
+                ),
+                (
+                    "another curve",
+                    algorithm(&[ec_pk(), named_curve(another(k))]),
+                ),
+                ("no parameters", algorithm(&[ec_pk()])),
+                ("NULL parameters", algorithm(&[ec_pk(), null()])),
+                (
+                    "parameters then NULL",
+                    algorithm(&[ec_pk(), named_curve(k), null()]),
+                ),
+                (
+                    "privateKey not an OCTET STRING",
+                    p.info_with(2, sequence(&ec)),
+                ),
+                (
+                    "bytes after ECPrivateKey",
+                    p.info_with(2, tlv(0x04, &[sequence(&ec), null()].concat())),
+                ),
+                (
+                    "NULL inside ECPrivateKey",
+                    p.info(&[&ec[..], &[null()]].concat(), &[]),
+                ),
+                ("trailing byte", [p.info(&ec, &[]), vec![0]].concat()),
+                ("NULL after privateKey", p.info(&ec, &[null()])),
+                (
+                    "truncated field after privateKey",
+                    p.info(&ec, &[vec![0x05]]),
+                ),
+                ("[0] then NULL", p.info(&ec, &[tlv(0xa0, &[]), null()])),
+                ("two [0]", p.info(&ec, &[tlv(0xa0, &[]), tlv(0xa0, &[])])),
+                ("unknown [2]", p.info(&ec, &[tlv(0xa2, &null())])),
+                (
+                    "attributes as an explicit SET",
+                    p.info(&ec, &[tlv(0x31, &local_key_id())]),
+                ),
+                ("attribute not a SEQUENCE", attributes(&null())),
+                (
+                    "attribute without an OID",
+                    attributes(&sequence(&[tlv(0x31, &[])])),
+                ),
+                (
+                    "attribute with an empty OID",
+                    attributes(&sequence(&[tlv(0x06, &[]), tlv(0x31, &[])])),
+                ),
+                (
+                    "attribute without values",
+                    attributes(&sequence(&[tlv(0x06, ID_EC_DH)])),
+                ),
+                (
+                    "attribute values not a SET",
+                    attributes(&sequence(&[tlv(0x06, ID_EC_DH), tlv(0x30, &[])])),
+                ),
+                (
+                    "attribute with a field after its values",
+                    attributes(&sequence(&[tlv(0x06, ID_EC_DH), tlv(0x31, &[]), null()])),
+                ),
+                (
+                    "attribute then NULL",
+                    attributes(&[local_key_id(), null()].concat()),
+                ),
+                (
+                    "truncated attribute",
+                    attributes(&local_key_id()[..local_key_id().len() - 1]),
+                ),
+            ] {
+                assert_refused(&a, k, why, &der);
+            }
+        }
+    }
+
+    #[test]
+    fn an_ec_private_key_holds_rfc_5915s_fields_in_order_and_nothing_else() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        let null = || vec![0x05, 0x00];
+        for k in EC_CURVES {
+            let p = Parts::of(StaticKey::generate(&a, k).unwrap());
+            let [v, d, params, q] = <[Vec<u8>; 4]>::try_from(p.ec_key()).unwrap();
+            let point = p.key.public_key();
+            let curve_oid = named_curve(k);
+            let mut hybrid = point.to_vec();
+            hybrid[0] = 0x06 | (point[point.len() - 1] & 1);
+            let mut compressed = vec![0x02 | (point[point.len() - 1] & 1)];
+            compressed.extend_from_slice(&point[1..point.len().div_ceil(2)]);
+            let mut led = vec![0x11; p.scalar.len()];
+            led[0] = 0;
+            let stripped = tlv(0x04, &led[1..]);
+            let public =
+                |inner: Vec<u8>| vec![v.clone(), d.clone(), params.clone(), tlv(0xa1, &inner)];
+            for (why, inner) in [
+                (
+                    "version 0",
+                    vec![vec![0x02, 0x01, 0x00], d.clone(), params.clone(), q.clone()],
+                ),
+                (
+                    "version 2",
+                    vec![vec![0x02, 0x01, 0x02], d.clone(), params.clone(), q.clone()],
+                ),
+                (
+                    "scalar one byte short",
+                    vec![v.clone(), tlv(0x04, &p.scalar[1..]), params.clone()],
+                ),
+                (
+                    "scalar one byte long",
+                    vec![
+                        v.clone(),
+                        tlv(0x04, &[&[0][..], &p.scalar].concat()),
+                        params.clone(),
+                    ],
+                ),
+                (
+                    "leading zero stripped",
+                    vec![v.clone(), stripped, params.clone()],
+                ),
+                (
+                    "scalar not an OCTET STRING",
+                    vec![v.clone(), tlv(0x02, &p.scalar), params.clone()],
+                ),
+                (
+                    "[0] another curve",
+                    vec![
+                        v.clone(),
+                        d.clone(),
+                        tlv(0xa0, &named_curve(another(k))),
+                        q.clone(),
+                    ],
+                ),
+                (
+                    "[0] implicit",
+                    vec![v.clone(), d.clone(), tlv(0x80, &curve_oid[2..]), q.clone()],
+                ),
+                (
+                    "[0] empty",
+                    vec![v.clone(), d.clone(), tlv(0xa0, &[]), q.clone()],
+                ),
+                (
+                    "[0] curve then NULL",
+                    vec![
+                        v.clone(),
+                        d.clone(),
+                        tlv(0xa0, &[curve_oid.clone(), null()].concat()),
+                        q.clone(),
+                    ],
+                ),
+                (
+                    "[0] NULL",
+                    vec![v.clone(), d.clone(), tlv(0xa0, &null()), q.clone()],
+                ),
+                ("[1] compressed", public(bits(0, &compressed))),
+                ("[1] hybrid", public(bits(0, &hybrid))),
+                ("[1] unused bits", public(bits(1, point))),
+                (
+                    "[1] one byte short",
+                    public(bits(0, &point[..point.len() - 1])),
+                ),
+                (
+                    "[1] one byte long",
+                    public(bits(0, &[point, &[0]].concat())),
+                ),
+                ("[1] empty BIT STRING", public(tlv(0x03, &[]))),
+                ("[1] OCTET STRING", public(tlv(0x04, point))),
+                (
+                    "[1] BIT STRING then NULL",
+                    public([bits(0, point), null()].concat()),
+                ),
+                (
+                    "[1] implicit",
+                    vec![
+                        v.clone(),
+                        d.clone(),
+                        params.clone(),
+                        tlv(0x81, &[&[0][..], point].concat()),
+                    ],
+                ),
+                (
+                    "[1] before [0]",
+                    vec![v.clone(), d.clone(), q.clone(), params.clone()],
+                ),
+                (
+                    "privateKey before version",
+                    vec![d.clone(), v.clone(), params.clone(), q.clone()],
+                ),
+                (
+                    "[0] before privateKey",
+                    vec![v.clone(), params.clone(), d.clone(), q.clone()],
+                ),
+                (
+                    "two versions",
+                    vec![v.clone(), v.clone(), d.clone(), params.clone(), q.clone()],
+                ),
+                (
+                    "two privateKeys",
+                    vec![v.clone(), d.clone(), d.clone(), params.clone(), q.clone()],
+                ),
+                (
+                    "two [0]",
+                    vec![
+                        v.clone(),
+                        d.clone(),
+                        params.clone(),
+                        params.clone(),
+                        q.clone(),
+                    ],
+                ),
+                (
+                    "two [1]",
+                    vec![v.clone(), d.clone(), params.clone(), q.clone(), q.clone()],
+                ),
+                (
+                    "unknown [2]",
+                    vec![
+                        v.clone(),
+                        d.clone(),
+                        params.clone(),
+                        q.clone(),
+                        tlv(0xa2, &null()),
+                    ],
+                ),
+                (
+                    "NULL at the end",
+                    vec![v.clone(), d.clone(), params.clone(), q.clone(), null()],
+                ),
+                ("no privateKey", vec![v.clone(), params.clone(), q.clone()]),
+            ] {
+                assert_refused(&a, k, why, &p.info(&inner, &[]));
+                assert_refused(&a, k, why, &sequence(&inner));
+            }
+            for (why, bare) in [
+                ("bare without parameters", sequence(&[v.clone(), d.clone()])),
+                (
+                    "bare without parameters, with [1]",
+                    sequence(&[v.clone(), d.clone(), q.clone()]),
+                ),
+                ("bare then NULL", [sequence(&p.ec_key()), null()].concat()),
+            ] {
+                assert_refused(&a, k, why, &bare);
+            }
+        }
+    }
+
+    #[test]
+    fn a_carried_public_key_is_the_keys_own() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        for k in EC_CURVES {
+            let p = Parts::of(StaticKey::generate(&a, k).unwrap());
+            let other = StaticKey::generate(&a, k).unwrap();
+            let refused = Err(CryptoError::KeyAgreementPrivateKey { algorithm: k });
+            assert_eq!(p.key.matches_carried(None), Ok(()), "{k:?}");
+            assert_eq!(
+                p.key.matches_carried(Some(p.key.public_key())),
+                Ok(()),
+                "{k:?}"
+            );
+            assert_eq!(
+                p.key.matches_carried(Some(other.public_key())),
+                refused,
+                "{k:?}"
+            );
+            let mut inner = p.ec_key();
+            inner[3] = tlv(0xa1, &bits(0, other.public_key()));
+            for der in [p.info(&inner, &[]), sequence(&inner)] {
+                assert_eq!(checked(k, &der), Ok(Some(other.public_key())), "{k:?}");
                 assert_eq!(
-                    StaticKey::from_pkcs8_der(&a, k, &sequence(&bad)).map(|_| ()),
+                    StaticKey::from_pkcs8_der(&a, k, &der).map(|_| ()),
                     refused,
-                    "{k:?} {bad:02x?}"
+                    "{k:?} {der:02x?}"
                 );
             }
         }
     }
 
     #[test]
-    fn the_public_key_field_comes_once_and_after_the_attributes() {
+    fn no_x25519_key_is_imported_from_der() {
         let a = admit(Profile::Unrestricted, Options::default());
-        let key = StaticKey::generate(&a, KeyAgreementAlgorithm::EcdhP384).unwrap();
-        let mut info = fields(&key.to_pkcs8_der().unwrap());
-        info[0] = vec![0x02, 0x01, 0x01];
-        let attributes = || tlv(0xa0, &[]);
-        let public = || tlv(0x81, &[&[0][..], key.public_key()].concat());
-        let then = |extra: &[Vec<u8>]| sequence(&[&info[..], extra].concat());
-        assert!(is_well_formed(&then(&[public()])));
-        assert!(is_well_formed(&then(&[attributes(), public()])));
-        assert!(!is_well_formed(&then(&[public(), attributes()])));
-        assert!(!is_well_formed(&then(&[public(), public()])));
+        let k = KeyAgreementAlgorithm::X25519;
+        let der = [
+            &__hex::decode("302e020100300506032b656e04220420").unwrap()[..],
+            &[0x11; 32],
+        ]
+        .concat();
+        assert!(checked(k, &der).is_err());
+        assert_eq!(
+            StaticKey::from_pkcs8_der(&a, k, &der).map(|_| ()),
+            Err(CryptoError::KeyAgreementPrivateKey { algorithm: k })
+        );
     }
 
     #[test]

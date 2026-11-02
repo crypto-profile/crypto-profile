@@ -74,9 +74,9 @@ impl PrivateKey {
         Self::from_key(StaticKey::generate(a, AGREEMENT)?)
     }
 
-    /// Imports a P-384 PKCS#8 private key. Refuses outside FIPS mode, under a profile that does
-    /// not admit ECDH on P-384 and HKDF-SHA384, and a key that is malformed, is not P-384, or is
-    /// followed by other bytes (`CryptoError::SealPrivateKey`).
+    /// Imports a P-384 private key in a form [`crate::ecdh::StaticKey::from_pkcs8_der`] takes.
+    /// Refuses outside FIPS mode, under a profile that does not admit ECDH on P-384 and
+    /// HKDF-SHA384, and any key that function refuses on P-384 (`CryptoError::SealPrivateKey`).
     pub fn from_pkcs8_der(a: &Admitted, der: &[u8]) -> Result<Self, CryptoError> {
         assert_fips_module().and_then(|()| admit(a))?;
         let key = StaticKey::from_pkcs8_der(a, AGREEMENT, der)
