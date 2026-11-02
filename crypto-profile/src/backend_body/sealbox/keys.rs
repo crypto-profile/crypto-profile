@@ -75,8 +75,8 @@ impl PrivateKey {
     }
 
     /// Imports a P-384 PKCS#8 private key. Refuses outside FIPS mode, under a profile that does
-    /// not admit ECDH on P-384 and HKDF-SHA384, and a key that is not P-384
-    /// (`CryptoError::SealPrivateKey`).
+    /// not admit ECDH on P-384 and HKDF-SHA384, and a key that is not P-384 or is followed by other
+    /// bytes (`CryptoError::SealPrivateKey`).
     pub fn from_pkcs8_der(a: &Admitted, der: &[u8]) -> Result<Self, CryptoError> {
         assert_fips_module().and_then(|()| admit(a))?;
         let key = StaticKey::from_pkcs8_der(a, AGREEMENT, der)
@@ -233,10 +233,15 @@ mod tests {
         let at = SPKI_LEN - EPHEMERAL_KEY_LEN;
         let mut hybrid = spki.to_vec();
         hybrid[at] = 0x06 | (spki[SPKI_LEN - 1] & 1);
-        let mut compressed = spki[..at].to_vec();
+        let mut compressed = crypto_profile::conformance::__hex::decode(
+            "3046301006072a8648ce3d020106052b81040022033200",
+        )
+        .unwrap();
         compressed.push(0x02 | (spki[SPKI_LEN - 1] & 1));
         compressed.extend_from_slice(&spki[at + 1..at + 49]);
+        compressed.resize(SPKI_LEN, 0xa5);
         for bad in [hybrid, compressed] {
+            assert_eq!(bad.len(), SPKI_LEN);
             assert!(
                 matches!(
                     PublicKey::from_spki_der(&bad),
@@ -255,6 +260,19 @@ mod tests {
                 Err(CryptoError::SealPrivateKey)
             ));
         }
+    }
+
+    #[test]
+    fn a_pkcs8_key_followed_by_other_bytes_is_refused() {
+        let der = PrivateKey::generate(&fips())
+            .unwrap()
+            .to_pkcs8_der()
+            .unwrap();
+        let padded = [&der[..], &[0]].concat();
+        assert!(matches!(
+            PrivateKey::from_pkcs8_der(&fips(), &padded),
+            Err(CryptoError::SealPrivateKey)
+        ));
     }
 
     #[test]

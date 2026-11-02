@@ -14,22 +14,38 @@ use zeroize::Zeroizing;
 struct Curve {
     agreement: &'static ag::Algorithm,
     public_len: usize,
-    spki_len: usize,
+    spki_header: &'static [u8],
     sec1: bool,
 }
 
+const P256_SPKI: &[u8] = &[
+    0x30, 0x59, 0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a,
+    0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07, 0x03, 0x42, 0x00,
+];
+const P384_SPKI: &[u8] = &[
+    0x30, 0x76, 0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b,
+    0x81, 0x04, 0x00, 0x22, 0x03, 0x62, 0x00,
+];
+const P521_SPKI: &[u8] = &[
+    0x30, 0x81, 0x9b, 0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05,
+    0x2b, 0x81, 0x04, 0x00, 0x23, 0x03, 0x81, 0x86, 0x00,
+];
+const X25519_SPKI: &[u8] = &[
+    0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x6e, 0x03, 0x21, 0x00,
+];
+
 fn curve(k: KeyAgreementAlgorithm) -> Result<Curve, CryptoError> {
-    let (agreement, public_len, spki_len, sec1) = match k {
-        KeyAgreementAlgorithm::EcdhP256 => (&ag::ECDH_P256, 65, 91, true),
-        KeyAgreementAlgorithm::EcdhP384 => (&ag::ECDH_P384, 97, 120, true),
-        KeyAgreementAlgorithm::EcdhP521 => (&ag::ECDH_P521, 133, 158, true),
-        KeyAgreementAlgorithm::X25519 => (&ag::X25519, 32, 44, false),
+    let (agreement, public_len, spki_header, sec1) = match k {
+        KeyAgreementAlgorithm::EcdhP256 => (&ag::ECDH_P256, 65, P256_SPKI, true),
+        KeyAgreementAlgorithm::EcdhP384 => (&ag::ECDH_P384, 97, P384_SPKI, true),
+        KeyAgreementAlgorithm::EcdhP521 => (&ag::ECDH_P521, 133, P521_SPKI, true),
+        KeyAgreementAlgorithm::X25519 => (&ag::X25519, 32, X25519_SPKI, false),
         _ => return Err(CryptoError::Unavailable(Algorithm::KeyAgreement(k))),
     };
     Ok(Curve {
         agreement,
         public_len,
-        spki_len,
+        spki_header,
         sec1,
     })
 }
@@ -49,23 +65,27 @@ fn parse_peer(k: KeyAgreementAlgorithm, peer: &[u8]) -> Result<ag::ParsedPublicK
 }
 
 /// The point a SubjectPublicKeyInfo carries, for a caller that takes keys in that form: `der` must
-/// be exactly as long as a named-curve SPKI on `k`'s curve, the module must parse it as one, and the
-/// point it ends with must pass the same checks
-/// as a peer key, so a hybrid point that the 4.x module alone decodes is refused on both lines.
+/// be the canonical named-curve SPKI header for `k`'s curve followed by a point that passes the
+/// same checks as a peer key. The module is never asked to parse the SPKI, because it accepts one
+/// followed by trailing bytes.
 pub(crate) fn spki_point(k: KeyAgreementAlgorithm, der: &[u8]) -> Result<&[u8], CryptoError> {
-    let refused = CryptoError::KeyAgreementPeerKey { algorithm: k };
-    let c = curve(k)?;
-    if der.len() != c.spki_len {
-        return Err(refused);
-    }
-    let parsed = ag::ParsedPublicKey::try_from(ag::UnparsedPublicKey::new(c.agreement, der))
-        .map_err(|_| refused)?;
-    if !matches!(parsed.format(), ag::ParsedPublicKeyFormat::X509) {
-        return Err(refused);
-    }
-    let point = &der[c.spki_len - c.public_len..];
+    let point = der
+        .strip_prefix(curve(k)?.spki_header)
+        .ok_or(CryptoError::KeyAgreementPeerKey { algorithm: k })?;
     parse_peer(k, point)?;
     Ok(point)
+}
+
+// The module accepts a key followed by trailing bytes; this requires one DER SEQUENCE, with a
+// minimal definite length, that ends where the input does.
+fn is_one_sequence(der: &[u8]) -> bool {
+    let (header, len) = match der {
+        [0x30, n @ 0..=0x7f, ..] => (2, usize::from(*n)),
+        [0x30, 0x81, n @ 0x80..=0xff, ..] => (3, usize::from(*n)),
+        [0x30, 0x82, hi @ 0x01..=0xff, lo, ..] => (4, usize::from(u16::from_be_bytes([*hi, *lo]))),
+        _ => return false,
+    };
+    header + len == der.len()
 }
 
 /// RFC 9180 §7.1 Table 2: the DHKEM `kem_id` of a curve with its HKDF.
@@ -213,7 +233,7 @@ impl fmt::Debug for StaticKey {
 impl StaticKey {
     /// Imports an unencrypted PKCS#8 private key (an RFC 5915 `ECPrivateKey` is also accepted) on
     /// `algorithm`'s curve. Refuses a curve `a`'s profile does not admit, then a key that is
-    /// malformed, on another curve, or fails the module's checks
+    /// malformed, followed by other bytes, on another curve, or fails the module's checks
     /// (`CryptoError::KeyAgreementPrivateKey`). An X25519 key is imported with
     /// [`StaticKey::from_scalar`].
     pub fn from_pkcs8_der(
@@ -223,8 +243,11 @@ impl StaticKey {
     ) -> Result<Self, CryptoError> {
         a.admit_key_agreement(algorithm)?;
         let c = curve(algorithm)?;
-        let key = ag::PrivateKey::from_private_key_der(c.agreement, der)
-            .map_err(|_| CryptoError::KeyAgreementPrivateKey { algorithm })?;
+        let refused = CryptoError::KeyAgreementPrivateKey { algorithm };
+        if !is_one_sequence(der) {
+            return Err(refused);
+        }
+        let key = ag::PrivateKey::from_private_key_der(c.agreement, der).map_err(|_| refused)?;
         Self::new(a, algorithm, key)
     }
 
@@ -424,6 +447,78 @@ mod tests {
     }
 
     #[test]
+    fn only_one_minimally_encoded_sequence_spanning_the_input_is_whole() {
+        let with = |head: &[u8], n: usize| [head, &vec![0; n][..]].concat();
+        for whole in [
+            with(&[0x30, 0x03], 3),
+            with(&[0x30, 0x81, 0x80], 0x80),
+            with(&[0x30, 0x82, 0x01, 0x01], 0x101),
+        ] {
+            assert!(is_one_sequence(&whole), "{:02x?}", &whole[..4]);
+        }
+        for bad in [
+            Vec::new(),
+            vec![0x30],
+            with(&[0x30, 0x03], 2),
+            with(&[0x30, 0x03], 4),
+            with(&[0x31, 0x03], 3),
+            with(&[0x30, 0x80], 2),
+            with(&[0x30, 0x81, 0x7f], 0x7f),
+            with(&[0x30, 0x81, 0x80], 0x81),
+            with(&[0x30, 0x82, 0x00, 0xff], 0xff),
+            with(&[0x30, 0x82, 0x01, 0x01], 0x100),
+            with(&[0x30, 0x83, 0x00, 0x01, 0x00], 0x100),
+        ] {
+            assert!(!is_one_sequence(&bad), "{bad:02x?}");
+        }
+    }
+
+    #[test]
+    fn a_pkcs8_key_followed_by_other_bytes_is_refused_and_an_rfc_5915_key_is_not() {
+        use aws_lc_rs::encoding::EcPrivateKeyRfc5915Der;
+        let a = admit(Profile::Unrestricted, Options::default());
+        for k in [
+            KeyAgreementAlgorithm::EcdhP256,
+            KeyAgreementAlgorithm::EcdhP384,
+            KeyAgreementAlgorithm::EcdhP521,
+        ] {
+            let key = StaticKey::generate(&a, k).unwrap();
+            let der = key.to_pkcs8_der().unwrap();
+            let imported = StaticKey::from_pkcs8_der(&a, k, &der).unwrap();
+            assert_eq!(imported.public_key(), key.public_key(), "{k:?}");
+            let other = StaticKey::generate(&a, k).unwrap().to_pkcs8_der().unwrap();
+            for bad in [[&der[..], &[0]].concat(), [&der[..], &other[..]].concat()] {
+                assert_eq!(
+                    StaticKey::from_pkcs8_der(&a, k, &bad).map(|_| ()),
+                    Err(CryptoError::KeyAgreementPrivateKey { algorithm: k }),
+                    "{k:?}"
+                );
+            }
+            let sec1: EcPrivateKeyRfc5915Der<'static> = key.key.as_der().unwrap();
+            let imported = StaticKey::from_pkcs8_der(&a, k, sec1.as_ref()).unwrap();
+            assert_eq!(imported.public_key(), key.public_key(), "{k:?}");
+        }
+    }
+
+    #[test]
+    fn a_compressed_spki_padded_to_the_named_curve_length_is_refused() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        let k = KeyAgreementAlgorithm::EcdhP256;
+        let key = StaticKey::generate(&a, k).unwrap();
+        let point = key.public_key();
+        let mut der =
+            __hex::decode("3039301306072a8648ce3d020106082a8648ce3d030107032200").unwrap();
+        der.push(0x02 | (point[64] & 1));
+        der.extend_from_slice(&point[1..33]);
+        der.extend_from_slice(&[0xa5; 32]);
+        assert_eq!(der.len(), 91);
+        assert_eq!(
+            spki_point(k, &der),
+            Err(CryptoError::KeyAgreementPeerKey { algorithm: k })
+        );
+    }
+
+    #[test]
     fn every_curves_named_spki_yields_its_point_and_no_longer_input_does() {
         let a = admit(Profile::Unrestricted, Options::default());
         for (k, extra) in [
@@ -434,6 +529,9 @@ mod tests {
         ] {
             let key = StaticKey::generate(&a, k).unwrap();
             let mut der = key.to_spki_der().unwrap();
+            let c = curve(k).unwrap();
+            assert_eq!(der.len(), c.spki_header.len() + c.public_len, "{k:?}");
+            assert!(der.starts_with(c.spki_header), "{k:?}");
             assert_eq!(spki_point(k, &der), Ok(key.public_key()), "{k:?}");
             let other = StaticKey::generate(&a, k).unwrap();
             der.extend_from_slice(&other.public_key()[other.public_key().len() - extra..]);
