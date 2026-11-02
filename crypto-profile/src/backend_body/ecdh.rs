@@ -76,16 +76,44 @@ pub(crate) fn spki_point(k: KeyAgreementAlgorithm, der: &[u8]) -> Result<&[u8], 
     Ok(point)
 }
 
-// The module accepts a key followed by trailing bytes; this requires one DER SEQUENCE, with a
-// minimal definite length, that ends where the input does.
-fn is_one_sequence(der: &[u8]) -> bool {
-    let (header, len) = match der {
-        [0x30, n @ 0..=0x7f, ..] => (2, usize::from(*n)),
-        [0x30, 0x81, n @ 0x80..=0xff, ..] => (3, usize::from(*n)),
-        [0x30, 0x82, hi @ 0x01..=0xff, lo, ..] => (4, usize::from(u16::from_be_bytes([*hi, *lo]))),
-        _ => return false,
+// One DER element with a minimal definite length of at most two bytes: its tag, its value and the
+// bytes after it.
+fn split_tlv(der: &[u8]) -> Option<(u8, &[u8], &[u8])> {
+    let (tag, header, len) = match der {
+        [t, n @ 0..=0x7f, ..] => (*t, 2, usize::from(*n)),
+        [t, 0x81, n @ 0x80..=0xff, ..] => (*t, 3, usize::from(*n)),
+        [t, 0x82, hi @ 0x01..=0xff, lo, ..] => (*t, 4, usize::from(u16::from_be_bytes([*hi, *lo]))),
+        _ => return None,
     };
-    header + len == der.len()
+    let (value, rest) = der[header..].split_at_checked(len)?;
+    Some((tag, value, rest))
+}
+
+// The module accepts a key followed by trailing bytes, and checks an RFC 5915 ECPrivateKey to its
+// end but not the PrivateKeyInfo around one; this requires one SEQUENCE spanning the input and,
+// after a PrivateKeyInfo's privateKey, only RFC 5958's [0] attributes and [1] publicKey.
+fn is_well_formed(der: &[u8]) -> bool {
+    let Some((0x30, mut rest, [])) = split_tlv(der) else {
+        return false;
+    };
+    let mut fields = Vec::new();
+    // one past the most fields either form has, so a longer key is refused
+    for _ in 0..6 {
+        let Some((tag, value, next)) = split_tlv(rest) else {
+            break;
+        };
+        fields.push((tag, value));
+        rest = next;
+    }
+    rest.is_empty()
+        && match fields.as_slice() {
+            [(0x02, [1]), (0x04, _), ..] => true,
+            [(0x02, [0 | 1]), (0x30, _), (0x04, _), tail @ ..] => matches!(
+                tail,
+                [] | [(0xa0, _)] | [(0x81, _)] | [(0xa0, _), (0x81, _)]
+            ),
+            _ => false,
+        }
 }
 
 /// RFC 9180 §7.1 Table 2: the DHKEM `kem_id` of a curve with its HKDF.
@@ -233,9 +261,9 @@ impl fmt::Debug for StaticKey {
 impl StaticKey {
     /// Imports an unencrypted PKCS#8 private key (an RFC 5915 `ECPrivateKey` is also accepted) on
     /// `algorithm`'s curve. Refuses a curve `a`'s profile does not admit, then a key that is
-    /// malformed, followed by other bytes, on another curve, or fails the module's checks
-    /// (`CryptoError::KeyAgreementPrivateKey`). An X25519 key is imported with
-    /// [`StaticKey::from_scalar`].
+    /// malformed, holds a field RFC 5958 or RFC 5915 does not define, is followed by other bytes,
+    /// is on another curve, or fails the module's checks (`CryptoError::KeyAgreementPrivateKey`).
+    /// An X25519 key is imported with [`StaticKey::from_scalar`].
     pub fn from_pkcs8_der(
         a: &Admitted,
         algorithm: KeyAgreementAlgorithm,
@@ -244,7 +272,7 @@ impl StaticKey {
         a.admit_key_agreement(algorithm)?;
         let c = curve(algorithm)?;
         let refused = CryptoError::KeyAgreementPrivateKey { algorithm };
-        if !is_one_sequence(der) {
+        if !is_well_formed(der) {
             return Err(refused);
         }
         let key = ag::PrivateKey::from_private_key_der(c.agreement, der).map_err(|_| refused)?;
@@ -450,12 +478,19 @@ mod tests {
     #[test]
     fn only_one_minimally_encoded_sequence_spanning_the_input_is_whole() {
         let with = |head: &[u8], n: usize| [head, &vec![0; n][..]].concat();
-        for whole in [
-            with(&[0x30, 0x03], 3),
-            with(&[0x30, 0x81, 0x80], 0x80),
-            with(&[0x30, 0x82, 0x01, 0x01], 0x101),
+        let is_one_sequence = |der: &[u8]| matches!(split_tlv(der), Some((0x30, _, [])));
+        for (whole, header) in [
+            (with(&[0x30, 0x03], 3), 2),
+            (with(&[0x30, 0x81, 0x80], 0x80), 3),
+            (with(&[0x30, 0x82, 0x01, 0x01], 0x101), 4),
         ] {
-            assert!(is_one_sequence(&whole), "{:02x?}", &whole[..4]);
+            let empty: &[u8] = &[];
+            assert_eq!(
+                split_tlv(&whole),
+                Some((0x30, &whole[header..], empty)),
+                "{:02x?}",
+                &whole[..4]
+            );
         }
         for bad in [
             Vec::new(),
@@ -498,6 +533,129 @@ mod tests {
             let sec1: EcPrivateKeyRfc5915Der<'static> = key.key.as_der().unwrap();
             let imported = StaticKey::from_pkcs8_der(&a, k, sec1.as_ref()).unwrap();
             assert_eq!(imported.public_key(), key.public_key(), "{k:?}");
+        }
+    }
+
+    fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+        let n = u16::try_from(value.len()).unwrap();
+        let [hi, lo] = n.to_be_bytes();
+        let len = match n {
+            0..=0x7f => vec![lo],
+            0x80..=0xff => vec![0x81, lo],
+            _ => vec![0x82, hi, lo],
+        };
+        [&[tag][..], &len, value].concat()
+    }
+
+    fn fields(der: &[u8]) -> Vec<Vec<u8>> {
+        let (_, mut rest, _) = split_tlv(der).unwrap();
+        let mut out = Vec::new();
+        while !rest.is_empty() && out.len() < 8 {
+            let (tag, value, next) = split_tlv(rest).unwrap();
+            out.push(tlv(tag, value));
+            rest = next;
+        }
+        out
+    }
+
+    fn sequence(fields: &[Vec<u8>]) -> Vec<u8> {
+        tlv(0x30, &fields.concat())
+    }
+
+    #[test]
+    fn a_private_key_info_holds_rfc_5958s_fields_and_nothing_else() {
+        use aws_lc_rs::encoding::EcPrivateKeyRfc5915Der;
+        let a = admit(Profile::Unrestricted, Options::default());
+        let null = || vec![0x05, 0x00];
+        for k in [
+            KeyAgreementAlgorithm::EcdhP256,
+            KeyAgreementAlgorithm::EcdhP384,
+            KeyAgreementAlgorithm::EcdhP521,
+        ] {
+            let key = StaticKey::generate(&a, k).unwrap();
+            let info = fields(&key.to_pkcs8_der().unwrap());
+            let point = [&[0][..], key.public_key()].concat();
+            let with = |at: usize, field: Vec<u8>| {
+                let mut f = info.clone();
+                f[at] = field;
+                f
+            };
+            let then = |extra: &[Vec<u8>]| [&info[..], extra].concat();
+            for good in [
+                info.clone(),
+                with(0, vec![0x02, 0x01, 0x01]),
+                then(&[tlv(0xa0, &[])]),
+            ] {
+                let imported = StaticKey::from_pkcs8_der(&a, k, &sequence(&good)).unwrap();
+                assert_eq!(imported.public_key(), key.public_key(), "{k:?} {good:02x?}");
+            }
+            let ec_key = fields(split_tlv(&info[2]).unwrap().1);
+            let sec1: EcPrivateKeyRfc5915Der<'static> = key.key.as_der().unwrap();
+            let refused = Err(CryptoError::KeyAgreementPrivateKey { algorithm: k });
+            for bad in [
+                then(&[null()]),
+                then(&[vec![0x05]]),
+                then(&[tlv(0xa0, &[]), null()]),
+                then(&[tlv(0xa0, &[]), tlv(0xa0, &[])]),
+                then(&[tlv(0xa2, &null())]),
+                then(&[tlv(0xa1, &tlv(0x03, &point))]),
+                with(0, vec![0x02, 0x01, 0x02]),
+                with(2, tlv(0x04, &sequence(&[&ec_key[..], &[null()]].concat()))),
+                with(2, tlv(0x04, &[sequence(&ec_key), null()].concat())),
+                [&fields(sec1.as_ref())[..], &[null()]].concat(),
+            ] {
+                assert_eq!(
+                    StaticKey::from_pkcs8_der(&a, k, &sequence(&bad)).map(|_| ()),
+                    refused,
+                    "{k:?} {bad:02x?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_public_key_field_comes_once_and_after_the_attributes() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        let key = StaticKey::generate(&a, KeyAgreementAlgorithm::EcdhP384).unwrap();
+        let mut info = fields(&key.to_pkcs8_der().unwrap());
+        info[0] = vec![0x02, 0x01, 0x01];
+        let attributes = || tlv(0xa0, &[]);
+        let public = || tlv(0x81, &[&[0][..], key.public_key()].concat());
+        let then = |extra: &[Vec<u8>]| sequence(&[&info[..], extra].concat());
+        assert!(is_well_formed(&then(&[public()])));
+        assert!(is_well_formed(&then(&[attributes(), public()])));
+        assert!(!is_well_formed(&then(&[public(), attributes()])));
+        assert!(!is_well_formed(&then(&[public(), public()])));
+    }
+
+    #[test]
+    fn no_short_or_truncated_private_key_is_imported() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        let k = KeyAgreementAlgorithm::EcdhP384;
+        let refused = Err(CryptoError::KeyAgreementPrivateKey { algorithm: k });
+        let mut short = vec![Vec::new()];
+        for b0 in 0..=u8::MAX {
+            short.push(vec![b0]);
+            for b1 in 0..=u8::MAX {
+                short.push(vec![b0, b1]);
+                short.push(vec![0x30, b0, b1]);
+            }
+        }
+        for der in &short {
+            assert_eq!(
+                StaticKey::from_pkcs8_der(&a, k, der).map(|_| ()),
+                refused,
+                "{der:02x?}"
+            );
+        }
+        let key = StaticKey::generate(&a, k).unwrap();
+        let pkcs8 = key.to_pkcs8_der().unwrap();
+        for n in 0..pkcs8.len() {
+            assert_eq!(
+                StaticKey::from_pkcs8_der(&a, k, &pkcs8[..n]).map(|_| ()),
+                refused,
+                "{n}"
+            );
         }
     }
 

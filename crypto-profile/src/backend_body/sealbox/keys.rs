@@ -75,8 +75,8 @@ impl PrivateKey {
     }
 
     /// Imports a P-384 PKCS#8 private key. Refuses outside FIPS mode, under a profile that does
-    /// not admit ECDH on P-384 and HKDF-SHA384, and a key that is not P-384 or is followed by other
-    /// bytes (`CryptoError::SealPrivateKey`).
+    /// not admit ECDH on P-384 and HKDF-SHA384, and a key that is malformed, is not P-384, or is
+    /// followed by other bytes (`CryptoError::SealPrivateKey`).
     pub fn from_pkcs8_der(a: &Admitted, der: &[u8]) -> Result<Self, CryptoError> {
         assert_fips_module().and_then(|()| admit(a))?;
         let key = StaticKey::from_pkcs8_der(a, AGREEMENT, der)
@@ -271,6 +271,20 @@ mod tests {
         let padded = [&der[..], &[0]].concat();
         assert!(matches!(
             PrivateKey::from_pkcs8_der(&fips(), &padded),
+            Err(CryptoError::SealPrivateKey)
+        ));
+    }
+
+    #[test]
+    fn a_pkcs8_key_with_a_field_after_the_private_key_is_refused() {
+        let der = PrivateKey::generate(&fips())
+            .unwrap()
+            .to_pkcs8_der()
+            .unwrap();
+        assert_eq!(&der[..3], &[0x30, 0x81, 0xb6]);
+        let with_null = [&[0x30, 0x81, 0xb8][..], &der[3..], &[0x05, 0x00]].concat();
+        assert!(matches!(
+            PrivateKey::from_pkcs8_der(&fips(), &with_null),
             Err(CryptoError::SealPrivateKey)
         ));
     }
