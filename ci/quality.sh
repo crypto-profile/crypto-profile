@@ -44,6 +44,16 @@ else
       echo "no Rust source changed for $backend since $base"
       exit 0
     fi
+    if ! grep -q '^diff --git ' "$work/branch.diff"; then
+      echo "cannot read file names from the diff for $backend" >&2
+      exit 1
+    fi
+    # deletions, pure renames and mode changes name no new file
+    expected="$(awk '/^\+\+\+ / && $0 != "+++ /dev/null" { n++ } END { print n + 0 }' "$work/branch.diff")"
+    if [ "$expected" = 0 ]; then
+      echo "no mutated source changed for $backend since $base"
+      exit 0
+    fi
   fi
   cd "$work/src"
   if [ "$backend" = crypto-profile-awslc3 ]; then cd crypto-profile-awslc3; fi
@@ -54,7 +64,7 @@ else
       exit 1
     fi
     sed -nE 's#^\+\+\+ b/(.*)$#\1#p' "$work/branch.diff" > "$work/changed.files"
-    if [ ! -s "$work/changed.files" ]; then
+    if [ "$(wc -l < "$work/changed.files")" -lt "$expected" ]; then
       echo "cannot read file names from the diff for $backend" >&2
       exit 1
     fi
