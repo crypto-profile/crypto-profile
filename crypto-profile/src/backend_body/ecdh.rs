@@ -5,6 +5,7 @@
 use crate::kdf::{self, DerivedKey, Spec};
 use crate::{Admitted, CryptoError};
 use aws_lc_rs::agreement as ag;
+use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der};
 use aws_lc_rs::rand::SystemRandom;
 use crypto_profile::{Algorithm, KdfAlgorithm, KeyAgreementAlgorithm};
 use std::fmt;
@@ -13,20 +14,22 @@ use zeroize::Zeroizing;
 struct Curve {
     agreement: &'static ag::Algorithm,
     public_len: usize,
+    spki_len: usize,
     sec1: bool,
 }
 
 fn curve(k: KeyAgreementAlgorithm) -> Result<Curve, CryptoError> {
-    let (agreement, public_len, sec1) = match k {
-        KeyAgreementAlgorithm::EcdhP256 => (&ag::ECDH_P256, 65, true),
-        KeyAgreementAlgorithm::EcdhP384 => (&ag::ECDH_P384, 97, true),
-        KeyAgreementAlgorithm::EcdhP521 => (&ag::ECDH_P521, 133, true),
-        KeyAgreementAlgorithm::X25519 => (&ag::X25519, 32, false),
+    let (agreement, public_len, spki_len, sec1) = match k {
+        KeyAgreementAlgorithm::EcdhP256 => (&ag::ECDH_P256, 65, 91, true),
+        KeyAgreementAlgorithm::EcdhP384 => (&ag::ECDH_P384, 97, 120, true),
+        KeyAgreementAlgorithm::EcdhP521 => (&ag::ECDH_P521, 133, 158, true),
+        KeyAgreementAlgorithm::X25519 => (&ag::X25519, 32, 44, false),
         _ => return Err(CryptoError::Unavailable(Algorithm::KeyAgreement(k))),
     };
     Ok(Curve {
         agreement,
         public_len,
+        spki_len,
         sec1,
     })
 }
@@ -43,6 +46,26 @@ fn parse_peer(k: KeyAgreementAlgorithm, peer: &[u8]) -> Result<ag::ParsedPublicK
     }
     ag::ParsedPublicKey::try_from(ag::UnparsedPublicKey::new(c.agreement, peer))
         .map_err(|_| refused)
+}
+
+/// The point a SubjectPublicKeyInfo carries, for a caller that takes keys in that form: `der` must
+/// be exactly as long as a named-curve SPKI on `k`'s curve, the module must parse it as one, and the
+/// point it ends with must pass the same checks
+/// as a peer key, so a hybrid point that the 4.x module alone decodes is refused on both lines.
+pub(crate) fn spki_point(k: KeyAgreementAlgorithm, der: &[u8]) -> Result<&[u8], CryptoError> {
+    let refused = CryptoError::KeyAgreementPeerKey { algorithm: k };
+    let c = curve(k)?;
+    if der.len() != c.spki_len {
+        return Err(refused);
+    }
+    let parsed = ag::ParsedPublicKey::try_from(ag::UnparsedPublicKey::new(c.agreement, der))
+        .map_err(|_| refused)?;
+    if !matches!(parsed.format(), ag::ParsedPublicKeyFormat::X509) {
+        return Err(refused);
+    }
+    let point = &der[c.spki_len - c.public_len..];
+    parse_peer(k, point)?;
+    Ok(point)
 }
 
 /// RFC 9180 §7.1 Table 2: the DHKEM `kem_id` of a curve with its HKDF.
@@ -221,6 +244,17 @@ impl StaticKey {
         Self::new(a, algorithm, key)
     }
 
+    pub(crate) fn generate(
+        a: &Admitted,
+        algorithm: KeyAgreementAlgorithm,
+    ) -> Result<Self, CryptoError> {
+        a.admit_key_agreement(algorithm)?;
+        let c = curve(algorithm)?;
+        let key = ag::PrivateKey::generate(c.agreement)
+            .map_err(|_| CryptoError::KeyGeneration(Algorithm::KeyAgreement(algorithm)))?;
+        Self::new(a, algorithm, key)
+    }
+
     fn new(
         a: &Admitted,
         algorithm: KeyAgreementAlgorithm,
@@ -261,6 +295,20 @@ impl StaticKey {
         ag::agree(&self.key, prepared.peer, refused, |z| {
             derive(z, spec, prepared.dhkem, peer_ephemeral, &self.public, len)
         })
+    }
+
+    pub(crate) fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        let der: Pkcs8V1Der<'static> = self.key.as_der().map_err(|_| CryptoError::Primitive)?;
+        Ok(Zeroizing::new(der.as_ref().to_vec()))
+    }
+
+    pub(crate) fn to_spki_der(&self) -> Result<Vec<u8>, CryptoError> {
+        let spki: PublicKeyX509Der<'static> = self
+            .key
+            .compute_public_key()
+            .and_then(|p| p.as_der())
+            .map_err(|_| CryptoError::Primitive)?;
+        Ok(spki.as_ref().to_vec())
     }
 
     /// The raw shared secret with `peer`, for tests that check it against published vectors.
@@ -352,5 +400,48 @@ mod tests {
                 algorithm: Algorithm::Kdf(KdfAlgorithm::HkdfSha384),
             })
         );
+    }
+
+    #[test]
+    fn an_spki_yields_its_point_and_nothing_else_does() {
+        let a = admit(Profile::Fips1403, Options::default());
+        let k = KeyAgreementAlgorithm::EcdhP384;
+        let key = StaticKey::generate(&a, k).unwrap();
+        let spki = key.to_spki_der().unwrap();
+        assert_eq!(spki_point(k, &spki), Ok(key.public_key()));
+        let refused = Err(CryptoError::KeyAgreementPeerKey { algorithm: k });
+        assert_eq!(spki_point(k, key.public_key()), refused);
+        let mut hybrid = spki.clone();
+        let at = spki.len() - key.public_key().len();
+        hybrid[at] = 0x06 | (spki[spki.len() - 1] & 1);
+        assert_eq!(spki_point(k, &hybrid), refused);
+        assert_eq!(
+            spki_point(KeyAgreementAlgorithm::EcdhP256, &spki),
+            Err(CryptoError::KeyAgreementPeerKey {
+                algorithm: KeyAgreementAlgorithm::EcdhP256
+            })
+        );
+    }
+
+    #[test]
+    fn every_curves_named_spki_yields_its_point_and_no_longer_input_does() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        for (k, extra) in [
+            (KeyAgreementAlgorithm::EcdhP256, 65),
+            (KeyAgreementAlgorithm::EcdhP384, 97),
+            (KeyAgreementAlgorithm::EcdhP521, 133),
+            (KeyAgreementAlgorithm::X25519, 1),
+        ] {
+            let key = StaticKey::generate(&a, k).unwrap();
+            let mut der = key.to_spki_der().unwrap();
+            assert_eq!(spki_point(k, &der), Ok(key.public_key()), "{k:?}");
+            let other = StaticKey::generate(&a, k).unwrap();
+            der.extend_from_slice(&other.public_key()[other.public_key().len() - extra..]);
+            assert_eq!(
+                spki_point(k, &der),
+                Err(CryptoError::KeyAgreementPeerKey { algorithm: k }),
+                "{k:?}"
+            );
+        }
     }
 }

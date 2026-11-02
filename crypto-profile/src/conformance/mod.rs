@@ -746,6 +746,20 @@ pub mod vectors {
         /// The nonce of [`FIXED_SHARED_CT_HEX`].
         pub const NONCE: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
 
+        /// A blob sealed by crypto-profile 0.9.0 (`crypto-profile-awslc4`), with its key.
+        pub mod release_0_9_0 {
+            /// The domain.
+            pub const DOMAIN: &[u8] = b"crypto-profile sealbox 0.9.0 golden";
+            /// The additional authenticated data.
+            pub const AAD: &[u8] = b"crypto-profile 0.9.0 golden aad";
+            /// The plaintext.
+            pub const PLAINTEXT: &[u8] = b"sealed by crypto-profile 0.9.0";
+            /// The recipient's P-384 private key as PKCS#8 DER, hex-encoded.
+            pub const PRIVATE_KEY_PKCS8_HEX: &str = "3081b6020100301006072a8648ce3d020106052b8104002204819e30819b02010104301605a5a345ffab181ad7062a845c03e9f567a1fb169036c692f818ffc048b377ad51be14e7a8703c65e95c3fd4754403a16403620004db56e7d8b2aecccccaea62609b378fe7e2095c772ced07f13738be27fb7070727d2308a5ca587c7cacae32865fa56716a5e07ebafd8551911daefddf62e63f982969af28142b4aebec27ad6b786c80ab93018c661061f0b145736fbb263cbdc5";
+            /// The sealed blob, hex-encoded.
+            pub const BLOB_HEX: &str = "0104d226c2abec589372bf2eedf632418fe1507df48e39c5302d8742993fbf6677a0856e7aa80085993157fc7b0df59a3f5572a09d1b9c8ca84b63179abd57f07facfdbdffeb3f95fc4f04ed31103dcc5a4c47c1845a2ba38f82883ae8606f87ad0a9038e95c9d0ec64d31dae22c0be4dbcc60f4500c90b6ce6cedf1ffa5dbfa5e7d9c603e1e5a0ebf8db24d315ca5532c44d0d3efff55e08df522d7";
+        }
+
         /// The additional authenticated data of the known-answer blob.
         pub fn aad() -> Vec<u8> {
             let mut out = b"maknae-seal-aad-v1".to_vec();
@@ -1468,8 +1482,9 @@ macro_rules! conformance_tests {
             use vectors::sealbox as kat;
             let pkcs8 = $crate::conformance::__hex::decode(kat::PRIVATE_KEY_PKCS8_HEX).unwrap();
             let blob = $crate::conformance::__hex::decode(kat::BLOB_HEX).unwrap();
-            let key = sealbox::PrivateKey::from_pkcs8_der(&pkcs8).unwrap();
-            let opened = sealbox::open(&key, kat::DOMAIN, &kat::aad(), &blob).unwrap();
+            let a = admit(Profile::Fips1403, Options::default());
+            let key = sealbox::PrivateKey::from_pkcs8_der(&a, &pkcs8).unwrap();
+            let opened = sealbox::open(&a, &key, kat::DOMAIN, &kat::aad(), &blob).unwrap();
             assert_eq!(&opened[..], kat::PLAINTEXT);
         }
 

@@ -527,5 +527,65 @@ macro_rules! __conformance_key_agreement_tests {
                 );
             }
         }
+
+        #[test]
+        fn conformance_sealed_box_opens_a_0_9_0_blob() {
+            use vectors::sealbox::release_0_9_0 as golden;
+            for p in [
+                Profile::Unrestricted,
+                Profile::Preferred,
+                Profile::Cnsa1,
+                Profile::Fips1403,
+                Profile::Fips1402,
+            ] {
+                let a = admit(p, Options::default());
+                let key =
+                    sealbox::PrivateKey::from_pkcs8_der(&a, &unhex(golden::PRIVATE_KEY_PKCS8_HEX))
+                        .unwrap_or_else(|e| panic!("{p}: {e}"));
+                let opened =
+                    sealbox::open(&a, &key, golden::DOMAIN, golden::AAD, &unhex(golden::BLOB_HEX))
+                        .unwrap_or_else(|e| panic!("{p}: {e}"));
+                assert_eq!(&opened[..], golden::PLAINTEXT, "{p}");
+            }
+        }
+
+        #[test]
+        fn conformance_sealed_box_follows_the_profile() {
+            let fips = fips();
+            let key = sealbox::PrivateKey::generate(&fips).unwrap();
+            let blob = sealbox::seal(&fips, key.recipient(), b"domain", b"aad", b"secret").unwrap();
+            for &p in Profile::ALL {
+                let a = admit(p, Options::default());
+                let admits = a.key_agreements().contains(&E::EcdhP384)
+                    && a.kdfs().contains(&KdfAlgorithm::HkdfSha384);
+                assert_eq!(admits, !matches!(p, Profile::Bsi | Profile::Cnsa2), "{p}");
+                let sealed = sealbox::seal(&a, key.recipient(), b"domain", b"aad", b"secret");
+                let opened = sealbox::open(&a, &key, b"domain", b"aad", blob.as_bytes());
+                let empty_domain = sealbox::open(&a, &key, b"", b"aad", b"");
+                if admits {
+                    let sealed = sealed.unwrap();
+                    assert_eq!(
+                        &sealbox::open(&fips, &key, b"domain", b"aad", sealed.as_bytes())
+                            .unwrap()[..],
+                        b"secret",
+                        "{p}"
+                    );
+                    assert_eq!(&opened.unwrap()[..], b"secret", "{p}");
+                    assert_eq!(
+                        empty_domain.err(),
+                        Some(CryptoError::SealDomainEmpty),
+                        "{p}"
+                    );
+                } else {
+                    let refused = CryptoError::NotInProfile {
+                        profile: p,
+                        algorithm: Algorithm::KeyAgreement(E::EcdhP384),
+                    };
+                    assert_eq!(sealed.err(), Some(refused), "{p}");
+                    assert_eq!(opened.err(), Some(refused), "{p}");
+                    assert_eq!(empty_domain.err(), Some(refused), "{p}");
+                }
+            }
+        }
     };
 }

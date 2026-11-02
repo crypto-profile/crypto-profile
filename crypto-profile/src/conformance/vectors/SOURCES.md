@@ -83,7 +83,7 @@ The SHA byte-oriented test vectors, `https://csrc.nist.gov/CSRC/media/Projects/C
 
 ## Sealed box
 
-The known answers in `conformance/mod.rs` (`vectors::sealbox`) are Maknae's sealed-box v1 vectors, produced by an independent implementation.
+The known answers in `conformance/mod.rs` (`vectors::sealbox`) are Maknae's sealed-box v1 vectors, produced by an independent implementation. `vectors::sealbox::release_0_9_0` is a blob sealed, with its key, by crypto-profile 0.9.0 (`crypto-profile-awslc4`, tag `v0.9.0`, commit `6a1615a4708a2d6e79d0a1882e094251002a0f28`) on 2026-11-02, so that every later release is checked to open what 0.9.0 sealed.
 
 ## Reference policies
 
