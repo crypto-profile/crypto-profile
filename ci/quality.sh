@@ -34,11 +34,11 @@ else
   if [ "$kind" = mutants-diff ]; then
     if [ "$backend" = crypto-profile-awslc4 ]; then
       # Direct mode names the shared body through this path; without it cargo-mutants skips the body files.
-      git -C "$root" diff "$base"...HEAD -- '*.rs' \
+      git -C "$root" diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ "$base"...HEAD -- '*.rs' \
         | sed -E '/^(diff --git |--- |\+\+\+ )/ s#([ab])/crypto-profile/src/(backend_body|provider)/#\1/crypto-profile-awslc4/src/../../crypto-profile/src/\2/#g' \
         > "$work/branch.diff"
     else
-      git -C "$root" diff --relative=crypto-profile-awslc3 "$base"...HEAD -- '*.rs' > "$work/branch.diff"
+      git -C "$root" diff --no-color --no-ext-diff --no-textconv --src-prefix=a/ --dst-prefix=b/ --relative=crypto-profile-awslc3 "$base"...HEAD -- '*.rs' > "$work/branch.diff"
     fi
     if [ ! -s "$work/branch.diff" ]; then
       echo "no Rust source changed for $backend since $base"
@@ -54,6 +54,10 @@ else
       exit 1
     fi
     sed -nE 's#^\+\+\+ b/(.*)$#\1#p' "$work/branch.diff" > "$work/changed.files"
+    if [ ! -s "$work/changed.files" ]; then
+      echo "cannot read file names from the diff for $backend" >&2
+      exit 1
+    fi
     declare -A canonical=()
     while IFS= read -r known; do
       norm="$(realpath -m --relative-to=. -- "$known")" && [ -n "$norm" ] || { echo "cannot normalise $known with realpath -m" >&2; exit 1; }
