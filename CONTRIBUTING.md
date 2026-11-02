@@ -59,12 +59,12 @@ For coverage and mutation, use cargo-llvm-cov 0.8.7 and cargo-mutants 27.1.0. Us
 
 ```sh
 RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
-RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo mutants --workspace --no-shuffle
+ci/quality.sh mutants-diff crypto-profile-awslc4 origin/main
 cargo llvm-cov --manifest-path crypto-profile-awslc3/Cargo.toml --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
-ci/quality.sh mutants crypto-profile-awslc3
+ci/quality.sh mutants-diff crypto-profile-awslc3 origin/main
 ```
 
-Per-change mutation checks can use `cargo mutants --in-diff <diff>`; the final gate runs both full workspaces. CI runs the full mutation set weekly and on demand (`gh workflow run ci.yml --ref main`), not on every push; run it on demand before a release. Source emission validates both module indices and the nested sealbox child. Inspect the shared files directly with the 4.x direct cfg; run the macro smoke check to verify regeneration and test sensitivity.
+Before a pull request, mutate only what the branch changed: `ci/quality.sh mutants-diff <backend> <base>` runs `cargo mutants --in-diff` over `git diff <base>...HEAD` on that backend (the 4.x run maps the shared body to its direct-mode path), and must report 0 missed and 0 timeouts on both backends. It fails if the branch changed Rust source the backend mutates but no mutant was found in it. The full workspaces (`ci/quality.sh mutants <backend>`) run in CI weekly and on demand (`gh workflow run ci.yml --ref main`), not on every push; run them on demand before a release. Source emission validates both module indices and the nested sealbox child. Inspect the shared files directly with the 4.x direct cfg; run the macro smoke check to verify regeneration and test sensitivity.
 
 `--all-features` matters: the conformance suite needs the backend's `test-support` feature and is skipped without it.
 
