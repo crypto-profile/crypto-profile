@@ -52,8 +52,7 @@ fn curve(k: KeyAgreementAlgorithm) -> Result<Curve, CryptoError> {
 
 const UNCOMPRESSED: u8 = 0x04;
 
-// Compressed, hybrid and SPKI encodings never reach the module, so both module lines see the same
-// inputs (4.x alone decodes hybrid points and explicit-parameter SPKIs).
+// RFC 5480 §2.2: the only peer-key form is the uncompressed point.
 fn parse_peer(k: KeyAgreementAlgorithm, peer: &[u8]) -> Result<ag::ParsedPublicKey, CryptoError> {
     let refused = CryptoError::KeyAgreementPeerKey { algorithm: k };
     let c = curve(k)?;
@@ -65,9 +64,8 @@ fn parse_peer(k: KeyAgreementAlgorithm, peer: &[u8]) -> Result<ag::ParsedPublicK
 }
 
 /// The point a SubjectPublicKeyInfo carries, for a caller that takes keys in that form: `der` must
-/// be the canonical named-curve SPKI header for `k`'s curve followed by a point that passes the
-/// same checks as a peer key. The module is never asked to parse the SPKI, because it accepts one
-/// followed by trailing bytes.
+/// be the canonical named-curve header for `k`'s curve (RFC 5280 §4.1, RFC 5480 §2) followed by a
+/// point that passes the same checks as a peer key.
 pub(crate) fn spki_point(k: KeyAgreementAlgorithm, der: &[u8]) -> Result<&[u8], CryptoError> {
     let point = der
         .strip_prefix(curve(k)?.spki_header)
@@ -161,21 +159,16 @@ fn private_key_info<'a>(e: &EcKey, der: &'a [u8]) -> Option<Option<&'a [u8]>> {
     ec_private_key(e, body, false)
 }
 
-// RFC 5958 §2 Attributes, IMPLICIT: Attribute ::= SEQUENCE { type OBJECT IDENTIFIER, values SET }.
-fn are_attributes(mut der: &[u8]) -> bool {
-    for _ in 0..=der.len() {
-        let Some((0x30, attribute, rest)) = split_tlv(der) else {
-            return der.is_empty();
-        };
+// RFC 5958 §2 Attributes, IMPLICIT: Attribute ::= SEQUENCE { type OBJECT IDENTIFIER, values SET },
+// a SET OF Attribute whose attrValues is a SET OF ANY.
+fn are_attributes(der: &[u8]) -> bool {
+    set_of(der, |tag, attribute| {
         let Some((0x06, [_, ..], values)) = split_tlv(attribute) else {
             return false;
         };
-        if !matches!(split_tlv(values), Some((0x31, _, []))) {
-            return false;
-        }
-        der = rest;
-    }
-    false
+        tag == 0x30
+            && matches!(split_tlv(values), Some((0x31, set, [])) if set_of(set, |_, _| true))
+    })
 }
 
 // RFC 5915 §3 (EXPLICIT TAGS). §3 requires parameters; inside a PrivateKeyInfo, §1 a) puts the
@@ -204,6 +197,50 @@ fn ec_private_key<'a>(e: &EcKey, body: &'a [u8], bare: bool) -> Option<Option<&'
         }
         Some(_) => None,
     }
+}
+
+// RFC 5915 §3 for the NIST curves, RFC 7748 §5 for X25519: the private key has the field's length.
+fn checked_scalar(k: KeyAgreementAlgorithm, d: &[u8]) -> Result<(), CryptoError> {
+    let len = ec_key(k)
+        .map(|e| e.scalar_len)
+        .or((k == KeyAgreementAlgorithm::X25519).then_some(32));
+    if Some(d.len()) == len {
+        Ok(())
+    } else {
+        Err(CryptoError::KeyAgreementPrivateKey { algorithm: k })
+    }
+}
+
+// X.690 §11.6: `next` does not precede `prev`, compared as octet strings with the shorter padded
+// at its end with 0-octets.
+fn not_after(prev: &[u8], next: &[u8]) -> bool {
+    let padded = |s: &[u8]| {
+        (0..prev.len().max(next.len()))
+            .map(|i| s.get(i).copied().unwrap_or(0))
+            .collect::<Vec<_>>()
+    };
+    padded(prev) <= padded(next)
+}
+
+// The elements of a SET OF in `der`, each passing `element(tag, value)`, in ascending order of their
+// encodings (X.690 §11.6).
+fn set_of(mut der: &[u8], element: impl Fn(u8, &[u8]) -> bool) -> bool {
+    let mut previous: Option<&[u8]> = None;
+    for _ in 0..=der.len() {
+        if der.is_empty() {
+            return true;
+        }
+        let Some((tag, value, rest)) = split_tlv(der) else {
+            return false;
+        };
+        let whole = &der[..der.len() - rest.len()];
+        if !element(tag, value) || !previous.is_none_or(|p| not_after(p, whole)) {
+            return false;
+        }
+        previous = Some(whole);
+        der = rest;
+    }
+    false
 }
 
 fn optional(tag: u8, der: &[u8]) -> (Option<&[u8]>, &[u8]) {
@@ -406,6 +443,7 @@ impl StaticKey {
     ) -> Result<Self, CryptoError> {
         a.admit_key_agreement(algorithm)?;
         let c = curve(algorithm)?;
+        checked_scalar(algorithm, d)?;
         let key = ag::PrivateKey::from_private_key(c.agreement, d)
             .map_err(|_| CryptoError::KeyAgreementPrivateKey { algorithm })?;
         Self::new(a, algorithm, key)
@@ -844,7 +882,7 @@ mod tests {
             for attributes in [
                 Vec::new(),
                 local_key_id(),
-                [local_key_id(), friendly_name()].concat(),
+                [friendly_name(), local_key_id()].concat(),
             ] {
                 assert_taken(
                     &a,
@@ -1201,6 +1239,113 @@ mod tests {
             StaticKey::from_pkcs8_der(&a, k, &der).map(|_| ()),
             Err(CryptoError::KeyAgreementPrivateKey { algorithm: k })
         );
+    }
+
+    #[test]
+    fn a_raw_private_key_has_exactly_its_curves_length() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        for (k, n) in [
+            (KeyAgreementAlgorithm::EcdhP256, 32),
+            (KeyAgreementAlgorithm::EcdhP384, 48),
+            (KeyAgreementAlgorithm::EcdhP521, 66),
+            (KeyAgreementAlgorithm::X25519, 32),
+        ] {
+            let refused = Err(CryptoError::KeyAgreementPrivateKey { algorithm: k });
+            assert_eq!(checked_scalar(k, &vec![0x11; n]), Ok(()), "{k:?}");
+            for m in [0, 1, n - 1, n + 1, 2 * n] {
+                assert_eq!(checked_scalar(k, &vec![0x11; m]), refused, "{k:?} {m}");
+                if k != KeyAgreementAlgorithm::X25519 {
+                    let end_to_end = StaticKey::from_scalar(&a, k, &vec![0x11; m]);
+                    assert_eq!(end_to_end.map(|_| ()), refused, "{k:?} {m}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn set_of_elements_are_compared_as_octet_strings_padded_with_zeros() {
+        assert!(not_after(&[1, 2], &[1, 3]));
+        assert!(not_after(&[1, 2], &[1, 2]));
+        assert!(not_after(&[1, 2], &[1, 2, 1]));
+        assert!(not_after(&[1, 2], &[1, 2, 0]));
+        assert!(not_after(&[1, 2, 0], &[1, 2]));
+        assert!(!not_after(&[1, 3], &[1, 2]));
+        assert!(!not_after(&[1, 2, 1], &[1, 2]));
+        assert!(!not_after(&[1, 3], &[1, 2, 9]));
+        assert!(!not_after(&[2], &[1, 9, 9]));
+        assert!(not_after(&[1, 9, 9], &[2]));
+    }
+
+    fn attr(last: u8, values: &[u8]) -> Vec<u8> {
+        attribute(
+            &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, last],
+            values,
+        )
+    }
+
+    #[test]
+    fn the_set_ofs_of_a_private_key_info_are_in_ascending_der_order() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        let octets = |b: &[u8]| tlv(0x04, b);
+        for k in EC_CURVES {
+            let p = Parts::of(StaticKey::generate(&a, k).unwrap());
+            let info = |content: &[u8]| p.info(&p.ec_key(), &[tlv(0xa0, content)]);
+            let (x, y, z) = (attr(0x14, &[]), attr(0x15, &[]), attr(0x16, &[]));
+            let ordered: [(&str, Vec<u8>); 5] = [
+                ("two attributes", [x.clone(), y.clone()].concat()),
+                (
+                    "three attributes",
+                    [x.clone(), y.clone(), z.clone()].concat(),
+                ),
+                ("equal attributes", [x.clone(), x.clone()].concat()),
+                (
+                    "values by content",
+                    attr(0x14, &[octets(&[1]), octets(&[2])].concat()),
+                ),
+                (
+                    "values by length, then tag",
+                    attr(
+                        0x14,
+                        &[
+                            tlv(0x02, &[5]),
+                            octets(&[0xff]),
+                            octets(&[0, 0]),
+                            tlv(0x0c, &[0, 0]),
+                        ]
+                        .concat(),
+                    ),
+                ),
+            ];
+            for (_, content) in &ordered {
+                assert_taken(&a, k, &info(content), p.key.public_key());
+            }
+            let unordered: [(&str, Vec<u8>); 6] = [
+                ("two attributes", [y.clone(), x.clone()].concat()),
+                (
+                    "the last two of three",
+                    [x.clone(), z.clone(), y.clone()].concat(),
+                ),
+                (
+                    "the first two of three",
+                    [y.clone(), x.clone(), z.clone()].concat(),
+                ),
+                (
+                    "two values",
+                    attr(0x14, &[octets(&[2]), octets(&[1])].concat()),
+                ),
+                (
+                    "two values by length",
+                    attr(0x14, &[octets(&[0, 0]), octets(&[0xff])].concat()),
+                ),
+                (
+                    "the last two values of three",
+                    attr(0x14, &[octets(&[1]), octets(&[3]), octets(&[2])].concat()),
+                ),
+            ];
+            for (why, content) in &unordered {
+                assert_refused(&a, k, why, &info(content));
+            }
+        }
     }
 
     #[test]
