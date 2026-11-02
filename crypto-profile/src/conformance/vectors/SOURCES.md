@@ -42,6 +42,10 @@ Each file was fetched from `https://raw.githubusercontent.com/C2SP/wycheproof/d1
 |---|---|
 | `hkdf_rfc5869.json` | `1121ba5b84fefa7956a1ebdcbcb91b14af108b5482d328a0daed46011fa4a511` |
 
+## RFC 9180
+
+The constants in `conformance/mod.rs` `vectors::rfc9180` transcribe the base-mode `kem_id`, `skEm`, `enc`, `skRm`, `pkRm` and `shared_secret` of RFC 9180 Appendix A.1.1, A.3.1 and A.6.1, every DHKEM the appendix carries (it has no DHKEM(P-384, HKDF-SHA384) case), from `https://www.rfc-editor.org/rfc/rfc9180.txt` (SHA-256 `f45a8b7c30231b26d668b1e8168074e5ab514b174d656b67e859895117f1f8f6`). Licence: IETF Trust; the test vectors are code components under the Revised BSD licence (BCP 78).
+
 ## NIST CAVP
 
 The SHA byte-oriented test vectors, `https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/shs/shabytetestvectors.zip` (linked from `https://csrc.nist.gov/projects/cryptographic-algorithm-validation-program/secure-hashing`; zip SHA-256 `929ef80b7b3418aca026643f6f248815913b60e01741a44bba9e118067f4c9b8`), extracted from `shabytetestvectors/`. Licence: public domain (US Government work). The files keep their CRLF line endings.

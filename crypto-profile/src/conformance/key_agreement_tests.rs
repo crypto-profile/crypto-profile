@@ -6,7 +6,7 @@ macro_rules! __conformance_key_agreement_tests {
         use $b::KeyAgreementAlgorithm as E;
         use $b::*;
         use $crate::conformance::golden::KEY_AGREEMENT_GOLDEN;
-        use $crate::conformance::{__fixed_len_scalar, __hex};
+        use $crate::conformance::{__fixed_len_scalar, __hex, vectors};
 
         const ORDER_P256: &str = "ffffffff00000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551";
         const ORDER_P384: &str = "ffffffffffffffffffffffffffffffffffffffffffffffffc7634d81f4372ddf581a0db248b0a77aecec196accc52973";
@@ -199,6 +199,28 @@ macro_rules! __conformance_key_agreement_tests {
                 })
             );
             assert_eq!(refusals(&hkdf(k384, b"x"), &peer, 32), Ok(32));
+            let dhkem = |algorithm| kdf::Spec::Dhkem { algorithm };
+            for d in [KdfAlgorithm::HkdfSha256, KdfAlgorithm::OneStepSha384] {
+                assert_eq!(
+                    refusals(&dhkem(d), &compressed, 0),
+                    Err(CryptoError::KdfSpecMismatch { algorithm: d })
+                );
+            }
+            assert_eq!(
+                refusals(&dhkem(k384), &compressed, 47),
+                Err(CryptoError::KdfOutputLength {
+                    algorithm: k384,
+                    bytes: 47,
+                    max_bytes: 48,
+                })
+            );
+            assert_eq!(
+                refusals(&dhkem(k384), &compressed, 48),
+                Err(CryptoError::KeyAgreementPeerKey {
+                    algorithm: E::EcdhP384
+                })
+            );
+            assert_eq!(refusals(&dhkem(k384), &peer, 48), Ok(48));
             let bsi = admit(Profile::Bsi, Options::default());
             let not_admitted = Err(CryptoError::NotInProfile {
                 profile: Profile::Bsi,
@@ -289,6 +311,91 @@ macro_rules! __conformance_key_agreement_tests {
             assert_eq!(e.algorithm(), E::EcdhP256);
             assert_eq!(e.public_key().len(), 65);
             assert_eq!(e.public_key()[0], 0x04);
+        }
+
+        fn dhkem_suite(kem_id: u16) -> (E, KdfAlgorithm) {
+            match kem_id {
+                0x0010 => (E::EcdhP256, KdfAlgorithm::HkdfSha256),
+                0x0011 => (E::EcdhP384, KdfAlgorithm::HkdfSha384),
+                0x0012 => (E::EcdhP521, KdfAlgorithm::HkdfSha512),
+                0x0020 => (E::X25519, KdfAlgorithm::HkdfSha256),
+                other => panic!("kem_id {other:#06x}: not in RFC 9180 Table 2"),
+            }
+        }
+
+        #[test]
+        fn conformance_rfc9180_dhkem_base_mode() {
+            use vectors::rfc9180::CASES;
+            let a = unrestricted();
+            assert_eq!(
+                CASES.iter().map(|c| c.kem_id).collect::<Vec<_>>(),
+                [0x0020, 0x0010, 0x0012]
+            );
+            for c in CASES {
+                let (k, algorithm) = dhkem_suite(c.kem_id);
+                let spec = kdf::Spec::Dhkem { algorithm };
+                let nsecret = algorithm.hash().output_len();
+                let recipient = ecdh::StaticKey::from_scalar(&a, k, &unhex(c.sk_rm_hex)).unwrap();
+                assert_eq!(recipient.public_key(), unhex(c.pk_rm_hex), "{}", c.section);
+                assert_eq!(
+                    bytes(recipient.agree(&unhex(c.enc_hex), &spec, nsecret)),
+                    Ok(unhex(c.shared_secret_hex)),
+                    "{}",
+                    c.section
+                );
+                let sender = ecdh::EphemeralKey::generate(&a, k).unwrap();
+                let enc = sender.public_key().to_vec();
+                let sent = bytes(sender.agree(recipient.public_key(), &spec, nsecret));
+                assert_eq!(sent.as_ref().map(Vec::len), Ok(nsecret), "{}", c.section);
+                assert_eq!(sent, bytes(recipient.agree(&enc, &spec, nsecret)), "{}", c.section);
+                assert_eq!(
+                    bytes(recipient.agree(&unhex(c.enc_hex), &spec, nsecret + 1)),
+                    Err(CryptoError::KdfOutputLength {
+                        algorithm,
+                        bytes: nsecret + 1,
+                        max_bytes: nsecret,
+                    }),
+                    "{}",
+                    c.section
+                );
+                assert_eq!(
+                    bytes(kdf::derive(&a, &unhex(c.shared_secret_hex), &spec, nsecret)),
+                    Err(CryptoError::KdfSpecMismatch { algorithm }),
+                    "{}",
+                    c.section
+                );
+            }
+        }
+
+        #[test]
+        fn conformance_dhkem_takes_only_the_rfc_9180_pairings() {
+            let a = unrestricted();
+            for &k in KeyAgreementAlgorithm::ALL {
+                let key = ecdh::StaticKey::from_scalar(&a, k, &one(k)).unwrap();
+                let peer = ecdh::EphemeralKey::generate(&a, k).unwrap();
+                for &d in KdfAlgorithm::ALL {
+                    let paired = matches!(
+                        (k, d),
+                        (E::EcdhP256, KdfAlgorithm::HkdfSha256)
+                            | (E::EcdhP384, KdfAlgorithm::HkdfSha384)
+                            | (E::EcdhP521, KdfAlgorithm::HkdfSha512)
+                            | (E::X25519, KdfAlgorithm::HkdfSha256)
+                    );
+                    let nsecret = d.hash().output_len();
+                    let got = bytes(key.agree(
+                        peer.public_key(),
+                        &kdf::Spec::Dhkem { algorithm: d },
+                        nsecret,
+                    ))
+                    .map(|v| v.len());
+                    let want = if paired {
+                        Ok(nsecret)
+                    } else {
+                        Err(CryptoError::KdfSpecMismatch { algorithm: d })
+                    };
+                    assert_eq!(got, want, "{k:?} {d:?}");
+                }
+            }
         }
     };
 }

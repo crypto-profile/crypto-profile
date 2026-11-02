@@ -242,6 +242,16 @@ impl Admitted {
         }
     }
 
+    /// `self` without `algorithm`, as a profile that does not list it.
+    #[cfg(test)]
+    pub(crate) fn without(mut self, algorithm: Algorithm) -> Self {
+        self.macs.retain(|m| Algorithm::Mac(*m) != algorithm);
+        self.kdfs.retain(|k| Algorithm::Kdf(*k) != algorithm);
+        self.key_agreements
+            .retain(|k| Algorithm::KeyAgreement(*k) != algorithm);
+        self
+    }
+
     fn admit_one(&self, admitted: bool, algorithm: Algorithm) -> Result<(), CryptoError> {
         if admitted {
             Ok(())

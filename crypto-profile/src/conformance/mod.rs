@@ -525,6 +525,61 @@ pub mod vectors {
     /// NIST CAVP SHA-512 short messages.
     pub const SHA512_SHORT: &str = include_str!("vectors/SHA512ShortMsg.rsp");
 
+    /// RFC 9180 Appendix A, base mode: the DHKEM key pairs and shared secret of every suite the
+    /// appendix carries (A.1.1, A.3.1, A.6.1).
+    pub mod rfc9180 {
+        /// One DHKEM base-mode case.
+        #[derive(Debug, Clone, Copy)]
+        pub struct Case {
+            /// The section it comes from.
+            pub section: &'static str,
+            /// The RFC 9180 §7.1 Table 2 `kem_id`.
+            pub kem_id: u16,
+            /// `skEm`, the sender's ephemeral private key.
+            pub sk_em_hex: &'static str,
+            /// `enc`, the sender's ephemeral public key (`pkEm`).
+            pub enc_hex: &'static str,
+            /// `skRm`, the recipient's private key.
+            pub sk_rm_hex: &'static str,
+            /// `pkRm`, the recipient's public key.
+            pub pk_rm_hex: &'static str,
+            /// `shared_secret`, the KEM's output.
+            pub shared_secret_hex: &'static str,
+        }
+
+        /// A.1.1 (DHKEM(X25519, HKDF-SHA256)), A.3.1 (DHKEM(P-256, HKDF-SHA256)) and A.6.1
+        /// (DHKEM(P-521, HKDF-SHA512)). The appendix carries no DHKEM(P-384, HKDF-SHA384) case.
+        pub const CASES: &[Case] = &[
+            Case {
+                section: "A.1.1",
+                kem_id: 0x0020,
+                sk_em_hex: "52c4a758a802cd8b936eceea314432798d5baf2d7e9235dc084ab1b9cfa2f736",
+                enc_hex: "37fda3567bdbd628e88668c3c8d7e97d1d1253b6d4ea6d44c150f741f1bf4431",
+                sk_rm_hex: "4612c550263fc8ad58375df3f557aac531d26850903e55a9f23f21d8534e8ac8",
+                pk_rm_hex: "3948cfe0ad1ddb695d780e59077195da6c56506b027329794ab02bca80815c4d",
+                shared_secret_hex: "fe0e18c9f024ce43799ae393c7e8fe8fce9d218875e8227b0187c04e7d2ea1fc",
+            },
+            Case {
+                section: "A.3.1",
+                kem_id: 0x0010,
+                sk_em_hex: "4995788ef4b9d6132b249ce59a77281493eb39af373d236a1fe415cb0c2d7beb",
+                enc_hex: "04a92719c6195d5085104f469a8b9814d5838ff72b60501e2c4466e5e67b325ac98536d7b61a1af4b78e5b7f951c0900be863c403ce65c9bfcb9382657222d18c4",
+                sk_rm_hex: "f3ce7fdae57e1a310d87f1ebbde6f328be0a99cdbcadf4d6589cf29de4b8ffd2",
+                pk_rm_hex: "04fe8c19ce0905191ebc298a9245792531f26f0cece2460639e8bc39cb7f706a826a779b4cf969b8a0e539c7f62fb3d30ad6aa8f80e30f1d128aafd68a2ce72ea0",
+                shared_secret_hex: "c0d26aeab536609a572b07695d933b589dcf363ff9d93c93adea537aeabb8cb8",
+            },
+            Case {
+                section: "A.6.1",
+                kem_id: 0x0012,
+                sk_em_hex: "014784c692da35df6ecde98ee43ac425dbdd0969c0c72b42f2e708ab9d535415a8569bdacfcc0a114c85b8e3f26acf4d68115f8c91a66178cdbd03b7bcc5291e374b",
+                enc_hex: "040138b385ca16bb0d5fa0c0665fbbd7e69e3ee29f63991d3e9b5fa740aab8900aaeed46ed73a49055758425a0ce36507c54b29cc5b85a5cee6bae0cf1c21f2731ece2013dc3fb7c8d21654bb161b463962ca19e8c654ff24c94dd2898de12051f1ed0692237fb02b2f8d1dc1c73e9b366b529eb436e98a996ee522aef863dd5739d2f29b0",
+                sk_rm_hex: "01462680369ae375e4b3791070a7458ed527842f6a98a79ff5e0d4cbde83c27196a3916956655523a6a2556a7af62c5cadabe2ef9da3760bb21e005202f7b2462847",
+                pk_rm_hex: "0401b45498c1714e2dce167d3caf162e45e0642afc7ed435df7902ccae0e84ba0f7d373f646b7738bbbdca11ed91bdeae3cdcba3301f2457be452f271fa6837580e661012af49583a62e48d44bed350c7118c0d8dc861c238c72a2bda17f64704f464b57338e7f40b60959480c0e58e6559b190d81663ed816e523b6b6a418f66d2451ec64",
+                shared_secret_hex: "776ab421302f6eff7d7cb5cb1adaea0cd50872c71c2d63c30c4f1d5e43653336fef33b103c67e7a98add2d3b66e2fda95b5b2a667aa9dac7e59cc1d46d30e818",
+            },
+        ];
+    }
+
     /// The sealed-box known-answer vectors, produced by an independent implementation.
     pub mod sealbox {
         /// The domain the known-answer blob was sealed under.
@@ -1158,6 +1213,11 @@ macro_rules! conformance_tests {
                             derive(&other_kind(k, b"matrix")),
                             Err(CryptoError::KdfSpecMismatch { algorithm: k }),
                             "{p} {o} {k:?}"
+                        );
+                        assert_eq!(
+                            derive(&kdf::Spec::Dhkem { algorithm: k }),
+                            Err(CryptoError::KdfSpecMismatch { algorithm: k }),
+                            "{p} {o} {k:?} DHKEM"
                         );
                     }
                 }
