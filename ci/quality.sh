@@ -44,10 +44,27 @@ else
   cd "$work/src"
   if [ "$backend" = crypto-profile-awslc3 ]; then cd crypto-profile-awslc3; fi
   if [ "$kind" = mutants-diff ]; then
+    cargo mutants --list-files --workspace > "$work/mutated.files"
+    sed -nE 's#^\+\+\+ b/(.*)$#\1#p' "$work/branch.diff" > "$work/changed.files"
+    overlap=0
+    while IFS= read -r changed; do
+      if grep -Fxq -- "$changed" "$work/mutated.files"; then overlap=1; continue; fi
+      # a changed path that names a mutated file by another spelling means the diff rewrite drifted
+      while IFS= read -r known; do
+        if [ "$(realpath -m --relative-to=. -- "$changed")" = "$(realpath -m --relative-to=. -- "$known")" ]; then
+          echo "the diff's paths do not match cargo-mutants' file names for $backend; the path mapping is broken" >&2
+          exit 1
+        fi
+      done < "$work/mutated.files"
+    done < "$work/changed.files"
+    if [ "$overlap" = 0 ]; then
+      echo "no mutated source changed for $backend since $base"
+      exit 0
+    fi
     listed="$(cargo mutants --list --workspace --in-diff "$work/branch.diff")"
     if [ -z "$listed" ]; then
-      echo "the branch changed Rust source for $backend but no mutant was discovered in it" >&2
-      exit 1
+      echo "the changed lines in $(paste -sd' ' "$work/changed.files") hold no mutant"
+      exit 0
     fi
     printf '%s\n' "$listed"
     cargo mutants --workspace --no-shuffle --in-place --in-diff "$work/branch.diff" --output "$work/mutants"
