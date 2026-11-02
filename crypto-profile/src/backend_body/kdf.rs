@@ -87,8 +87,9 @@ pub enum Spec<'a> {
     },
     /// The one-step KDF of SP 800-56C Rev. 2 §4.1 with a hash (option 1): `H(counter || secret ||
     /// fixed_info)` for each 32-bit big-endian counter from 1, truncated to the output length. The
-    /// RFC 7518 Concat KDF is this function. `fixed_info` is treated as non-secret and binds the key
-    /// to its use, as `info` does for HKDF; the caller encodes it (SP 800-56C Rev. 2 §4.2).
+    /// RFC 7518 Concat KDF is this function. `fixed_info` is §4.1's FixedInfo, context-specific
+    /// data the caller encodes; it binds the key to its use, as `info` does for HKDF. The crate
+    /// treats it as non-secret.
     OneStep {
         /// A one-step algorithm.
         algorithm: KdfAlgorithm,
