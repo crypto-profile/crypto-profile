@@ -119,7 +119,7 @@ When you add a value, take it from the registry or the standard, not from the co
 
 A backend is a crate named for its module line. It must:
 
-- expose the same module paths and signatures as `crypto-profile-awslc4` (`aead`, `csr`, `digest`, `fips`, `hmac`, `kdf`, `random`, `sealbox`, `signature`, `tls`) and re-export the core crate;
+- expose the same module paths and signatures as `crypto-profile-awslc4` (`aead`, `csr`, `digest`, `ecdh`, `fips`, `hmac`, `kdf`, `random`, `sealbox`, `signature`, `tls`) and re-export the core crate;
 - declare `pub const MODULE: Module`, with the linkage taken from the build, never assumed. If the build cannot report it, the build fails;
 - run the shared suite from its own tests:
 
@@ -142,7 +142,9 @@ The suite checks the backend against the known answers, walks every capability c
 - `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`, with `KeyPair` implementing `rcgen::SigningKey`;
 - `digest::digest`;
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
-- `sealbox::PrivateKey::from_pkcs8_der` and `sealbox::open`.
+- `admit`, `Admitted::macs`, `Admitted::kdfs` and `Admitted::key_agreements`, `hmac::Key`, `kdf::derive` and `kdf::Spec` (both variants), and `ecdh::EphemeralKey` and `ecdh::StaticKey` with `generate`, `from_pkcs8_der`, `from_scalar`, `algorithm`, `public_key` and `agree`;
+- `test_support::ecdh_shared_secret`, under the `test-support` feature;
+- `sealbox::PrivateKey::generate`, `sealbox::PrivateKey::from_pkcs8_der`, `sealbox::PrivateKey::recipient`, `sealbox::seal` and `sealbox::open`.
 
 A backend instantiates the provider with `crypto_profile::provider!(crate::provider_arms)`. Only `crypto-profile-awslc4` also carries the direct-mode `#[path]` module (`crypto-profile-awslc4/src/lib.rs`), so clippy, coverage and cargo-mutants see each provider file once, through that backend ([decision 0005](docs/decisions/0005-provider-source.md)); another backend instantiates the macro only, and its own code, `provider_arms` included, is ordinary code, linted, measured and mutated like the rest of the backend. It supplies a `provider_arms` module with three items: `pub(crate) fn load_pqdsa(pkcs8: &rustls::pki_types::PrivatePkcs8KeyDer<'_>) -> Option<std::sync::Arc<dyn rustls::sign::SigningKey>>`, which loads the ML-DSA keys the backend's module signs with (ML-DSA-44, -65 and -87 on 4.x) and returns `None` on a backend that has none; `pub(crate) static PQDSA_ALL: &[&dyn rustls::pki_types::SignatureVerificationAlgorithm]`, the ML-DSA certificate-chain verifiers (ML-DSA-44, -65 and -87 on 4.x); and `pub(crate) static PQDSA_MAPPING: &[(rustls::SignatureScheme, &[&dyn rustls::pki_types::SignatureVerificationAlgorithm])]`, the ML-DSA handshake schemes (ML-DSA-87 on 4.x). A backend without ML-DSA leaves both statics empty. A new provider file is listed in `crypto-profile/src/provider/mod.rs`, which is the only module list ([decision 0005](docs/decisions/0005-provider-source.md)).
 
