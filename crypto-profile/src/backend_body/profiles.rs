@@ -1153,11 +1153,16 @@ mod admitted_tests {
         );
         let approval = crypto_profile::capability(crate::MODULE, p384).approval;
         match (crate::MODULE.line, crate::MODULE.linkage) {
-            (crate::ModuleLine::AwsLcFips3, _) => {
+            (crate::ModuleLine::AwsLcFips3, crate::Linkage::Static | crate::Linkage::Dynamic) => {
                 assert!(matches!(approval, Approval::NotApproved { .. }))
             }
-            (_, crate::Linkage::Static) => assert_eq!(approval, Approval::Unverified),
-            _ => assert!(matches!(approval, Approval::AlgorithmTested { .. })),
+            (crate::ModuleLine::AwsLcFips4, crate::Linkage::Static) => {
+                assert_eq!(approval, Approval::Unverified)
+            }
+            (crate::ModuleLine::AwsLcFips4, crate::Linkage::Dynamic) => {
+                assert!(matches!(approval, Approval::AlgorithmTested { .. }))
+            }
+            other => panic!("{other:?}: no expected approval"),
         }
     }
 }

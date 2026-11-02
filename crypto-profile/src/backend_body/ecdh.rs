@@ -383,7 +383,8 @@ mod tests {
             let (k, d) = match c.kem_id {
                 0x0010 => (KeyAgreementAlgorithm::EcdhP256, KdfAlgorithm::HkdfSha256),
                 0x0012 => (KeyAgreementAlgorithm::EcdhP521, KdfAlgorithm::HkdfSha512),
-                _ => (KeyAgreementAlgorithm::X25519, KdfAlgorithm::HkdfSha256),
+                0x0020 => (KeyAgreementAlgorithm::X25519, KdfAlgorithm::HkdfSha256),
+                other => panic!("kem_id {other:#06x}: not in RFC 9180 Table 2"),
             };
             let sk_em =
                 StaticKey::from_scalar(&a, k, &__hex::decode(c.sk_em_hex).unwrap()).unwrap();

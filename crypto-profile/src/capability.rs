@@ -522,7 +522,7 @@ mod tests {
                         let want = match (m.line, m.linkage) {
                             (ModuleLine::AwsLcFips3, Linkage::Static) => "#5314",
                             (ModuleLine::AwsLcFips3, Linkage::Dynamic) => "#5298",
-                            (ModuleLine::AwsLcFips4, _) => {
+                            (ModuleLine::AwsLcFips4, Linkage::Static | Linkage::Dynamic) => {
                                 assert!(a == X25519 || a == KX_X25519, "{m:?} {a:?}");
                                 "FIPS 140-3 IG C.K Resolution 5"
                             }

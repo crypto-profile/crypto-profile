@@ -1340,11 +1340,12 @@ macro_rules! conformance_tests {
                     algorithm: k,
                     fixed_info: info,
                 },
-                _ => kdf::Spec::Hkdf {
+                kdf::Spec::OneStep { .. } => kdf::Spec::Hkdf {
                     algorithm: k,
                     salt: None,
                     info,
                 },
+                other => panic!("{other:?}: no other kind"),
             }
         }
 
