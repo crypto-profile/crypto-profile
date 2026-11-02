@@ -46,6 +46,30 @@ pub use rustls;
 #[allow(dead_code)]
 mod admitted_is_read_only {}
 
+/// An `ecdh::EphemeralKey` agrees once: `agree` consumes it.
+///
+/// ```
+/// use crypto_profile_awslc3::{KdfAlgorithm, KeyAgreementAlgorithm, Options, Profile, admit, ecdh, kdf};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let peer = ecdh::EphemeralKey::generate(&a, KeyAgreementAlgorithm::EcdhP384).unwrap();
+/// let spec = kdf::Spec::Hkdf { algorithm: KdfAlgorithm::HkdfSha384, salt: None, info: b"doc" };
+/// let mine = ecdh::EphemeralKey::generate(&a, KeyAgreementAlgorithm::EcdhP384).unwrap();
+/// let key = mine.agree(peer.public_key(), &spec, 32).unwrap();
+/// assert_eq!(key.as_bytes().len(), 32);
+/// ```
+///
+/// ```compile_fail,E0382
+/// use crypto_profile_awslc3::{KdfAlgorithm, KeyAgreementAlgorithm, Options, Profile, admit, ecdh, kdf};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let peer = ecdh::EphemeralKey::generate(&a, KeyAgreementAlgorithm::EcdhP384).unwrap();
+/// let spec = kdf::Spec::Hkdf { algorithm: KdfAlgorithm::HkdfSha384, salt: None, info: b"doc" };
+/// let mine = ecdh::EphemeralKey::generate(&a, KeyAgreementAlgorithm::EcdhP384).unwrap();
+/// let key = mine.agree(peer.public_key(), &spec, 32).unwrap();
+/// let again = mine.agree(peer.public_key(), &spec, 32).unwrap();
+/// ```
+#[allow(dead_code)]
+mod ephemeral_keys_agree_once {}
+
 crypto_profile::provider!(crate::provider_arms);
 mod provider_arms;
 
@@ -56,7 +80,7 @@ pub use backend_body::test_support;
 pub use backend_body::{
     Admitted, Resolved, admit, assert_admitted_approved, assert_module_approves, resolve,
 };
-pub use backend_body::{aead, csr, digest, fips, hmac, kdf, random, sealbox, signature, tls};
+pub use backend_body::{aead, csr, digest, ecdh, fips, hmac, kdf, random, sealbox, signature, tls};
 
 /// The AWS-LC FIPS module (line and linkage) this build links. Its certificate status is
 /// [`fips::certificate()`]; for 3.x the certified release is 3.1.0.

@@ -2,8 +2,8 @@
 use crate::signature::KeyPair;
 use crate::tls::{Policy, load_private_key};
 use crate::{
-    Algorithm, Approval, CryptoError, Family, KdfAlgorithm, MacAlgorithm, Options, Profile,
-    SignatureAlgorithm, TlsError,
+    Algorithm, Approval, CryptoError, Family, KdfAlgorithm, KeyAgreementAlgorithm, MacAlgorithm,
+    Options, Profile, SignatureAlgorithm, TlsError,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
@@ -152,7 +152,8 @@ pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
 }
 
 /// A profile's non-TLS families on this backend's module, under `options`. Independent of
-/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs and KDFs.
+/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs, KDFs and
+/// key agreement.
 /// Built only by [`admit`], and read-only, so a constructor that takes it checks the profile's
 /// own admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -161,6 +162,7 @@ pub struct Admitted {
     options: Options,
     macs: Vec<MacAlgorithm>,
     kdfs: Vec<KdfAlgorithm>,
+    key_agreements: Vec<KeyAgreementAlgorithm>,
     excluded: Vec<Algorithm>,
 }
 
@@ -173,6 +175,7 @@ pub fn admit(profile: Profile, options: Options) -> Admitted {
         options,
         macs: s.macs,
         kdfs: s.kdfs,
+        key_agreements: s.key_agreements,
         excluded: s.excluded,
     }
 }
@@ -198,6 +201,11 @@ impl Admitted {
         &self.kdfs
     }
 
+    /// The key-agreement curves the profile admits, in preference order.
+    pub fn key_agreements(&self) -> &[KeyAgreementAlgorithm] {
+        &self.key_agreements
+    }
+
     /// Entries unavailable on the module line, in family and preference order.
     pub fn excluded(&self) -> &[Algorithm] {
         &self.excluded
@@ -215,12 +223,21 @@ impl Admitted {
         self.admit_one(self.kdfs.contains(&k), Algorithm::Kdf(k))
     }
 
+    /// Refuses a key-agreement curve the profile does not admit, and one the module line lacks
+    /// with `CryptoError::Unavailable`.
+    pub fn admit_key_agreement(&self, k: KeyAgreementAlgorithm) -> Result<(), CryptoError> {
+        self.admit_one(self.key_agreements.contains(&k), Algorithm::KeyAgreement(k))
+    }
+
     fn cells(&self, family: Family) -> Result<Vec<Algorithm>, CryptoError> {
         match family {
             Family::Mac => Ok(self.macs.iter().map(|m| Algorithm::Mac(*m)).collect()),
             Family::Kdf => Ok(self.kdfs.iter().map(|k| Algorithm::Kdf(*k)).collect()),
-            // No key agreement is admitted until #33's ECDH change.
-            Family::KeyAgreement => Ok(Vec::new()),
+            Family::KeyAgreement => Ok(self
+                .key_agreements
+                .iter()
+                .map(|k| Algorithm::KeyAgreement(*k))
+                .collect()),
             _ => Err(CryptoError::FamilyNotAdmitted(family)),
         }
     }
@@ -975,11 +992,18 @@ mod admitted_tests {
                 "{p}"
             );
             assert_eq!(assert_admitted_approved(&a, &[]), Ok(()), "{p}");
+            let want = match a.key_agreements.first() {
+                None => Ok(()),
+                Some(k) => Err(CryptoError::NotApproved {
+                    algorithm: Algorithm::KeyAgreement(*k),
+                    approval: Approval::Unverified,
+                }),
+            };
             assert_eq!(
                 admitted_approved_given(true, &a, &[Family::KeyAgreement], |_| {
                     Approval::Unverified
                 }),
-                Ok(()),
+                want,
                 "{p}"
             );
             assert_eq!(
@@ -991,7 +1015,8 @@ mod admitted_tests {
         let empty = Admitted {
             macs: vec![],
             kdfs: vec![],
-            ..admit(Profile::Cnsa2, Options::default())
+            key_agreements: vec![],
+            ..admit(Profile::Unrestricted, Options::default())
         };
         assert_eq!(
             admitted_approved_given(true, &empty, &NON_TLS, |_| Approval::Unverified),
@@ -1044,6 +1069,7 @@ mod admitted_tests {
 
     #[test]
     fn admitted_approval_follows_this_modules_cells() {
+        let three_x = crate::MODULE.line == crate::ModuleLine::AwsLcFips3;
         for &p in Profile::ALL {
             let a = admit(p, Options::default());
             for (families, first) in [
@@ -1059,10 +1085,17 @@ mod admitted_tests {
                     &[Family::Mac, Family::Kdf][..],
                     a.macs.first().map(|m| Algorithm::Mac(*m)),
                 ),
+                (
+                    &[Family::KeyAgreement][..],
+                    a.key_agreements
+                        .first()
+                        .map(|k| Algorithm::KeyAgreement(*k)),
+                ),
             ] {
+                let key_agreement = families == [Family::KeyAgreement];
                 let want = if p == Profile::Unrestricted && families.contains(&Family::Kdf) {
                     Err(CryptoError::KdfInfoMayBeEmpty { profile: p })
-                } else if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                } else if (three_x && !key_agreement) || first.is_none() {
                     Ok(())
                 } else {
                     let first = first.unwrap_or_else(|| panic!("{p}: nothing admitted"));
@@ -1078,15 +1111,43 @@ mod admitted_tests {
                 );
             }
             assert_eq!(
-                assert_admitted_approved(&a, &[Family::KeyAgreement]),
-                Ok(()),
-                "{p}"
-            );
-            assert_eq!(
                 assert_admitted_approved(&a, &[Family::Version]),
                 Err(CryptoError::FamilyNotAdmitted(Family::Version)),
                 "{p}"
             );
+        }
+        let fips = admit(Profile::Fips1403, Options::default());
+        let p384 = Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384);
+        let refused = Err(CryptoError::NotApproved {
+            algorithm: p384,
+            approval: crypto_profile::capability(crate::MODULE, p384).approval,
+        });
+        assert_eq!(
+            assert_admitted_approved(&fips, &[Family::Mac, Family::Kdf, Family::KeyAgreement]),
+            if three_x {
+                refused
+            } else {
+                Err(CryptoError::NotApproved {
+                    algorithm: Algorithm::Mac(MacAlgorithm::HmacSha512),
+                    approval: crypto_profile::capability(
+                        crate::MODULE,
+                        Algorithm::Mac(MacAlgorithm::HmacSha512),
+                    )
+                    .approval,
+                })
+            }
+        );
+        assert_eq!(
+            assert_admitted_approved(&fips, &[Family::KeyAgreement]),
+            refused
+        );
+        let approval = crypto_profile::capability(crate::MODULE, p384).approval;
+        match (crate::MODULE.line, crate::MODULE.linkage) {
+            (crate::ModuleLine::AwsLcFips3, _) => {
+                assert!(matches!(approval, Approval::NotApproved { .. }))
+            }
+            (_, crate::Linkage::Static) => assert_eq!(approval, Approval::Unverified),
+            _ => assert!(matches!(approval, Approval::AlgorithmTested { .. })),
         }
     }
 }

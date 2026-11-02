@@ -3,8 +3,8 @@
 //! with the option) specify the refusal `resolve` gives; their lists are never compared with a
 //! resolved profile.
 use crate::{
-    Algorithm, CryptoError, Family, KdfAlgorithm, MacAlgorithm, Module, ModuleLine, Options,
-    Profile, SignatureAlgorithm, TlsSignatureScheme,
+    Algorithm, CryptoError, Family, KdfAlgorithm, KeyAgreementAlgorithm, MacAlgorithm, Module,
+    ModuleLine, Options, Profile, SignatureAlgorithm, TlsSignatureScheme,
 };
 
 /// One profile's lists, with or without the option.
@@ -361,6 +361,22 @@ pub const KDF_GOLDEN: &[(Profile, &[KdfAlgorithm], &[KdfAlgorithm])] = &{
     ]
 };
 
+/// Each profile's key-agreement curves, in preference order. `cnsa1_unclassified_nss` changes
+/// none of them, and every cell is available on every module line.
+#[doc(hidden)]
+pub const KEY_AGREEMENT_GOLDEN: &[(Profile, &[KeyAgreementAlgorithm])] = &{
+    use KeyAgreementAlgorithm::{EcdhP256 as P256, EcdhP384 as P384, EcdhP521 as P521, X25519};
+    [
+        (Profile::Unrestricted, &[P384, P521, P256, X25519]),
+        (Profile::Preferred, &[P384, P521, P256]),
+        (Profile::Cnsa2, &[]),
+        (Profile::Cnsa1, &[P384]),
+        (Profile::Bsi, &[]),
+        (Profile::Fips1403, &[P384, P521, P256]),
+        (Profile::Fips1402, &[P384, P521, P256]),
+    ]
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,6 +443,27 @@ mod tests {
             }
         }
     }
+    #[test]
+    fn select_admitted_agrees_with_the_key_agreement_golden_rows_on_every_module() {
+        assert_eq!(KEY_AGREEMENT_GOLDEN.len(), Profile::ALL.len());
+        for (i, p) in Profile::ALL.iter().copied().enumerate() {
+            assert_eq!(KEY_AGREEMENT_GOLDEN[i].0, p);
+        }
+        for m in [M3S, M3D, M4S, M4D] {
+            for &(p, want) in KEY_AGREEMENT_GOLDEN {
+                for unclassified in [false, true] {
+                    let o = Options {
+                        cnsa1_unclassified_nss: unclassified,
+                        ..Options::default()
+                    };
+                    let s = crate::profile::select_admitted(p, o, m);
+                    assert_eq!(s.key_agreements, want, "{m:?} {p} {unclassified}");
+                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                }
+            }
+        }
+    }
+
     const PQ: Options = Options {
         peer_certificates_match_profile: false,
         pq_key_exchange_required: true,

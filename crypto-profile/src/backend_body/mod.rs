@@ -5,6 +5,7 @@ mod backend {
 pub mod aead;
 pub mod csr;
 pub mod digest;
+pub mod ecdh;
 pub mod fips;
 pub mod hmac;
 pub mod kdf;

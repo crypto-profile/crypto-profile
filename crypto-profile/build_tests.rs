@@ -181,6 +181,15 @@ fn body_index_accepts_the_hmac_module() {
 }
 
 #[test]
+fn body_index_accepts_the_ecdh_module() {
+    let fixture = Fixture::new();
+    fixture.write("ecdh.rs", "pub const VALUE: u8 = 1;\n");
+    fixture.write("mod.rs", "pub mod ecdh;\n");
+    let (output, _) = modules(&fixture.0, true);
+    assert!(output.contains("pub mod ecdh {"), "{output}");
+}
+
+#[test]
 fn body_index_accepts_the_kdf_module_and_no_longer_hkdf() {
     let fixture = Fixture::new();
     fixture.write("kdf.rs", "pub const VALUE: u8 = 1;\n");

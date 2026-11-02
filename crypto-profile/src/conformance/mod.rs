@@ -3,6 +3,7 @@ use crate::{Algorithm, CryptoError, Module, SignatureAlgorithm, TlsSignatureSche
 
 #[doc(hidden)]
 pub mod golden;
+mod key_agreement_tests;
 mod peer_certificate_tests;
 mod peer_identity_tests;
 mod profile_tests;
@@ -174,7 +175,7 @@ pub fn __library_basename(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{KeyAgreementAlgorithm, Linkage, ModuleLine, Options};
+    use crate::{Linkage, ModuleLine, Options};
 
     const M3S: Module = Module {
         line: ModuleLine::AwsLcFips3,
@@ -212,10 +213,6 @@ mod tests {
                 [
                     Algorithm::Signature(ml_dsa),
                     Algorithm::Scheme(TlsSignatureScheme::MlDsa87),
-                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP256),
-                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
-                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP521),
-                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::X25519),
                 ],
                 "{m:?}"
             );
@@ -361,6 +358,14 @@ mod tests {
     }
 
     #[test]
+    fn a_scalar_is_fixed_to_the_field_length() {
+        assert_eq!(__fixed_len_scalar(&[0, 0, 1, 2], 3), [0, 1, 2]);
+        assert_eq!(__fixed_len_scalar(&[1, 2], 4), [0, 0, 1, 2]);
+        assert_eq!(__fixed_len_scalar(&[0, 0], 2), [0, 0]);
+        assert_eq!(__fixed_len_scalar(&[3, 2, 1], 2), [3, 2, 1]);
+    }
+
+    #[test]
     fn aead_cases_keep_only_the_named_sizes() {
         let file = r#"{"testGroups":[
             {"keySize":128,"ivSize":96,"tagSize":128,"tests":[{"tcId":1,"key":"00","iv":"00","aad":"","msg":"","ct":"","tag":"00","result":"valid"}]},
@@ -462,6 +467,16 @@ pub fn __wycheproof_kdf_cases(file: &str) -> Vec<KdfCase> {
             });
         }
     }
+    out
+}
+
+/// A big-endian integer as exactly `len` bytes: leading zero bytes dropped, then left-padded with
+/// zeros. One that is still longer than `len` is returned unpadded.
+#[doc(hidden)]
+pub fn __fixed_len_scalar(integer: &[u8], len: usize) -> Vec<u8> {
+    let digits = &integer[integer.iter().take_while(|b| **b == 0).count()..];
+    let mut out = vec![0; len.saturating_sub(digits.len())];
+    out.extend_from_slice(digits);
     out
 }
 
@@ -1271,8 +1286,22 @@ macro_rules! conformance_tests {
                         assert_eq!(key.as_bytes().len(), len, "{k:?}");
                     }
                     Algorithm::KeyAgreement(k) => {
-                        assert!(!cap.available, "{k:?}");
-                        assert_eq!(cap.approval, Approval::Unverified, "{k:?}");
+                        assert!(cap.available, "{k:?}");
+                        let unrestricted = admit(Profile::Unrestricted, Options::default());
+                        let spec = kdf::Spec::Hkdf {
+                            algorithm: KdfAlgorithm::HkdfSha256,
+                            salt: None,
+                            info: b"capability",
+                        };
+                        let recipient = ecdh::EphemeralKey::generate(&unrestricted, k)
+                            .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                        let sender = ecdh::EphemeralKey::generate(&unrestricted, k)
+                            .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                        let to_recipient = recipient.public_key().to_vec();
+                        let to_sender = sender.public_key().to_vec();
+                        let sent = sender.agree(&to_recipient, &spec, 32).unwrap();
+                        let received = recipient.agree(&to_sender, &spec, 32).unwrap();
+                        assert_eq!(sent.as_bytes(), received.as_bytes(), "{k:?}");
                     }
                     Algorithm::Kx(k) => {
                         let p = policy(
@@ -1468,6 +1497,10 @@ macro_rules! conformance_tests {
 
         mod conformance_profiles {
             $crate::__conformance_profile_tests!($b);
+        }
+
+        mod conformance_key_agreement {
+            $crate::__conformance_key_agreement_tests!($b);
         }
     };
 }

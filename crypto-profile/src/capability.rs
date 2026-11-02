@@ -158,6 +158,34 @@ const fn absent(l: Linkage) -> &'static str {
     }
 }
 
+const fn ecdh_outside_tls(l: Linkage) -> &'static str {
+    match l {
+        Linkage::Static => {
+            "AWS-LC FIPS 3.1.0 Security Policy, cert #5314 (static), p. 20: the SP 800-56Ar3 assurances hold only with an application that implements the TLS protocol, for ephemeral keys from the module's key pair generation; \"The module does not support static keys\""
+        }
+        Linkage::Dynamic => {
+            "AWS-LC FIPS 3.1.0 Security Policy, cert #5298 (dynamic), p. 20: the SP 800-56Ar3 assurances hold only with an application that implements the TLS protocol, for ephemeral keys from the module's key pair generation; \"The module does not support static keys\""
+        }
+    }
+}
+
+const fn x25519_absent(l: Linkage) -> &'static str {
+    match l {
+        Linkage::Static => {
+            "AWS-LC FIPS 3.1.0 Security Policy, cert #5314 (static): not listed in Tables 5-8; FIPS 140-3 IG C.K Resolution 5 (p. 160)"
+        }
+        Linkage::Dynamic => {
+            "AWS-LC FIPS 3.1.0 Security Policy, cert #5298 (dynamic): not listed in Tables 5-8; FIPS 140-3 IG C.K Resolution 5 (p. 160)"
+        }
+    }
+}
+
+/// X25519, in key agreement and as a TLS group, on a module with no security policy: IG C.K
+/// settles it for every module.
+const X25519_NOT_APPROVED: Approval = Approval::NotApproved {
+    source: "FIPS 140-3 IG C.K Resolution 5 (p. 160): X25519 is not an SP 800-56Ar3 key-agreement curve",
+};
+
 const fn three_x(l: Linkage, a: Algorithm) -> Capability {
     let yes = Approval::Approved { source: table5(l) };
     let no = Approval::NotApproved { source: absent(l) };
@@ -188,7 +216,12 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
         },
         Algorithm::Kx(k) => match k {
             KxGroup::MlKem1024 | KxGroup::Secp384r1 | KxGroup::Secp256r1 => (true, yes),
-            KxGroup::X25519 => (true, no),
+            KxGroup::X25519 => (
+                true,
+                Approval::NotApproved {
+                    source: x25519_absent(l),
+                },
+            ),
             KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 | KxGroup::Secp384r1MlKem1024 => {
                 (true, Approval::Unverified)
             }
@@ -227,8 +260,18 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
         Algorithm::KeyAgreement(k) => match k {
             KeyAgreementAlgorithm::EcdhP256
             | KeyAgreementAlgorithm::EcdhP384
-            | KeyAgreementAlgorithm::EcdhP521
-            | KeyAgreementAlgorithm::X25519 => (false, Approval::Unverified),
+            | KeyAgreementAlgorithm::EcdhP521 => (
+                true,
+                Approval::NotApproved {
+                    source: ecdh_outside_tls(l),
+                },
+            ),
+            KeyAgreementAlgorithm::X25519 => (
+                true,
+                Approval::NotApproved {
+                    source: x25519_absent(l),
+                },
+            ),
         },
     };
     Capability {
@@ -239,30 +282,39 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
 
 const fn four_x(l: Linkage, a: Algorithm) -> Capability {
     Capability {
-        available: four_x_available(a),
+        available: true,
         approval: match l {
-            Linkage::Static => Approval::Unverified,
+            Linkage::Static => four_x_static(a),
             Linkage::Dynamic => four_x_dynamic(a),
         },
     }
 }
 
-const fn four_x_available(a: Algorithm) -> bool {
+/// The 4.x static build has no CAVP certificate (decision 0004 §4).
+const fn four_x_static(a: Algorithm) -> Approval {
     match a {
+        Algorithm::KeyAgreement(k) => match k {
+            KeyAgreementAlgorithm::X25519 => X25519_NOT_APPROVED,
+            KeyAgreementAlgorithm::EcdhP256
+            | KeyAgreementAlgorithm::EcdhP384
+            | KeyAgreementAlgorithm::EcdhP521 => Approval::Unverified,
+        },
+        Algorithm::Kx(k) => match k {
+            KxGroup::X25519 => X25519_NOT_APPROVED,
+            KxGroup::MlKem1024
+            | KxGroup::Secp384r1MlKem1024
+            | KxGroup::X25519MlKem768
+            | KxGroup::Secp256r1MlKem768
+            | KxGroup::Secp384r1
+            | KxGroup::Secp256r1 => Approval::Unverified,
+        },
         Algorithm::Signature(_)
         | Algorithm::Scheme(_)
-        | Algorithm::Kx(_)
         | Algorithm::Cipher(_)
         | Algorithm::Hash(_)
         | Algorithm::Protocol(_)
         | Algorithm::Mac(_)
-        | Algorithm::Kdf(_) => true,
-        Algorithm::KeyAgreement(k) => match k {
-            KeyAgreementAlgorithm::EcdhP256
-            | KeyAgreementAlgorithm::EcdhP384
-            | KeyAgreementAlgorithm::EcdhP521
-            | KeyAgreementAlgorithm::X25519 => false,
-        },
+        | Algorithm::Kdf(_) => Approval::Unverified,
     }
 }
 
@@ -333,10 +385,10 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             KxGroup::Secp256r1 => tested(
                 "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
             ),
-            KxGroup::X25519MlKem768
-            | KxGroup::Secp256r1MlKem768
-            | KxGroup::Secp384r1MlKem1024
-            | KxGroup::X25519 => Approval::Unverified,
+            KxGroup::X25519 => X25519_NOT_APPROVED,
+            KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 | KxGroup::Secp384r1MlKem1024 => {
+                Approval::Unverified
+            }
         },
         Algorithm::Cipher(c) => match c {
             CipherSuite::Tls13Aes256GcmSha384
@@ -383,10 +435,16 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             ),
         },
         Algorithm::KeyAgreement(k) => match k {
-            KeyAgreementAlgorithm::EcdhP256
-            | KeyAgreementAlgorithm::EcdhP384
-            | KeyAgreementAlgorithm::EcdhP521
-            | KeyAgreementAlgorithm::X25519 => Approval::Unverified,
+            KeyAgreementAlgorithm::EcdhP256 => tested(
+                "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
+            ),
+            KeyAgreementAlgorithm::EcdhP384 => tested(
+                "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+            ),
+            KeyAgreementAlgorithm::EcdhP521 => tested(
+                "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-521; ECDSA KeyGen (FIPS186-5): P-521)",
+            ),
+            KeyAgreementAlgorithm::X25519 => X25519_NOT_APPROVED,
         },
     }
 }
@@ -434,9 +492,8 @@ mod tests {
         [M3S, M3D, M4S, M4D]
     }
 
-    fn implemented_by_no_backend(a: Algorithm) -> bool {
-        matches!(a, Algorithm::KeyAgreement(_))
-    }
+    const X25519: Algorithm = Algorithm::KeyAgreement(KeyAgreementAlgorithm::X25519);
+    const KX_X25519: Algorithm = Algorithm::Kx(KxGroup::X25519);
 
     #[test]
     fn certificates_name_their_module() {
@@ -462,9 +519,13 @@ mod tests {
                 match capability(m, a).approval {
                     Approval::Approved { source } | Approval::NotApproved { source } => {
                         assert!(!source.is_empty(), "{m:?} {a:?}");
-                        let want = match m.linkage {
-                            Linkage::Static => "#5314",
-                            Linkage::Dynamic => "#5298",
+                        let want = match (m.line, m.linkage) {
+                            (ModuleLine::AwsLcFips3, Linkage::Static) => "#5314",
+                            (ModuleLine::AwsLcFips3, Linkage::Dynamic) => "#5298",
+                            (ModuleLine::AwsLcFips4, _) => {
+                                assert!(a == X25519 || a == KX_X25519, "{m:?} {a:?}");
+                                "FIPS 140-3 IG C.K Resolution 5"
+                            }
                         };
                         assert!(source.contains(want), "{m:?} {a:?} cites {source}");
                     }
@@ -480,13 +541,18 @@ mod tests {
     }
 
     #[test]
-    fn four_x_static_is_unverified_everywhere() {
+    fn four_x_static_is_unverified_but_for_x25519() {
         for a in Algorithm::all() {
+            let approval = if a == X25519 || a == KX_X25519 {
+                X25519_NOT_APPROVED
+            } else {
+                Approval::Unverified
+            };
             assert_eq!(
                 capability(M4S, a),
                 Capability {
-                    available: !implemented_by_no_backend(a),
-                    approval: Approval::Unverified
+                    available: true,
+                    approval
                 },
                 "{a:?}"
             );
@@ -494,23 +560,49 @@ mod tests {
     }
 
     #[test]
-    fn no_module_has_or_approves_key_agreement_yet() {
-        let pending: Vec<Algorithm> = Algorithm::all()
-            .into_iter()
-            .filter(|a| implemented_by_no_backend(*a))
-            .collect();
-        assert_eq!(pending.len(), 4);
+    fn x25519_is_not_approved_on_any_module() {
         for m in modules() {
-            for a in &pending {
+            for a in [X25519, KX_X25519] {
+                let c = capability(m, a);
+                assert!(c.available, "{m:?} {a:?}");
+                match c.approval {
+                    Approval::NotApproved { source } => {
+                        assert!(
+                            source.contains("IG C.K Resolution 5 (p. 160)"),
+                            "{m:?} {a:?}"
+                        )
+                    }
+                    other => panic!("{m:?} {a:?}: {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn three_x_does_not_approve_ecdh_outside_tls() {
+        for (m, cert) in [(M3S, "#5314 (static)"), (M3D, "#5298 (dynamic)")] {
+            for k in [
+                KeyAgreementAlgorithm::EcdhP256,
+                KeyAgreementAlgorithm::EcdhP384,
+                KeyAgreementAlgorithm::EcdhP521,
+            ] {
+                let c = capability(m, Algorithm::KeyAgreement(k));
                 assert_eq!(
-                    capability(m, *a),
+                    c,
                     Capability {
-                        available: false,
-                        approval: Approval::Unverified
+                        available: true,
+                        approval: Approval::NotApproved {
+                            source: ecdh_outside_tls(m.linkage)
+                        }
                     },
-                    "{m:?} {a:?}"
+                    "{m:?} {k:?}"
                 );
-                assert_eq!(ensure_available(m, *a), Err(CryptoError::Unavailable(*a)));
+                let Approval::NotApproved { source } = c.approval else {
+                    panic!("{m:?} {k:?}")
+                };
+                assert!(source.contains(cert), "{source}");
+                assert!(source.contains("p. 20"), "{source}");
+                assert!(source.contains("does not support static keys"), "{source}");
             }
         }
     }
@@ -681,26 +773,42 @@ mod tests {
                     "A7856 (KDA OneStep SP800-56Cr2: SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
                 ),
             ),
-            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256), None),
-            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384), None),
-            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521), None),
-            (A::KeyAgreement(KeyAgreementAlgorithm::X25519), None),
+            (
+                A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256),
+                Some(
+                    "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
+                ),
+            ),
+            (
+                A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
+                Some(
+                    "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+                ),
+            ),
+            (
+                A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521),
+                Some(
+                    "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-521; ECDSA KeyGen (FIPS186-5): P-521)",
+                ),
+            ),
+            (X25519, None),
         ];
         assert!(
             Algorithm::all()
                 .iter()
                 .all(|a| expected.iter().any(|(b, _)| b == a))
         );
-        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 31);
+        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 34);
         for (a, cavp) in expected {
             let approval = match cavp {
                 Some(cavp) => Approval::AlgorithmTested { cavp },
+                None if a == X25519 || a == KX_X25519 => X25519_NOT_APPROVED,
                 None => Approval::Unverified,
             };
             assert_eq!(
                 capability(M4D, a),
                 Capability {
-                    available: !implemented_by_no_backend(a),
+                    available: true,
                     approval
                 },
                 "{a:?}"
@@ -710,7 +818,7 @@ mod tests {
     }
 
     #[test]
-    fn three_x_lacks_ml_dsa_and_what_no_backend_implements() {
+    fn three_x_lacks_only_ml_dsa() {
         for m in [M3S, M3D] {
             for a in Algorithm::all() {
                 let ml_dsa = matches!(
@@ -718,11 +826,7 @@ mod tests {
                     Algorithm::Signature(SignatureAlgorithm::MlDsa87)
                         | Algorithm::Scheme(TlsSignatureScheme::MlDsa87)
                 );
-                assert_eq!(
-                    capability(m, a).available,
-                    !ml_dsa && !implemented_by_no_backend(a),
-                    "{m:?} {a:?}"
-                );
+                assert_eq!(capability(m, a).available, !ml_dsa, "{m:?} {a:?}");
             }
         }
     }
@@ -865,10 +969,10 @@ mod tests {
             (A::Kdf(KdfAlgorithm::OneStepSha256), true, Y),
             (A::Kdf(KdfAlgorithm::OneStepSha384), true, Y),
             (A::Kdf(KdfAlgorithm::OneStepSha512), true, Y),
-            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256), false, U),
-            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384), false, U),
-            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521), false, U),
-            (A::KeyAgreement(KeyAgreementAlgorithm::X25519), false, U),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256), true, N),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384), true, N),
+            (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521), true, N),
+            (X25519, true, N),
         ];
         assert_eq!(expected.len(), Algorithm::all().len());
         for m in [M3S, M3D] {
