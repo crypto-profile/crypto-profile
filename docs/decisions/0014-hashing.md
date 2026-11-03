@@ -37,7 +37,7 @@ No test allocates or feeds such a message.
 
 **No truncation.** `digest` and `Hasher::finish` return the full-length digest. FIPS 140-3 IG C.L (p. 163) and SP 800-107 Rev. 1 §5.1 (p. 9) set the rules for a truncated digest; the crate offers none, so neither applies.
 
-**`CertificateSignature` can name a SHA-3 hash.** `CertificateSignature::{Ecdsa, RsaPss, RsaPkcs1}` carry a `HashAlgorithm`, so `Ecdsa(P384, Sha3_384)` is now a value of the type. The certificate parser produces none (it maps only the SHA-2 OIDs), no profile's peer-certificate rule lists one, and the crate's certificate verifiers name SHA-2 signature algorithms only, so a certificate signed with a SHA-3 hash is refused as before. `MacAlgorithm::hash()` and `KdfAlgorithm::hash()` return SHA-2 hashes only.
+**`CertificateSignature` can name a SHA-3 hash.** `CertificateSignature::{Ecdsa, RsaPss, RsaPkcs1}` carry a `HashAlgorithm`, so `Ecdsa(P384, Sha3_384)` is now a value of the type. The certificate parser produces none (it maps only the SHA-2 OIDs), no profile's peer-certificate rule lists one, and the crate's certificate verifiers name no SHA-3 signature algorithm, so a certificate signed with a SHA-3 hash is refused as before. `MacAlgorithm::hash()` and `KdfAlgorithm::hash()` return SHA-2 hashes only.
 
 **Profiles (maintainer, 2026-11-03).** Each profile admits from its own text (decision 0008):
 
@@ -71,7 +71,7 @@ No test allocates or feeds such a message.
 ## Named residuals
 
 1. **The cells claim the tested ranges only.** The certificates tested messages of 0-65536 bits and large messages of 1, 2, 4 and 8 (gigabytes on the 4.x certificates; the 3.x policies give no unit); `digest` hashes any length (decision 0004 §5).
-2. **The approval indicator is invisible.** aws-lc-rs does not expose AWS-LC's service indicator, which the module sets after every SHA-2 and SHA-3 digest (`crypto/fipsmodule/sha/sha3.c`, `crypto/fipsmodule/digest/digest.c`).
+2. **The approval indicator is invisible.** aws-lc-rs does not expose AWS-LC's service indicator, which the module sets after every SHA-2 and SHA-3 digest (`crypto/fipsmodule/sha/sha256.c`, `sha512.c` and `sha3.c`, which `EVP_DigestFinal_ex` in `crypto/fipsmodule/digest/digest.c` reaches).
 3. **No SHA-224, SHA-512/224, SHA-512/256, SHA3-224 or SHAKE.** aws-lc-rs exposes SHA-224 and SHA-512/256, but no profile need for them is in scope; it does not expose SHA3-224 or SHAKE. `HashAlgorithm` is `#[non_exhaustive]`, so any of them can come in a 0.10.x release. No profile's text admits SHAKE as a hash function (FIPS 202 §7, p. 22).
 4. **A hash is not a MAC or a KDF.** `digest` gives no keyed integrity; use `hmac` or `kdf`.
 5. **A SHA-256 `Hasher` past FIPS 180-4's limit.** Between 2^61 and 2^64 bytes fed to one SHA-256 `Hasher`, the module's 64-bit bit count wraps silently (aws-lc-fips-sys 0.13.17 and 0.14.2, `aws-lc/crypto/fipsmodule/digest/md32_common.h:107-113`) and `finish` then gives a digest that does not conform to FIPS 180-4; aws-lc-rs panics only past `u64::MAX` bytes. SHA-384 and SHA-512 keep a 128-bit count, and SHA-3 keeps none, so the wrap applies to SHA-256 alone. The crate adds no check; `Hasher::update`'s documentation names it.
