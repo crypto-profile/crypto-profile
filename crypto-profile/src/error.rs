@@ -491,7 +491,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 19] = [
+        let table: [(CryptoError, &str); 18] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -593,13 +593,6 @@ mod tests {
                 "the aes-128-gcm key must be 16 bytes, not 32",
             ),
             (
-                CryptoError::AeadPlaintextLength {
-                    algorithm: AeadAlgorithm::Chacha20Poly1305,
-                    bytes: 274_877_906_880,
-                },
-                "a plaintext of 274877906880 bytes exceeds chacha20-poly1305's maximum of 274877906879 bytes",
-            ),
-            (
                 CryptoError::AeadLimit {
                     algorithm: AeadAlgorithm::Aes256Gcm,
                 },
@@ -613,6 +606,19 @@ mod tests {
         for (e, text) in table {
             assert_eq!(e.to_string(), text);
         }
+    }
+
+    #[test]
+    #[cfg(target_pointer_width = "64")]
+    fn the_aead_plaintext_length_text_is_pinned() {
+        assert_eq!(
+            CryptoError::AeadPlaintextLength {
+                algorithm: AeadAlgorithm::Chacha20Poly1305,
+                bytes: 274_877_906_880,
+            }
+            .to_string(),
+            "a plaintext of 274877906880 bytes exceeds chacha20-poly1305's maximum of 274877906879 bytes"
+        );
     }
 
     #[test]
