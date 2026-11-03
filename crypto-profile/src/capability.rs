@@ -249,7 +249,12 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
             | CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256 => (true, no),
         },
         Algorithm::Hash(h) => match h {
-            HashAlgorithm::Sha256 | HashAlgorithm::Sha384 | HashAlgorithm::Sha512 => (true, yes),
+            HashAlgorithm::Sha256
+            | HashAlgorithm::Sha384
+            | HashAlgorithm::Sha512
+            | HashAlgorithm::Sha3_256
+            | HashAlgorithm::Sha3_384
+            | HashAlgorithm::Sha3_512 => (true, yes),
         },
         Algorithm::Protocol(v) => match v {
             TlsVersion::Tls12 => (true, yes),
@@ -445,6 +450,9 @@ const fn four_x_cell(l: Linkage, a: Algorithm) -> Approval {
             HashAlgorithm::Sha256 => tested_on(l, "A7855 (SHA2-256)", "A7902 (SHA2-256)"),
             HashAlgorithm::Sha384 => tested_on(l, "A7855 (SHA2-384)", "A7902 (SHA2-384)"),
             HashAlgorithm::Sha512 => tested_on(l, "A7855 (SHA2-512)", "A7902 (SHA2-512)"),
+            HashAlgorithm::Sha3_256 => tested_on(l, "A7855 (SHA3-256)", "A7902 (SHA3-256)"),
+            HashAlgorithm::Sha3_384 => tested_on(l, "A7855 (SHA3-384)", "A7902 (SHA3-384)"),
+            HashAlgorithm::Sha3_512 => tested_on(l, "A7855 (SHA3-512)", "A7902 (SHA3-512)"),
         },
         Algorithm::Protocol(v) => match v {
             TlsVersion::Tls12 | TlsVersion::Tls13 => Approval::Unverified,
@@ -692,6 +700,45 @@ mod tests {
     }
 
     #[test]
+    fn every_hash_cell_is_pinned_to_its_citation() {
+        for (m, cert) in [(M3S, "#5314 (static)"), (M3D, "#5298 (dynamic)")] {
+            for &h in HashAlgorithm::ALL {
+                assert_eq!(
+                    capability(m, Algorithm::Hash(h)),
+                    Capability {
+                        available: true,
+                        approval: Approval::Approved {
+                            source: table5(m.linkage)
+                        }
+                    },
+                    "{m:?} {h:?}"
+                );
+            }
+            assert!(table5(m.linkage).contains(cert), "{m:?}");
+            assert!(table5(m.linkage).contains("Table 5, pp. 8-11"), "{m:?}");
+        }
+        for (m, cert) in [(M4D, "A7855"), (M4S, "A7902")] {
+            for (h, name) in [
+                (HashAlgorithm::Sha256, "SHA2-256"),
+                (HashAlgorithm::Sha384, "SHA2-384"),
+                (HashAlgorithm::Sha512, "SHA2-512"),
+                (HashAlgorithm::Sha3_256, "SHA3-256"),
+                (HashAlgorithm::Sha3_384, "SHA3-384"),
+                (HashAlgorithm::Sha3_512, "SHA3-512"),
+            ] {
+                let want = format!("{cert} ({name})");
+                match capability(m, Algorithm::Hash(h)) {
+                    Capability {
+                        available: true,
+                        approval: Approval::AlgorithmTested { cavp },
+                    } => assert_eq!(cavp, want, "{m:?} {h:?}"),
+                    other => panic!("{m:?} {h:?}: {other:?}"),
+                }
+            }
+        }
+    }
+
+    #[test]
     fn three_x_does_not_approve_ecdh_outside_tls() {
         for (m, cert) in [(M3S, "#5314 (static)"), (M3D, "#5298 (dynamic)")] {
             for k in [
@@ -720,7 +767,7 @@ mod tests {
         }
     }
 
-    fn four_x_citations() -> [(Algorithm, Option<(&'static str, &'static str)>); 57] {
+    fn four_x_citations() -> [(Algorithm, Option<(&'static str, &'static str)>); 60] {
         use Algorithm as A;
         use CipherSuite as C;
         use HashAlgorithm as H;
@@ -891,6 +938,18 @@ mod tests {
                 A::Hash(H::Sha512),
                 Some(("A7855 (SHA2-512)", "A7902 (SHA2-512)")),
             ),
+            (
+                A::Hash(H::Sha3_256),
+                Some(("A7855 (SHA3-256)", "A7902 (SHA3-256)")),
+            ),
+            (
+                A::Hash(H::Sha3_384),
+                Some(("A7855 (SHA3-384)", "A7902 (SHA3-384)")),
+            ),
+            (
+                A::Hash(H::Sha3_512),
+                Some(("A7855 (SHA3-512)", "A7902 (SHA3-512)")),
+            ),
             (A::Protocol(V::Tls12), None),
             (A::Protocol(V::Tls13), None),
             (
@@ -1004,7 +1063,7 @@ mod tests {
                 .iter()
                 .all(|a| expected.iter().any(|(b, _)| b == a))
         );
-        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 36);
+        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 39);
         for (a, cavp) in expected {
             let approval = match (cavp, m.linkage) {
                 (Some((cavp, _)), Linkage::Dynamic) | (Some((_, cavp)), Linkage::Static) => {
@@ -1080,6 +1139,7 @@ mod tests {
         assert!(approved(A::Kx(KxGroup::Secp384r1)));
         assert!(approved(A::Cipher(CipherSuite::Tls13Aes128GcmSha256)));
         assert!(approved(A::Hash(HashAlgorithm::Sha512)));
+        assert!(approved(A::Hash(HashAlgorithm::Sha3_256)));
         assert!(approved(A::Mac(MacAlgorithm::HmacSha384)));
         assert!(approved(A::Kdf(KdfAlgorithm::HkdfSha512)));
         assert!(approved(A::Kdf(KdfAlgorithm::OneStepSha256)));
@@ -1135,7 +1195,7 @@ mod tests {
             Unverified,
         }
         use K::{Approved as Y, NotApproved as N, Unverified as U};
-        let expected: [(Algorithm, bool, K); 57] = [
+        let expected: [(Algorithm, bool, K); 60] = [
             (A::Signature(S::MlDsa87), false, N),
             (A::Signature(S::EcdsaP256Sha256), true, Y),
             (A::Signature(S::EcdsaP384Sha384), true, Y),
@@ -1199,6 +1259,9 @@ mod tests {
             (A::Hash(HashAlgorithm::Sha256), true, Y),
             (A::Hash(HashAlgorithm::Sha384), true, Y),
             (A::Hash(HashAlgorithm::Sha512), true, Y),
+            (A::Hash(HashAlgorithm::Sha3_256), true, Y),
+            (A::Hash(HashAlgorithm::Sha3_384), true, Y),
+            (A::Hash(HashAlgorithm::Sha3_512), true, Y),
             (A::Protocol(TlsVersion::Tls12), true, Y),
             (A::Protocol(TlsVersion::Tls13), true, U),
             (A::Mac(MacAlgorithm::HmacSha256), true, Y),

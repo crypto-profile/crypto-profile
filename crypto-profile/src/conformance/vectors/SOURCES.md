@@ -1,6 +1,6 @@
 # Conformance vector sources
 
-Every file in this directory is byte-for-byte as retrieved, except `ed25519_rfc8032.json` and `hkdf_rfc5869.json`, which transcribe RFC text, and `kda_onestep_acvp.json`, which transcribes NIST ACVP samples. Retrieved 2026-10-28; the three `hmac_*` files 2026-10-31, the three `hkdf_sha*` files 2026-11-01, and the three `ecdh_*` files and `x25519_test.json` 2026-11-02, from the same commit.
+Every file in this directory is byte-for-byte as retrieved, except `ed25519_rfc8032.json` and `hkdf_rfc5869.json`, which transcribe RFC text, `kda_onestep_acvp.json`, which transcribes NIST ACVP samples, and `nist_hash_examples.json`, which transcribes NIST example values. Retrieved 2026-10-28; the three `hmac_*` files 2026-10-31, the three `hkdf_sha*` files 2026-11-01, and the three `ecdh_*` files and `x25519_test.json` 2026-11-02, from the same commit; the three `SHA3_*` files and `nist_hash_examples.json` 2026-11-03.
 
 ## Wycheproof
 
@@ -81,6 +81,37 @@ The SHA byte-oriented test vectors, `https://csrc.nist.gov/CSRC/media/Projects/C
 | `SHA256ShortMsg.rsp` | `75e1cb83994638481808e225b9eb0c1ebd0c232d952ac42b61abce6363be283c` |
 | `SHA384ShortMsg.rsp` | `7ea7bcf00fadc20949fae63703e40681ddf288fea808471cb3cbc95f3ec16811` |
 | `SHA512ShortMsg.rsp` | `e53a36c03609e5a3e3cc4b6e117a499db7864c23ec825c6cec99503a45f40764` |
+
+The SHA-3 byte-oriented test vectors, `https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Algorithm-Validation-Program/documents/sha3/sha-3bytetestvectors.zip` (linked from the same page; zip SHA-256 `cd07701af2e47f5cc889d642528b4bf11f8b6eb55797c7307a96828ed8d8fc8c`), the three `ShortMsg` files at the archive's root. Licence: public domain (US Government work). The files keep their CRLF line endings. SHA3-224 is not used: the crate does not offer it.
+
+| File | SHA-256 |
+|---|---|
+| `SHA3_256ShortMsg.rsp` | `e75b1ded16e9862eaaef9ad9b89402b9832f86fe818292634b2e54dc6b3540ff` |
+| `SHA3_384ShortMsg.rsp` | `0e15aa35474c85084a0a1682c28ae9d4ebde61daa130ea0b408f51a1e9ec3150` |
+| `SHA3_512ShortMsg.rsp` | `f73a39d8091d58c9225cfad8e6d8cfa3e8d67532c7029bf376baef0d0d86d5b6` |
+
+## NIST example values
+
+`nist_hash_examples.json` transcribes the message and digest of NIST's "Examples with Intermediate Values" for the secure hash functions, linked from `https://csrc.nist.gov/projects/cryptographic-standards-and-guidelines/example-values`, under `https://csrc.nist.gov/CSRC/media/Projects/Cryptographic-Standards-and-Guidelines/documents/examples/`, retrieved 2026-11-03. Licence: public domain (US Government work). Each case names its document. A message is given as ASCII text (`ascii`), as hexadecimal (`hex`), or as one byte repeated (`repeat`, `count`). Every digest was recomputed from its message with an independent implementation before it was kept.
+
+| Source document | SHA-256 | Cases taken |
+|---|---|---|
+| `SHA256.pdf` | `7006b6549dad2fc8c6f29417a921f2e48208157ef496a7e1e1d7d17c5cc1e7db` | the one-block (`"abc"`) and two-block messages |
+| `SHA384.pdf` | `a8f9dbb34991238f3d12708a5fbc0dd380d324ed8237a355dbed2460744daea2` | the one-block and two-block messages |
+| `SHA512.pdf` | `84ce867c99bad5a7b05abc74bb1dfc9de8486f49a160653cc8b15272cc532115` | the one-block and two-block messages |
+| `SHA2_Additional.pdf` | `95f25cb0c8a0636c7cd5773469883d3cf802d8e8265dcbb13cca1dad3be3c3b3` | SHA-256 #1-#10, SHA-384 #1-#9 and SHA-512 #1-#9: every message of at most 1,000,000 bytes (the empty message is SHA-384 and SHA-512 #1); the larger ones are left out |
+| `SHA3-256_Msg0.pdf` | `72c5a5d37ed639058421b0a292775605a6be1631cfc4c156a2fb4739e68f8e9c` | the empty message |
+| `SHA3-384_Msg0.pdf` | `19927c316398729e82e98169efe39dc0a8f93aad171a293da5dbbc47da0fbdcb` | the empty message |
+| `SHA3-512_Msg0.pdf` | `6d0a6fecea7babaffe9f3b09058fdb1590576e52b9dbfe0a637705db6f7de248` | the empty message |
+| `SHA3-256_1600.pdf` | `ee3a3cfb383a1c9ac5982de0bf14388168922e7373519b18aea14513e6fbafae` | the 1600-bit message, 200 bytes of `0xa3` |
+| `SHA3-384_1600.pdf` | `9460b7c2ecb5bb3c82b13738d2531ba9ec8455a0c7120468bde68b8e9e275e6a` | the 1600-bit message |
+| `SHA3-512_1600.pdf` | `2f5f6ca71c3bd7bf3e99d142f7c4035b1e3fea95d7fc7e7a79a38ce995388211` | the 1600-bit message |
+
+The SHA-3 examples carry no `"abc"` message, and the SHA-256 ones no empty message; the CAVP short-message files above cover both.
+
+| File | SHA-256 |
+|---|---|
+| `nist_hash_examples.json` | `13616c8338bac3007435f81aa6ca0ceae2d485196c0a9c0f701ae3abee641e2e` |
 
 ## Sealed box
 

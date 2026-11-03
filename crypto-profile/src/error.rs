@@ -29,6 +29,8 @@ pub enum Family {
     KeyAgreement,
     /// Authenticated encryption, outside TLS.
     Aead,
+    /// Hashing, outside TLS.
+    Hash,
 }
 
 /// Why a certificate signing request could not be produced.
@@ -457,9 +459,15 @@ mod tests {
             "the TLS policy names no KxGroup"
         );
         assert_eq!(
-            [Family::Mac, Family::Kdf, Family::KeyAgreement, Family::Aead]
-                .map(|f| format!("{f:?}")),
-            ["Mac", "Kdf", "KeyAgreement", "Aead"]
+            [
+                Family::Mac,
+                Family::Kdf,
+                Family::KeyAgreement,
+                Family::Aead,
+                Family::Hash
+            ]
+            .map(|f| format!("{f:?}")),
+            ["Mac", "Kdf", "KeyAgreement", "Aead", "Hash"]
         );
         assert_eq!(
             CryptoError::PolicyVersionUnusable {

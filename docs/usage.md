@@ -62,12 +62,12 @@ The crate never claims:
 - that it is validated or certified itself;
 - that a deployment's operating system or processor is a tested operational environment. Both 3.x certificates list Amazon Linux 2023 only, on Graviton4 and Xeon Platinum 8375C, each with and without PAA (#5314 and #5298 security policies, Table 3, p. 7). Whether a deployment falls inside a certificate's operational environments is the deployer's determination.
 
-**The 4.x modules**, static and dynamic, are submitted, in CMVP review, with no security policy published: the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), last updated 11/2/2026, lists "AWS-LC 4 Cryptographic Module (dynamic)" and "AWS-LC 4 Cryptographic Module (static)", FIPS 140-3, both in "Comment Resolution - Lab (10/22/2026)". Neither is validated. With no policy to cite, a 4.x cell is `Approval::AlgorithmTested { cavp }` where one AWS-LC FIPS 4.0.0 CAVP certificate of its own build (A7839-A7876 dynamic, A7886-A7923 static) shows every operation the cell needs, and `Unverified` otherwise ([decision 0004](decisions/0004-algorithm-tested.md)). An `AlgorithmTested` cell claims only the parameters its `cavp` names; for a signature scheme, rustls verifies a wider range of peer keys (decision 0004 §5). On each build, of the 57 cells, 36 are `AlgorithmTested`, 19 `Unverified` and 2 `NotApproved`, the same cells on both:
-- `AlgorithmTested`: the three RSA keys; ML-DSA-87 and Ed25519 (keys and schemes), ML-KEM-1024, the three SHA-2 hashes, the three HMACs and the three HKDFs; the three ECDSA and six RSA handshake schemes and the three one-step KDFs; secp384r1, secp256r1 and ECDH on the three NIST curves; AES-128-GCM and AES-256-GCM outside TLS;
+**The 4.x modules**, static and dynamic, are submitted, in CMVP review, with no security policy published: the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), last updated 11/2/2026, lists "AWS-LC 4 Cryptographic Module (dynamic)" and "AWS-LC 4 Cryptographic Module (static)", FIPS 140-3, both in "Comment Resolution - Lab (10/22/2026)". Neither is validated. With no policy to cite, a 4.x cell is `Approval::AlgorithmTested { cavp }` where one AWS-LC FIPS 4.0.0 CAVP certificate of its own build (A7839-A7876 dynamic, A7886-A7923 static) shows every operation the cell needs, and `Unverified` otherwise ([decision 0004](decisions/0004-algorithm-tested.md)). An `AlgorithmTested` cell claims only the parameters its `cavp` names; for a signature scheme, rustls verifies a wider range of peer keys (decision 0004 §5). On each build, of the 60 cells, 39 are `AlgorithmTested`, 19 `Unverified` and 2 `NotApproved`, the same cells on both:
+- `AlgorithmTested`: the three RSA keys; ML-DSA-87 and Ed25519 (keys and schemes), ML-KEM-1024, the three SHA-2 and three SHA-3 hashes, the three HMACs and the three HKDFs; the three ECDSA and six RSA handshake schemes and the three one-step KDFs; secp384r1, secp256r1 and ECDH on the three NIST curves; AES-128-GCM and AES-256-GCM outside TLS;
 - `Unverified`: the three hybrid groups, because CAVP has no algorithm for them; the nine cipher suites, because no ChaCha20 certificate exists and no single certificate shows every operation the AES-GCM suites need; TLS 1.2 and TLS 1.3, because no certificate shows a TLS 1.2 KDF with extended master secret or a TLS 1.3 KDF; the four ECDSA keys, because no single certificate shows every operation they need; and ChaCha20-Poly1305 outside TLS;
 - `NotApproved`: X25519, as a TLS group and in key agreement (FIPS 140-3 IG C.K Resolution 5, p. 160).
 
-On the 3.x line, 42 cells are `Approved`, 11 `NotApproved` and 4 `Unverified` (the three hybrid groups and TLS 1.3). `certificate()` reports `CertStatus::InProcess` with no number for both 4.x builds (`crypto-profile/src/capability.rs`, `four_x`, `four_x_cell` and `certificate`). Neither `AlgorithmTested` nor `Unverified` is ever treated as approved (`Approval::is_approved`).
+On the 3.x line, 45 cells are `Approved`, 11 `NotApproved` and 4 `Unverified` (the three hybrid groups and TLS 1.3). `certificate()` reports `CertStatus::InProcess` with no number for both 4.x builds (`crypto-profile/src/capability.rs`, `four_x`, `four_x_cell` and `certificate`). Neither `AlgorithmTested` nor `Unverified` is ever treated as approved (`Approval::is_approved`).
 
 ## 4. Build prerequisites
 
@@ -184,7 +184,7 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile/src/backend_body/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
-- **`csr` and `digest`.** No profile governs them ([`profiles.md`](profiles.md) §5).
+- **`csr`.** No profile governs it ([`profiles.md`](profiles.md) §5).
 - **The sealed box's empty domain.** A profile governs the sealed box's ECDH on P-384, HKDF-SHA384 and AES-256-GCM, and refuses the box unless it admits all three. `sealbox::seal` and `sealbox::open` also refuse an empty `domain` with `CryptoError::SealDomainEmpty`: the domain is the box's HKDF salt, and the module does not mark an HKDF call with an empty salt approved.
 - **Server session resumption and identity checks.** A resumed server session is not re-verified, so a configuration whose client verifier carries an identity check must not share `session_storage` or a `ticketer` with one whose check differs. Default stores are per configuration ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Identity checks that change over time.** A resumed session does not call the check again, so a check whose answer can change, such as a revocable allow-list, needs a new verifier and configuration when it changes, or resumption disabled ([decision 0009](decisions/0009-peer-identity-check.md)).
@@ -236,7 +236,7 @@ The conformance suite (`crypto-profile/src/conformance/`, run by every backend) 
 | ECDH on P-256, P-384, P-521 | Wycheproof raw-point files: every valid case agrees, through HKDF and the one-step KDF, to what the vector's shared secret derives, and the test hook returns that shared secret; every compressed or invalid point is refused, identically on both lines. RFC 7518 Appendix C (`ECDH-ES`, both parties) |
 | X25519 | Wycheproof: every case derives what its shared secret derives, except the 31 whose shared secret is all zeros, which are refused |
 | HPKE DHKEM | RFC 9180 Appendix A.1.1 (X25519), A.3.1 (P-256) and A.6.1 (P-521), base mode: the KEM shared secret through `StaticKey::agree` with `kdf::Spec::Dhkem`, and `EphemeralKey::agree` agreeing with it |
-| SHA-256, SHA-384, SHA-512 | NIST CAVP byte-oriented short messages |
+| SHA-256, SHA-384, SHA-512, SHA3-256, SHA3-384, SHA3-512 | NIST CAVP byte-oriented short messages, every length from 0 to the block size, in one call and streamed; NIST's example values: `"abc"` and the two-block message for SHA-2, SHA-2's additional messages up to 1,000,000 bytes (the empty message among them for SHA-384 and SHA-512), and the empty and 1600-bit messages for SHA-3 |
 | Sealed box | a version-1 known-answer blob from an independent implementation, and a blob sealed by crypto-profile 0.9.0, each of which must open unchanged |
 
 **A module refusal on aarch64 ([#24](https://github.com/crypto-profile/crypto-profile/issues/24)).** On every aarch64 target, both module lines refuse two valid Wycheproof P-256/SHA-256 signatures: tcId 483 (s = 2^128) and tcId 484 (s = n - 2^128). The refusal fails closed, and no invalid signature is accepted on any target. An honest signature lands on either value with probability about 2^-255. The conformance test asserts both refusals on aarch64, so it fails once a module fixes them.
@@ -262,8 +262,8 @@ key.verify(message, tag.as_ref())?;
 - **Admission.** `admit` gives the profile's MACs on the module, independently of `resolve`, and never refuses. `hmac::Key::new` refuses a MAC the profile does not admit with `CryptoError::NotInProfile`, then a key outside the profile's range with `CryptoError::MacKeyLength` ([`profiles.md`](profiles.md) §10). A MAC the module line lacks is refused with `CryptoError::Unavailable`. `cnsa2` refuses HMAC-SHA256.
 - **Comparing tags.** `Key::verify` compares in constant time, and refuses a tag of any other length with `CryptoError::MacVerify`, whatever the cause. It is the only constant-time comparison: comparing `Tag::as_ref()` bytes directly is not one, and `Tag` has no `==`.
 - **Full-length tags only.** The crate offers no truncation.
-- **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 and HKDF-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
-- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC or KDF the profile does not admit. Read it through `profile()`, `options()`, `macs()`, `kdfs()`, `key_agreements()`, `aeads()` and `excluded()`.
+- **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256, HKDF-SHA256 and SHA-256 hashing under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
+- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC or KDF the profile does not admit. Read it through `profile()`, `options()`, `macs()`, `kdfs()`, `key_agreements()`, `aeads()`, `hashes()` and `excluded()`.
 - **Asserting approval.** Name the families you use: `assert_admitted_approved(&admitted, &[Family::Mac])` walks the MAC cells only. Under `unrestricted` it passes the MACs wherever the module approves them; the empty-`info` refusal (§14) applies only when `Family::Kdf` is named. A TLS family is refused with `CryptoError::FamilyNotAdmitted`, because `assert_module_approves` checks TLS, and an empty list approves nothing.
 - **Panics.** `Key::new`, `sign` and `verify` panic only if the module's HMAC context fails, as aws-lc-rs's do.
 
@@ -308,9 +308,9 @@ let key_bytes: &[u8] = key.as_bytes();
   `tls::Policy` and `csr::CsrParams` likewise: `::default()`, then set the fields. `Resolved` comes only from `resolve`; its fields can be reassigned. `ProfileSpec`, `Selection`, `PeerCertificateRule` and `PeerKeyRule` can be read but not built.
 - **Peer verifier identity.** `PeerVerifierIdentity::Owned`'s `handshake_schemes` is a `u64`; widen any `u16` you stored it in.
 - **Signature keys.** `KeyPair::from_pkcs8(a, der)` is `KeyPair::from_pkcs8_der(a, der)`, `key.pkcs8_der()` is `key.to_pkcs8_der()`, and `key.public_key()` returns `&[u8]`: call `.to_vec()` where you kept the `Vec`.
-- **Hashing.** `digest::digest(h, data)` and `digest::Hasher::new(h)` return a `Result`; a hash the backend does not implement is refused with `CryptoError::Unavailable`.
+- **Hashing takes an `Admitted`.** `digest::digest(h, data)` is `digest::digest(&admitted, h, data)` and `digest::Hasher::new(h)` is `digest::Hasher::new(&admitted, h)`; both return a `Result` and refuse a hash the profile does not admit (`CryptoError::NotInProfile`, or `CryptoError::Unavailable` for one the module line lacks; so `cnsa2` refuses SHA-256), then one the backend does not implement (`CryptoError::Unavailable`). `digest::sha256(data)` is removed: call `digest::digest(&admitted, HashAlgorithm::Sha256, data)` and convert the `Vec<u8>` to the fixed length you need. `digest::sha256_hex` is removed: format the digest yourself (§18).
 - **Parse errors.** `ParseAlgorithmError` and `ParseProfileError` are `#[non_exhaustive]` tuple structs: read the message with `.0`, and do not construct or destructure one.
-- **New variants and fields.** `Algorithm` has `Mac`, `Kdf`, `KeyAgreement` and `Aead`; `ProfileSpec` has `macs`, `kdfs`, `key_agreements` and `aeads`; `Options` has `cnsa1_unclassified_nss`; `CryptoError` and `Family` have new variants.
+- **New variants and fields.** `Algorithm` has `Mac`, `Kdf`, `KeyAgreement` and `Aead`; `HashAlgorithm` has `Sha3_256`, `Sha3_384` and `Sha3_512`; `ProfileSpec` has `macs`, `kdfs`, `key_agreements`, `aeads` and `hashes`; `Options` has `cnsa1_unclassified_nss`; `CryptoError` and `Family` have new variants.
 - **`ParseAlgorithmError`** displays as "unknown algorithm name …", since `KeyAgreementAlgorithm` parses with it too.
 - **Sealed boxes.** `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`; a blob sealed under an empty domain by 0.9.0 no longer opens.
 - **Sealed boxes take an `Admitted`.** `sealbox::seal(&admitted, recipient, ..)`, `sealbox::open(&admitted, key, ..)`, `sealbox::PrivateKey::generate(&admitted)` and `sealbox::PrivateKey::from_pkcs8_der(&admitted, der)` refuse unless the profile admits ECDH on P-384, HKDF-SHA384 and AES-256-GCM, so `bsi` and `cnsa2` refuse the sealed box. `PrivateKey::to_pkcs8_der()` is unchanged; `PrivateKey::public_key()` is now the raw public key, the uncompressed point, and the `PublicKey` to seal to is `PrivateKey::recipient()`. The wire format is unchanged: a blob sealed by 0.9.0 opens.
@@ -394,3 +394,26 @@ let opened = key.open_in_place(&nonce, aad, &mut buf)?;
 - **The sealed box** uses AES-256-GCM through `aead::Key`, so its profile must admit AES-256-GCM too.
 - **Formats `aead` cannot seal.** HPKE and MLS nonces come from their key schedules, and `aead` takes no caller nonce for a seal ([`profiles.md`](profiles.md) §4, item 20).
 - **`Debug`** prints the algorithm only.
+
+## 18. Hashing under a profile
+
+```rust
+use crypto_profile_awslc4::{Family, HashAlgorithm, Options, Profile, admit, assert_admitted_approved, digest};
+
+let admitted = admit(Profile::Cnsa2, Options::default());
+assert_admitted_approved(&admitted, &[Family::Hash])?; // passes on 3.x; refuses on 4.x today, see profiles.md §14
+let hash = admitted.hashes()[0]; // the profile's first choice, SHA-384 under cnsa2
+let one_shot = digest::digest(&admitted, hash, message)?;
+let mut hasher = digest::Hasher::new(&admitted, HashAlgorithm::Sha384)?;
+hasher.update(part_one);
+hasher.update(part_two);
+let streamed = hasher.finish();
+```
+
+- **Algorithms.** SHA-256, SHA-384 and SHA-512 (FIPS 180-4), SHA3-256, SHA3-384 and SHA3-512 (FIPS 202). Which profiles admit which: [`profiles.md`](profiles.md) §14. `preferred` and `cnsa2` refuse SHA-3, `cnsa2` refuses SHA-256, and `cnsa1` admits SHA-384 alone, with SHA-256 too under `Options::cnsa1_unclassified_nss`.
+- **Refusals.** `digest::digest` and `Hasher::new` refuse a hash the profile does not admit (`CryptoError::NotInProfile`, or `CryptoError::Unavailable` for one the module line lacks), before any hashing. A format fixed at SHA-256, such as a content address, cannot be produced under `cnsa2` ([`profiles.md`](profiles.md) §4, item 10).
+- **Full-length digests.** 32, 48 or 64 bytes, `HashAlgorithm::output_len()`. No truncation. A caller that needs a fixed-size array converts: `<[u8; 32]>::try_from(d.as_slice())`. Hexadecimal is the caller's to format.
+- **Streaming.** `Hasher::update` takes the message in any number of parts; `finish` gives what `digest` gives for their concatenation. `Hasher` is not `Clone`, so a partial hash cannot be forked, and `Debug` prints the algorithm only.
+- **Lengths.** Any message length; the certificates sampled 0-65536 bits and the large-message sizes ([`profiles.md`](profiles.md) §4, item 24). A SHA-256 hasher fed 2^61 bytes or more then gives a non-conforming digest from `finish`, because the module's bit count wraps silently; `update` panics only once the bytes fed to one hasher pass `u64::MAX` ([`profiles.md`](profiles.md) §4, item 28).
+- **A hash is not a MAC.** It gives no keyed integrity and derives no key: use `hmac` (§13) or `kdf` (§14).
+- **Names.** `HashAlgorithm::as_str()` and `FromStr` use `sha256`, `sha384`, `sha512`, `sha3-256`, `sha3-384` and `sha3-512`, matched exactly.

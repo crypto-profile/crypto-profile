@@ -1,0 +1,275 @@
+[
+ {
+  "hash": "sha256",
+  "source": "SHA256.pdf, One Block Message Sample",
+  "ascii": "abc",
+  "digest": "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA256.pdf, Two Block Message Sample",
+  "ascii": "abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+  "digest": "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA384.pdf, One Block Message Sample",
+  "ascii": "abc",
+  "digest": "cb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA384.pdf, Two Block Message Sample",
+  "ascii": "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+  "digest": "09330c33f71147e83d192fc782cd1b4753111b173b3b05d22fa08086e3b0f712fcc7c71a557e2db966c3e9fa91746039"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA512.pdf, One Block Message Sample",
+  "ascii": "abc",
+  "digest": "ddaf35a193617abacc417349ae20413112e6fa4e89a97ea20a9eeee64b55d39a2192992a274fc1a836ba3c23a3feebbd454d4423643ce80e2a9ac94fa54ca49f"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA512.pdf, Two Block Message Sample",
+  "ascii": "abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmnhijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu",
+  "digest": "8e959b75dae313da8cf4f72814fc143f8f7779c6eb9f7fa17299aeadb6889018501d289e4900f7e4331b99dec4b5433ac7d329eeb6dd26545e96e55b874be909"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #1",
+  "repeat": "bd",
+  "count": 1,
+  "digest": "68325720aabd7c82f30f554b313d0570c95accbb7dc4b5aae11204c08ffe732b"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #2",
+  "hex": "c98c8e55",
+  "digest": "7abc22c0ae5af26ce93dbb94433a0e0b2e119d014f8e7f65bd56c61ccccd9504"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #3",
+  "repeat": "00",
+  "count": 55,
+  "digest": "02779466cdec163811d078815c633f21901413081449002f24aa3e80f0b88ef7"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #4",
+  "repeat": "00",
+  "count": 56,
+  "digest": "d4817aa5497628e7c77e6b606107042bbba3130888c5f47a375e6179be789fbb"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #5",
+  "repeat": "00",
+  "count": 57,
+  "digest": "65a16cb7861335d5ace3c60718b5052e44660726da4cd13bb745381b235a1785"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #6",
+  "repeat": "00",
+  "count": 64,
+  "digest": "f5a5fd42d16a20302798ef6ed309979b43003d2320d9f0e8ea9831a92759fb4b"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #7",
+  "repeat": "00",
+  "count": 1000,
+  "digest": "541b3e9daa09b20bf85fa273e5cbd3e80185aa4ec298e765db87742b70138a53"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #8",
+  "repeat": "41",
+  "count": 1000,
+  "digest": "c2e686823489ced2017f6059b8b239318b6364f6dcd835d0a519105a1eadd6e4"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #9",
+  "repeat": "55",
+  "count": 1005,
+  "digest": "f4d62ddec0f3dd90ea1380fa16a5ff8dc4c54b21740650f24afc4120903552b0"
+ },
+ {
+  "hash": "sha256",
+  "source": "SHA2_Additional.pdf, SHA-256 #10",
+  "repeat": "00",
+  "count": 1000000,
+  "digest": "d29751f2649b32ff572b5e0a9f541ea660a50f94ff0beedfb0b692b924cc8025"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #1",
+  "repeat": "00",
+  "count": 0,
+  "digest": "38b060a751ac96384cd9327eb1b1e36a21fdb71114be07434c0cc7bf63f6e1da274edebfe76f65fbd51ad2f14898b95b"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #2",
+  "repeat": "00",
+  "count": 111,
+  "digest": "435770712c611be7293a66dd0dc8d1450dc7ff7337bfe115bf058ef2eb9bed09cee85c26963a5bcc0905dc2df7cc6a76"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #3",
+  "repeat": "00",
+  "count": 112,
+  "digest": "3e0cbf3aee0e3aa70415beae1bd12dd7db821efa446440f12132edffce76f635e53526a111491e75ee8e27b9700eec20"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #4",
+  "repeat": "00",
+  "count": 113,
+  "digest": "6be9af2cf3cd5dd12c8d9399ec2b34e66034fbd699d4e0221d39074172a380656089caafe8f39963f94cc7c0a07e3d21"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #5",
+  "repeat": "00",
+  "count": 122,
+  "digest": "12a72ae4972776b0db7d73d160a15ef0d19645ec96c7f816411ab780c794aa496a22909d941fe671ed3f3caee900bdd5"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #6",
+  "repeat": "00",
+  "count": 1000,
+  "digest": "aae017d4ae5b6346dd60a19d52130fb55194b6327dd40b89c11efc8222292de81e1a23c9b59f9f58b7f6ad463fa108ca"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #7",
+  "repeat": "41",
+  "count": 1000,
+  "digest": "7df01148677b7f18617eee3a23104f0eed6bb8c90a6046f715c9445ff43c30d69e9e7082de39c3452fd1d3afd9ba0689"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #8",
+  "repeat": "55",
+  "count": 1005,
+  "digest": "1bb8e256da4a0d1e87453528254f223b4cb7e49c4420dbfa766bba4adba44eeca392ff6a9f565bc347158cc970ce44ec"
+ },
+ {
+  "hash": "sha384",
+  "source": "SHA2_Additional.pdf, SHA-384 #9",
+  "repeat": "00",
+  "count": 1000000,
+  "digest": "8a1979f9049b3fff15ea3a43a4cf84c634fd14acad1c333fecb72c588b68868b66a994386dc0cd1687b9ee2e34983b81"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #1",
+  "repeat": "00",
+  "count": 0,
+  "digest": "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #2",
+  "repeat": "00",
+  "count": 111,
+  "digest": "77ddd3a542e530fd047b8977c657ba6ce72f1492e360b2b2212cd264e75ec03882e4ff0525517ab4207d14c70c2259ba88d4d335ee0e7e20543d22102ab1788c"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #3",
+  "repeat": "00",
+  "count": 112,
+  "digest": "2be2e788c8a8adeaa9c89a7f78904cacea6e39297d75e0573a73c756234534d6627ab4156b48a6657b29ab8beb73334040ad39ead81446bb09c70704ec707952"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #4",
+  "repeat": "00",
+  "count": 113,
+  "digest": "0e67910bcf0f9ccde5464c63b9c850a12a759227d16b040d98986d54253f9f34322318e56b8feb86c5fb2270ed87f31252f7f68493ee759743909bd75e4bb544"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #5",
+  "repeat": "00",
+  "count": 122,
+  "digest": "4f3f095d015be4a7a7cc0b8c04da4aa09e74351e3a97651f744c23716ebd9b3e822e5077a01baa5cc0ed45b9249e88ab343d4333539df21ed229da6f4a514e0f"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #6",
+  "repeat": "00",
+  "count": 1000,
+  "digest": "ca3dff61bb23477aa6087b27508264a6f9126ee3a004f53cb8db942ed345f2f2d229b4b59c859220a1cf1913f34248e3803bab650e849a3d9a709edc09ae4a76"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #7",
+  "repeat": "41",
+  "count": 1000,
+  "digest": "329c52ac62d1fe731151f2b895a00475445ef74f50b979c6f7bb7cae349328c1d4cb4f7261a0ab43f936a24b000651d4a824fcdd577f211aef8f806b16afe8af"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #8",
+  "repeat": "55",
+  "count": 1005,
+  "digest": "59f5e54fe299c6a8764c6b199e44924a37f59e2b56c3ebad939b7289210dc8e4c21b9720165b0f4d4374c90f1bf4fb4a5ace17a1161798015052893a48c3d161"
+ },
+ {
+  "hash": "sha512",
+  "source": "SHA2_Additional.pdf, SHA-512 #9",
+  "repeat": "00",
+  "count": 1000000,
+  "digest": "ce044bc9fd43269d5bbc946cbebc3bb711341115cc4abdf2edbc3ff2c57ad4b15deb699bda257fea5aef9c6e55fcf4cf9dc25a8c3ce25f2efe90908379bff7ed"
+ },
+ {
+  "hash": "sha3-256",
+  "source": "SHA3-256_Msg0.pdf",
+  "repeat": "00",
+  "count": 0,
+  "digest": "a7ffc6f8bf1ed76651c14756a061d662f580ff4de43b49fa82d80a4b80f8434a"
+ },
+ {
+  "hash": "sha3-256",
+  "source": "SHA3-256_1600.pdf",
+  "repeat": "a3",
+  "count": 200,
+  "digest": "79f38adec5c20307a98ef76e8324afbfd46cfd81b22e3973c65fa1bd9de31787"
+ },
+ {
+  "hash": "sha3-384",
+  "source": "SHA3-384_Msg0.pdf",
+  "repeat": "00",
+  "count": 0,
+  "digest": "0c63a75b845e4f7d01107d852e4c2485c51a50aaaa94fc61995e71bbee983a2ac3713831264adb47fb6bd1e058d5f004"
+ },
+ {
+  "hash": "sha3-384",
+  "source": "SHA3-384_1600.pdf",
+  "repeat": "a3",
+  "count": 200,
+  "digest": "1881de2ca7e41ef95dc4732b8f5f002b189cc1e42b74168ed1732649ce1dbcdd76197a31fd55ee989f2d7050dd473e8f"
+ },
+ {
+  "hash": "sha3-512",
+  "source": "SHA3-512_Msg0.pdf",
+  "repeat": "00",
+  "count": 0,
+  "digest": "a69f73cca23a9ac5c8b567dc185a756e97c982164fe25859e0d1dcc1475c80a615b2123af1f5f94c11e3e9402c3ac558f500199d95b6d3e301758586281dcd26"
+ },
+ {
+  "hash": "sha3-512",
+  "source": "SHA3-512_1600.pdf",
+  "repeat": "a3",
+  "count": 200,
+  "digest": "e76dfad22084a8b1467fcf2ffa58361bec7628edf5f3fdc0e4805dc48caeeca81b7c13c30adf52a3659584739a2df46be589c51ca1a4a8416df6545a1ce8ba00"
+ }
+]

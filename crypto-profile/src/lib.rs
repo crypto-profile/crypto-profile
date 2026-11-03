@@ -60,10 +60,9 @@ mod options_are_built_from_their_default {}
 /// fn outside_tls(a: Algorithm) -> Option<bool> {
 ///     match a {
 ///         Algorithm::Signature(_) | Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
-///         Algorithm::Cipher(_) | Algorithm::Hash(_) | Algorithm::Protocol(_) => Some(false),
-///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) | Algorithm::Aead(_) => {
-///             Some(true)
-///         }
+///         Algorithm::Cipher(_) | Algorithm::Protocol(_) => Some(false),
+///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) => Some(true),
+///         Algorithm::Aead(_) | Algorithm::Hash(_) => Some(true),
 ///         _ => None,
 ///     }
 /// }
@@ -75,10 +74,9 @@ mod options_are_built_from_their_default {}
 /// fn outside_tls(a: Algorithm) -> Option<bool> {
 ///     match a {
 ///         Algorithm::Signature(_) | Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
-///         Algorithm::Cipher(_) | Algorithm::Hash(_) | Algorithm::Protocol(_) => Some(false),
-///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) | Algorithm::Aead(_) => {
-///             Some(true)
-///         }
+///         Algorithm::Cipher(_) | Algorithm::Protocol(_) => Some(false),
+///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) => Some(true),
+///         Algorithm::Aead(_) | Algorithm::Hash(_) => Some(true),
 ///     }
 /// }
 /// assert_eq!(outside_tls(Algorithm::Mac(MacAlgorithm::HmacSha256)), Some(true));
@@ -107,6 +105,29 @@ mod options_are_built_from_their_default {}
 ///     }
 /// }
 /// assert_eq!(government(Profile::Bsi), Some(true));
+/// ```
+///
+/// ```
+/// use crypto_profile::HashAlgorithm;
+/// fn sha3(h: HashAlgorithm) -> Option<bool> {
+///     match h {
+///         HashAlgorithm::Sha256 | HashAlgorithm::Sha384 | HashAlgorithm::Sha512 => Some(false),
+///         HashAlgorithm::Sha3_256 | HashAlgorithm::Sha3_384 | HashAlgorithm::Sha3_512 => Some(true),
+///         _ => None,
+///     }
+/// }
+/// assert_eq!(sha3(HashAlgorithm::Sha3_384), Some(true));
+/// ```
+///
+/// ```compile_fail,E0004
+/// use crypto_profile::HashAlgorithm;
+/// fn sha3(h: HashAlgorithm) -> Option<bool> {
+///     match h {
+///         HashAlgorithm::Sha256 | HashAlgorithm::Sha384 | HashAlgorithm::Sha512 => Some(false),
+///         HashAlgorithm::Sha3_256 | HashAlgorithm::Sha3_384 | HashAlgorithm::Sha3_512 => Some(true),
+///     }
+/// }
+/// assert_eq!(sha3(HashAlgorithm::Sha3_384), Some(true));
 /// ```
 #[allow(dead_code)]
 mod matches_outside_the_crate_need_a_wildcard {}
@@ -121,7 +142,7 @@ mod matches_outside_the_crate_need_a_wildcard {}
 /// for &h in HashAlgorithm::ALL {
 ///     lens.push(h.output_len());
 /// }
-/// assert_eq!(lens, [32, 48, 64]);
+/// assert_eq!(lens, [32, 48, 64, 32, 48, 64]);
 /// ```
 #[allow(dead_code)]
 mod every_all_is_a_slice {}

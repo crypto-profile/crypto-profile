@@ -34,10 +34,13 @@ fn one_step_alg(k: KdfAlgorithm) -> Result<&'static SskdfDigestAlgorithm, Crypto
 const ZERO_SALT: [u8; 64] = [0; 64];
 
 const _: () = match HashAlgorithm::ALL {
-    [a, b, c] => {
+    [a, b, c, d, e, f] => {
         assert!(a.output_len() <= ZERO_SALT.len());
         assert!(b.output_len() <= ZERO_SALT.len());
         assert!(c.output_len() <= ZERO_SALT.len());
+        assert!(d.output_len() <= ZERO_SALT.len());
+        assert!(e.output_len() <= ZERO_SALT.len());
+        assert!(f.output_len() <= ZERO_SALT.len());
     }
     _ => panic!("a new HashAlgorithm: check ZERO_SALT covers its output length"),
 };
