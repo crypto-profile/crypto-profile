@@ -64,6 +64,8 @@ they are emitted with the `Resolved` line first; backends re-export `Admitted`, 
 and `assert_admitted_approved` at their root beside `Resolved`.)*
 *(Amended 2026-11-01, #33: `hkdf` is now `kdf`; the thirteen modules and the export lines
 are otherwise unchanged.)*
+*(Amended 2026-11-02, #33: `ecdh` joins the public modules, so the body index declares
+fourteen; the export lines are unchanged.)*
 
 The nested body file `sealbox.rs` contains exactly one `mod keys;`. The emitter validates
 `sealbox/` contains only `keys.rs` and inlines that child at its declaration. Other

@@ -2,8 +2,8 @@
 //! admits. A profile is an algorithm set, not a validation claim; whether the running module is
 //! validated for it is a separate check.
 use crate::algorithm::{
-    Algorithm, CipherSuite as C, KdfAlgorithm, KxGroup as K, MacAlgorithm, SignatureAlgorithm as S,
-    TlsSignatureScheme as T, TlsVersion as V,
+    Algorithm, CipherSuite as C, KdfAlgorithm, KeyAgreementAlgorithm, KxGroup as K, MacAlgorithm,
+    SignatureAlgorithm as S, TlsSignatureScheme as T, TlsVersion as V,
 };
 use crate::capability::{Module, capability};
 use crate::error::{CryptoError, Family};
@@ -158,7 +158,7 @@ impl FromStr for Profile {
 }
 
 /// Options applied on top of any profile. The default changes nothing; `cnsa1_unclassified_nss`
-/// widens `cnsa1`'s MACs and KDFs, and the others narrow. Outside this crate, build it from
+/// widens `cnsa1`'s MACs and HKDFs, and the others narrow. Outside this crate, build it from
 /// `Options::default()` and set the fields you need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
@@ -171,7 +171,8 @@ pub struct Options {
     /// Admit HMAC-SHA256 and HKDF-SHA256 under `cnsa1`, as CNSSP 15 (20 October 2016) Annex B
     /// ¶2b (p. B-2) allows SHA-256 in the near term for UNCLASSIFIED NSS data and
     /// community-of-interest separation only. Ignored by every other profile, and by every family
-    /// but message authentication and key derivation. Off by default.
+    /// but message authentication and HKDF. It admits no one-step KDF, and does not widen `cnsa1`'s
+    /// key agreement beyond P-384. Off by default.
     pub cnsa1_unclassified_nss: bool,
 }
 
@@ -217,6 +218,8 @@ pub struct ProfileSpec {
     pub macs: &'static [MacAlgorithm],
     /// Key-derivation functions, for `kdf`; admitted through `admit`, not `resolve`.
     pub kdfs: &'static [KdfAlgorithm],
+    /// Key agreement outside TLS, for `ecdh`; admitted through `admit`, not `resolve`.
+    pub key_agreements: &'static [KeyAgreementAlgorithm],
 }
 
 impl Profile {
@@ -239,7 +242,8 @@ impl Profile {
 /// - Versions: TLS 1.3, TLS 1.2. Suites: all nine. Groups: all seven. Schemes: all eleven. Keys:
 ///   all nine (`crypto_profile::algorithm`, each family's `ALL`).
 /// - MACs: every HMAC in the inventory.
-/// - KDFs: every HKDF in the inventory.
+/// - KDFs: every HKDF and one-step KDF in the inventory.
+/// - Key agreement: ECDH on P-384, P-521 and P-256, and X25519: every curve the backends implement.
 pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -295,6 +299,15 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
         KdfAlgorithm::HkdfSha512,
         KdfAlgorithm::HkdfSha384,
         KdfAlgorithm::HkdfSha256,
+        KdfAlgorithm::OneStepSha512,
+        KdfAlgorithm::OneStepSha384,
+        KdfAlgorithm::OneStepSha256,
+    ],
+    key_agreements: &[
+        KeyAgreementAlgorithm::EcdhP384,
+        KeyAgreementAlgorithm::EcdhP521,
+        KeyAgreementAlgorithm::EcdhP256,
+        KeyAgreementAlgorithm::X25519,
     ],
 };
 
@@ -324,7 +337,11 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 /// - KDFs: HKDF, the two-step method of SP 800-56C Rev. 2 §5, of which RFC 5869 "specifies a
 ///   version" (SP 800-56C Rev. 2, p. 20); the ISM cites SP 800-56C Rev. 2 for combining hybrid
 ///   key-encapsulation components (p. 13). SHA-2 output of at least 224 bits, ISM-1766 (p. 11);
-///   SHA-256 "will not be approved beyond 2030" (p. 11). Decision 0010.
+///   SHA-256 "will not be approved beyond 2030" (p. 11). Decision 0010. The one-step KDF of SP
+///   800-56C Rev. 2 §4, under the same reading of that citation (decision 0011).
+/// - Key agreement: ECDH on P-384, P-521 and P-256, "preferably the NIST P-384 curve", ISM-1761
+///   (p. 8). X25519 excluded: ISM-1761 names only the NIST curves. ECDH "will not be approved
+///   beyond 2030" (p. 8).
 pub const PREFERRED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384, C::Tls13Aes128GcmSha256],
@@ -363,6 +380,14 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
         KdfAlgorithm::HkdfSha512,
         KdfAlgorithm::HkdfSha384,
         KdfAlgorithm::HkdfSha256,
+        KdfAlgorithm::OneStepSha512,
+        KdfAlgorithm::OneStepSha384,
+        KdfAlgorithm::OneStepSha256,
+    ],
+    key_agreements: &[
+        KeyAgreementAlgorithm::EcdhP384,
+        KeyAgreementAlgorithm::EcdhP521,
+        KeyAgreementAlgorithm::EcdhP256,
     ],
 };
 
@@ -377,7 +402,10 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
 ///   ¶8a and fn. 1 (p. 5); RFC 9206 §4 (SHA-384 "for all purposes") and §8 (PRF_HMAC_SHA2_384 or
 ///   PRF_HMAC_SHA2_512 only).
 /// - KDFs: CNSSP 15 names no KDF. ¶8a (p. 5) names RFC 9151, whose §4 approves SHA-384 for HKDF
-///   in TLS 1.3; Annex B (p. B-1) admits SHA-384 and SHA-512. Decision 0010.
+///   in TLS 1.3; Annex B (p. B-1) admits SHA-384 and SHA-512. Decision 0010. No one-step KDF:
+///   RFC 9151 §4 reaches HKDF only.
+/// - No key agreement outside TLS: Annex B ¶1 table (p. B-1) lists ML-KEM-1024 as the only key
+///   establishment.
 pub const CNSA2: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384],
@@ -386,6 +414,7 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
     key_algorithms: &[S::MlDsa87],
     macs: &[MacAlgorithm::HmacSha384, MacAlgorithm::HmacSha512],
     kdfs: &[KdfAlgorithm::HkdfSha384, KdfAlgorithm::HkdfSha512],
+    key_agreements: &[],
 };
 
 /// `cnsa1`: the CNSA 1.0 algorithm set of CNSSP 15 (20 October 2016), Annex B (p. B-1), in the
@@ -405,7 +434,10 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
 /// - MACs: hash "Use SHA-384", Annex B p. B-1; RFC 9151 §4 (SHA-384 for the TLS 1.2 PRF and the
 ///   TLS 1.3 HKDF). `Options::cnsa1_unclassified_nss` adds HMAC-SHA256 under ¶2b (p. B-2).
 /// - KDFs: hash "Use SHA-384", Annex B p. B-1; RFC 9151 §4 (HKDF with SHA-384 in TLS 1.3).
-///   `Options::cnsa1_unclassified_nss` adds HKDF-SHA256 under ¶2b (p. B-2).
+///   `Options::cnsa1_unclassified_nss` adds HKDF-SHA256 under ¶2b (p. B-2). No one-step KDF:
+///   RFC 9151 §4 reaches HKDF only.
+/// - Key agreement: ECDH on P-384, Annex B ¶1 table (p. B-1). `Options::cnsa1_unclassified_nss`
+///   does not widen it: ¶2b (p. B-2) requires NSA consultation for any other curve.
 pub const CNSA1: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -418,6 +450,7 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
     key_algorithms: &[S::EcdsaP384Sha384, S::Rsa3072Sha384, S::Rsa4096Sha384],
     macs: &[MacAlgorithm::HmacSha384],
     kdfs: &[KdfAlgorithm::HkdfSha384],
+    key_agreements: &[KeyAgreementAlgorithm::EcdhP384],
 };
 
 /// `bsi`: BSI TR-02102-2 (TLS) and TR-02102-1, version 2026-01.
@@ -434,7 +467,9 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
 /// - Hybrid groups excluded: TR-02102-2 Table 10 note.
 /// - MACs: HMAC with a Table 4.1 hash (TR-02102-1 §5.2, pp. 49-50; Table 4.1, p. 47).
 /// - KDFs: HKDF (RFC 5869) and the SP 800-56C two-step KDF, TR-02102-1 Table B.1 and §B.1.1
-///   (p. 73), with a Table 4.1 hash (p. 47).
+///   (p. 73), with a Table 4.1 hash (p. 47). The one-step KDF is not among them.
+/// - No key agreement outside TLS: TR-02102-1 Table B.3 (p. 75) recommends only Brainpool curves,
+///   which no backend implements.
 pub const BSI: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -465,6 +500,7 @@ pub const BSI: ProfileSpec = ProfileSpec {
         KdfAlgorithm::HkdfSha384,
         KdfAlgorithm::HkdfSha256,
     ],
+    key_agreements: &[],
 };
 
 /// `fips1403`: NIST SP 800-140C r2 and SP 800-140D r2 with the CMVP lists (updated August 21,
@@ -493,8 +529,11 @@ pub const BSI: ProfileSpec = ProfileSpec {
 /// - RSA 2048, 3072, 4096 keys: FIPS 186-5 §5.1; SP 800-131A r2 Table 2.
 /// - ML-DSA-87 scheme and key: SP 800-140C list §6.2.3.1 (FIPS 204).
 /// - MACs: FIPS 198-1 with SHA-2; SP 800-131A r2 Table 8 (p. 18) and Table 9 (p. 20).
-/// - KDFs: HKDF as the two-step method of SP 800-56C Rev. 2 §5 (pp. 17-20); SP 800-131A r2 §6
-///   (p. 12).
+/// - KDFs: HKDF as the two-step method of SP 800-56C Rev. 2 §5 (pp. 17-20), and the hash-based
+///   one-step method of §4; SP 800-131A r2 §6 (p. 12).
+/// - Key agreement: ECDH on P-384, P-521 and P-256: SP 800-56A r3 Appendix D, Table 24 (p. 132);
+///   IG C.A (p. 135); IG D.F Scenario 2 (pp. 187-188). X25519 excluded: IG C.K Resolution 5
+///   (p. 160).
 pub const FIPS1403: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -546,6 +585,14 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
         KdfAlgorithm::HkdfSha512,
         KdfAlgorithm::HkdfSha384,
         KdfAlgorithm::HkdfSha256,
+        KdfAlgorithm::OneStepSha512,
+        KdfAlgorithm::OneStepSha384,
+        KdfAlgorithm::OneStepSha256,
+    ],
+    key_agreements: &[
+        KeyAgreementAlgorithm::EcdhP384,
+        KeyAgreementAlgorithm::EcdhP521,
+        KeyAgreementAlgorithm::EcdhP256,
     ],
 };
 
@@ -565,7 +612,10 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
 /// - RSA 3072 and 2048 keys: FIPS 186-4 §5.1; RSA 4096: FIPS 140-2 IG A.14 (p. 221).
 /// - MACs: FIPS 140-2 Annex A, Message Authentication 3 (p. 3); SP 800-131A r2 Table 9 (p. 20).
 /// - KDFs: FIPS 140-2 Annex D (p. 1) items 12 and 13, SP 800-56C Rev. 1 and SP 800-56C (2011),
-///   each specifying extraction-then-expansion.
+///   each specifying extraction-then-expansion; the one-step method of SP 800-56C Rev. 1, which
+///   IG D.8 Scenario X1 (p. 241) admits for key agreement.
+/// - Key agreement: ECDH on P-384, P-521 and P-256: Annex D item 3 (SP 800-56A r3), Table 24;
+///   IG D.8 Scenario X1 (p. 241). X25519 excluded: not in Table 24.
 pub const FIPS1402: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -606,6 +656,14 @@ pub const FIPS1402: ProfileSpec = ProfileSpec {
         KdfAlgorithm::HkdfSha512,
         KdfAlgorithm::HkdfSha384,
         KdfAlgorithm::HkdfSha256,
+        KdfAlgorithm::OneStepSha512,
+        KdfAlgorithm::OneStepSha384,
+        KdfAlgorithm::OneStepSha256,
+    ],
+    key_agreements: &[
+        KeyAgreementAlgorithm::EcdhP384,
+        KeyAgreementAlgorithm::EcdhP521,
+        KeyAgreementAlgorithm::EcdhP256,
     ],
 };
 
@@ -719,6 +777,8 @@ pub struct AdmittedSelection {
     pub macs: Vec<MacAlgorithm>,
     /// Key-derivation functions.
     pub kdfs: Vec<KdfAlgorithm>,
+    /// Key agreement.
+    pub key_agreements: Vec<KeyAgreementAlgorithm>,
     /// Entries unavailable on the module line, in family and preference order.
     pub excluded: Vec<Algorithm>,
 }
@@ -743,12 +803,20 @@ fn select_admitted_with(
         macs.extend_from_slice(unclassified_nss_macs(profile));
         kdfs.extend_from_slice(unclassified_nss_kdfs(profile));
     }
+    let mut key_agreements = spec.key_agreements.to_vec();
     let mut excluded = Vec::new();
     retain_available(&mut macs, Algorithm::Mac, &available, &mut excluded);
     retain_available(&mut kdfs, Algorithm::Kdf, &available, &mut excluded);
+    retain_available(
+        &mut key_agreements,
+        Algorithm::KeyAgreement,
+        &available,
+        &mut excluded,
+    );
     AdmittedSelection {
         macs,
         kdfs,
+        key_agreements,
         excluded,
     }
 }
@@ -1012,6 +1080,7 @@ mod tests {
             key_algorithms: &[],
             macs: &[],
             kdfs: &[],
+            key_agreements: &[],
         };
         let empty = |category| {
             Err(CryptoError::EmptyProfile {
@@ -1413,6 +1482,7 @@ mod tests {
             AdmittedSelection {
                 macs: vec![],
                 kdfs: vec![],
+                key_agreements: vec![],
                 excluded: vec![],
             }
         );
@@ -1421,17 +1491,62 @@ mod tests {
     #[test]
     fn select_admitted_records_what_the_module_lacks() {
         use KdfAlgorithm as K;
+        use KeyAgreementAlgorithm as E;
         use MacAlgorithm as M;
+        let lacking = [
+            Algorithm::Mac(M::HmacSha384),
+            Algorithm::Kdf(K::HkdfSha512),
+            Algorithm::Kdf(K::OneStepSha384),
+            Algorithm::KeyAgreement(E::EcdhP521),
+        ];
         assert_eq!(
             select_admitted_with(Profile::Fips1403, &FIPS1403, Options::default(), |a| {
-                a != Algorithm::Mac(M::HmacSha384) && a != Algorithm::Kdf(K::HkdfSha512)
+                !lacking.contains(&a)
             }),
             AdmittedSelection {
                 macs: vec![M::HmacSha512, M::HmacSha256],
-                kdfs: vec![K::HkdfSha384, K::HkdfSha256],
-                excluded: vec![Algorithm::Mac(M::HmacSha384), Algorithm::Kdf(K::HkdfSha512)],
+                kdfs: vec![
+                    K::HkdfSha384,
+                    K::HkdfSha256,
+                    K::OneStepSha512,
+                    K::OneStepSha256
+                ],
+                key_agreements: vec![E::EcdhP384, E::EcdhP256],
+                excluded: lacking.to_vec(),
             }
         );
+    }
+
+    fn strength_bits(k: KeyAgreementAlgorithm) -> usize {
+        match k {
+            KeyAgreementAlgorithm::EcdhP256 | KeyAgreementAlgorithm::X25519 => 128,
+            KeyAgreementAlgorithm::EcdhP384 => 192,
+            KeyAgreementAlgorithm::EcdhP521 => 256,
+        }
+    }
+
+    #[test]
+    fn every_admitted_curve_and_kdf_pair_meets_sp_800_56c_section_7() {
+        let on = Options {
+            cnsa1_unclassified_nss: true,
+            ..Options::default()
+        };
+        let mut pairs = 0;
+        for &p in Profile::ALL {
+            for o in [Options::default(), on] {
+                let s = select_admitted(p, o, M4S);
+                for &k in &s.key_agreements {
+                    for &d in &s.kdfs {
+                        pairs += 1;
+                        assert!(
+                            8 * d.hash().output_len() >= strength_bits(k),
+                            "{p} {o} {k:?} {d:?}"
+                        );
+                    }
+                }
+            }
+        }
+        assert_eq!(pairs, 2 * (4 * 6 + 3 * 6 + 3 * 6 + 3 * 6) + 1 + 2);
     }
 
     #[test]

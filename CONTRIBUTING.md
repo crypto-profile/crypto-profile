@@ -59,12 +59,12 @@ For coverage and mutation, use cargo-llvm-cov 0.8.7 and cargo-mutants 27.1.0. Us
 
 ```sh
 RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
-RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo mutants --workspace --no-shuffle
+ci/quality.sh mutants-diff crypto-profile-awslc4 origin/main
 cargo llvm-cov --manifest-path crypto-profile-awslc3/Cargo.toml --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
-ci/quality.sh mutants crypto-profile-awslc3
+ci/quality.sh mutants-diff crypto-profile-awslc3 origin/main
 ```
 
-Per-change mutation checks can use `cargo mutants --in-diff <diff>`; the final gate runs both full workspaces. CI runs the full mutation set weekly and on demand (`gh workflow run ci.yml --ref main`), not on every push; run it on demand before a release. Source emission validates both module indices and the nested sealbox child. Inspect the shared files directly with the 4.x direct cfg; run the macro smoke check to verify regeneration and test sensitivity.
+Before a pull request, mutate only what the branch changed: `ci/quality.sh mutants-diff <backend> <base>` runs `cargo mutants --in-diff` over `git diff <base>...HEAD` on that backend (the 4.x run maps the shared body to its direct-mode path), and must report 0 missed and 0 timeouts on both backends. It fails if the diff's file names do not match the files cargo-mutants mutates, which would mean the path mapping broke. The full workspaces (`ci/quality.sh mutants <backend>`) run in CI weekly and on demand (`gh workflow run ci.yml --ref main`), not on every push; run them on demand before a release. Source emission validates both module indices and the nested sealbox child. Inspect the shared files directly with the 4.x direct cfg; run the macro smoke check to verify regeneration and test sensitivity.
 
 `--all-features` matters: the conformance suite needs the backend's `test-support` feature and is skipped without it.
 
@@ -119,7 +119,7 @@ When you add a value, take it from the registry or the standard, not from the co
 
 A backend is a crate named for its module line. It must:
 
-- expose the same module paths and signatures as `crypto-profile-awslc4` (`aead`, `csr`, `digest`, `fips`, `hmac`, `kdf`, `random`, `sealbox`, `signature`, `tls`) and re-export the core crate;
+- expose the same module paths and signatures as `crypto-profile-awslc4` (`aead`, `csr`, `digest`, `ecdh`, `fips`, `hmac`, `kdf`, `random`, `sealbox`, `signature`, `tls`) and re-export the core crate;
 - declare `pub const MODULE: Module`, with the linkage taken from the build, never assumed. If the build cannot report it, the build fails;
 - run the shared suite from its own tests:
 
@@ -142,7 +142,9 @@ The suite checks the backend against the known answers, walks every capability c
 - `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`, with `KeyPair` implementing `rcgen::SigningKey`;
 - `digest::digest`;
 - `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
-- `sealbox::PrivateKey::from_pkcs8_der` and `sealbox::open`.
+- `admit`, `Admitted::macs`, `Admitted::kdfs` and `Admitted::key_agreements`, `hmac::Key`, `kdf::derive` and `kdf::Spec` (`Hkdf`, `OneStep`, `Dhkem`), and `ecdh::EphemeralKey` with `generate`, `algorithm`, `public_key` and `agree`, and `ecdh::StaticKey` with `from_pkcs8_der`, `from_scalar`, `algorithm`, `public_key` and `agree`;
+- `test_support::ecdh_shared_secret`, under the `test-support` feature;
+- `sealbox::PrivateKey::generate`, `sealbox::PrivateKey::from_pkcs8_der`, `sealbox::PrivateKey::recipient`, `sealbox::seal` and `sealbox::open`.
 
 A backend instantiates the provider with `crypto_profile::provider!(crate::provider_arms)`. Only `crypto-profile-awslc4` also carries the direct-mode `#[path]` module (`crypto-profile-awslc4/src/lib.rs`), so clippy, coverage and cargo-mutants see each provider file once, through that backend ([decision 0005](docs/decisions/0005-provider-source.md)); another backend instantiates the macro only, and its own code, `provider_arms` included, is ordinary code, linted, measured and mutated like the rest of the backend. It supplies a `provider_arms` module with three items: `pub(crate) fn load_pqdsa(pkcs8: &rustls::pki_types::PrivatePkcs8KeyDer<'_>) -> Option<std::sync::Arc<dyn rustls::sign::SigningKey>>`, which loads the ML-DSA keys the backend's module signs with (ML-DSA-44, -65 and -87 on 4.x) and returns `None` on a backend that has none; `pub(crate) static PQDSA_ALL: &[&dyn rustls::pki_types::SignatureVerificationAlgorithm]`, the ML-DSA certificate-chain verifiers (ML-DSA-44, -65 and -87 on 4.x); and `pub(crate) static PQDSA_MAPPING: &[(rustls::SignatureScheme, &[&dyn rustls::pki_types::SignatureVerificationAlgorithm])]`, the ML-DSA handshake schemes (ML-DSA-87 on 4.x). A backend without ML-DSA leaves both statics empty. A new provider file is listed in `crypto-profile/src/provider/mod.rs`, which is the only module list ([decision 0005](docs/decisions/0005-provider-source.md)).
 

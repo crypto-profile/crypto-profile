@@ -17,8 +17,9 @@ One reviewed place for an application's cryptographic choices:
   - random bytes;
   - AEAD with module-chosen nonces;
   - HMAC under a profile, admitted with `admit` outside TLS and keyed through `hmac::Key`;
-  - key derivation (HKDF) under a profile, admitted with `admit` and derived through `kdf::derive`;
-  - a sealed box;
+  - key derivation (HKDF and the one-step KDF) under a profile, admitted with `admit` and derived through `kdf::derive`;
+  - ECDH key agreement under a profile, through `ecdh::EphemeralKey` and `ecdh::StaticKey`, each completing into `kdf` (HKDF, the one-step KDF, or RFC 9180's DHKEM) so the shared secret never leaves the crate;
+  - a sealed box under a profile;
   - signature keys, signing and verification;
   - certificate-request generation.
 - **A capability table** that records, for each certified or submitted module and each algorithm, whether the backend implements it and what the published evidence says about it: the module's security policy, cited by table for every sourced cell, or, for a module with no published security policy, one CAVP certificate, which is never an approval ([decision 0004](docs/decisions/0004-algorithm-tested.md)).

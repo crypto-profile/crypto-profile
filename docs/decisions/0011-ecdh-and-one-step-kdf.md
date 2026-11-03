@@ -1,0 +1,92 @@
+# 0011: ECDH and the one-step KDF
+
+Date: 2026-11-02. Status: accepted.
+
+## Context
+
+Before 0.10.0 the crate had no key agreement outside TLS. `sealbox` did P-384 ECDH internally, on its own key types and through its own HKDF calls, and no profile governed it. A consumer that wraps keys with ECDH (JOSE `ECDH-ES`, an HPKE-style KEM) had no ECDH, and no one-step KDF, under a profile. The API and its rules below come from the defining standards and the RFCs that profile them; each profile then admits from its own regime's text (decision 0008). A consumer's usage is never the authority.
+
+## Decision
+
+**Schemes.** `ecdh` offers one-pass Diffie-Hellman (SP 800-56A Rev. 3 §6.2.2.2, C(1e, 1s)) in both roles: `ecdh::EphemeralKey` for the party that generates a key for one agreement, and `ecdh::StaticKey` for the party whose key is imported. CMS (RFC 5753 §3.1), JOSE (RFC 7518 §4.6) and HPKE (RFC 9180 §4.1) use this scheme; TLS uses ephemeral-ephemeral, inside rustls. Static-static (C(0e, 2s), §6.3.2) is not offered: it needs a fresh nonce in the fixed information for every transaction (§6.3, p. 102), which the crate cannot supply. ECMQV and key confirmation are not offered (maintainer, 2026-11-01).
+
+**The shared secret never leaves the crate.** `agree` completes into `kdf` in the same call: Z goes only to the KDF (SP 800-56A Rev. 3 §5.8, p. 53; RFC 9180 §4.1; RFC 7518 §4.6). There is no public function that returns Z. The test hook `test_support::ecdh_shared_secret` is compiled only for the crate's tests and under the `test-support` feature. Enabling `test-support` outside a test build exposes the raw shared secret, so a production dependency graph must not enable it.
+
+**KDFs after agreement.** HKDF (decision 0010) and the one-step KDF of SP 800-56C Rev. 2 §4.1 with a hash (option 1), `kdf::Spec::OneStep { algorithm, fixed_info }`, which is RFC 7518's Concat KDF. The one-step KDF keeps HKDF's rules: an empty `fixed_info` is refused under every profile but `unrestricted`, an empty secret is refused, and the output is 1 to 2^30 bytes, AWS-LC's `SSKDF_MAX_INPUT_LEN` on both module lines, inside §4.1's bound of (2^32 − 1) × HashLen bits. `kdf::derive` takes either specification.
+
+**DHKEM (maintainer, 2026-11-02).** `kdf::Spec::Dhkem { algorithm }` makes `agree` compute RFC 9180 §4.1 `ExtractAndExpand(dh, kem_context)`: `LabeledExtract("", "eae_prk", dh)` then `LabeledExpand(eae_prk, "shared_secret", kem_context, Nsecret)`, with `suite_id = "KEM" ‖ I2OSP(kem_id, 2)` and `kem_context = enc ‖ pkRm`, the ephemeral public key then the static one, in both roles: `EphemeralKey::agree` is `Encap`'s side and `StaticKey::agree` `Decap`'s. The crate's raw public-key forms are RFC 9180's `SerializePublicKey`. Only the RFC 9180 §7.1 Table 2 pairings are taken: P-256 with HKDF-SHA256 (`kem_id` 0x0010), P-384 with HKDF-SHA384 (0x0011), P-521 with HKDF-SHA512 (0x0012) and X25519 with HKDF-SHA256 (0x0020). Any other pairing, a one-step algorithm, and `Spec::Dhkem` passed to `kdf::derive`, which has no keys, are `KdfSpecMismatch`, before admission; an output other than `Nsecret` (the hash's length) is `KdfOutputLength`. The KDF is admitted with `admit_kdf`. The labelled input keying material holds Z, so it is built zeroizing inside the crate. The rest of HPKE, its key schedule and AEAD, is the consumer's, from the returned shared secret through `kdf::derive`.
+
+The HMAC-based one-step option, KMAC and the ANSI X9.63 KDF are not offered; AWS-LC has no X9.63 KDF.
+
+**Public keys.** A peer's NIST-curve key is an uncompressed SEC 1 point (65, 97 or 133 bytes); an X25519 key is 32 bytes. Compressed and hybrid points, and SubjectPublicKeyInfo wrappers, are refused before the module is called, so the 3.x and 4.x lines see the same inputs: the 4.x module alone decodes hybrid points and explicit-parameter SubjectPublicKeyInfos. The module then validates the key: `EC_KEY_check_fips` runs when the key is parsed and again inside the derivation, which covers SP 800-56A Rev. 3 §5.6.2.3.3 steps 1 to 3; step 4 holds because P-256, P-384 and P-521 have cofactor 1. That is the partial validation RFC 9180 §7.1.4, RFC 8725 §3.4 and RFC 8422 §5.11 require, and the full validation SP 800-56A Rev. 3 §5.6.2.2.1 requires for a static key. An X25519 agreement whose shared secret is all zeros is refused (RFC 7748 §6.1; RFC 8446 §7.4.2). Every one of these refusals is `CryptoError::KeyAgreementPeerKey`.
+
+**Keys.** An ephemeral key is generated in the module and never exported; `agree` consumes it (SP 800-56A Rev. 3 §5.6.3.3, p. 47; RFC 7518 §4.6; RFC 9180 §9). A static key is imported only: as a DER private key in one of the forms below, or as a raw private key of exactly the field length (32, 48 or 66 bytes, big-endian), or the 32-byte RFC 7748 key for X25519. The module refuses a zero scalar, or one not below the curve order. An X25519 static key is imported raw; `from_pkcs8_der` refuses one. `ecdh` neither generates nor exports a static key: it comes from the owner's PKI or HSM tooling. `sealbox::PrivateKey` keeps its own P-384 generation and PKCS#8 export, because the sealed box's recipients have always made their keys that way. The module cleanses a private key when it is freed. The crate-internal `ecdh::spki_point`, which reads the point out of a SubjectPublicKeyInfo, requires the canonical named-curve SubjectPublicKeyInfo header for its curve followed by an uncompressed point (so exactly P-256 91, P-384 120, P-521 158 or X25519 44 bytes), because the module accepts an SPKI followed by trailing bytes, which would otherwise let `spki ‖ other point` yield the other point.
+
+**Private-key structure (maintainer, 2026-11-02).** The crate validates a private key's structure against the RFCs itself, before the module parses it, so a second backend can replace AWS-LC without changing what is accepted. `StaticKey::from_pkcs8_der` takes exactly one DER SEQUENCE spanning the input, in one of two forms:
+
+- an RFC 5958 §2 `PrivateKeyInfo` of version v1 (INTEGER 0), with privateKeyAlgorithm exactly `id-ecPublicKey` and the key's namedCurve (RFC 5480 §2.1.1: the parameters MUST be present, and only namedCurve is taken), privateKey an OCTET STRING holding exactly one `ECPrivateKey`, then optional `[0]` attributes, each a SEQUENCE of an OBJECT IDENTIFIER and a SET whose values are not interpreted. Version v2 and its `[1]` publicKey are refused: RFC 5958 §2 sets v2 only when publicKey is present, and RFC 5915 §1 and RFC 5958 §2 put an EC public key in `ECPrivateKey`;
+- an RFC 5915 §3 `ECPrivateKey` alone, with its parameters, which §3 requires.
+
+The `ECPrivateKey` (RFC 5915 §3, explicit tags) holds version 1; a privateKey of exactly ceiling(log2(n)/8) bytes, 32, 48 or 66, so a scalar with its leading zeros stripped is refused; optional `[0]` parameters naming the key's curve, which inside a `PrivateKeyInfo` must match privateKeyAlgorithm (RFC 5915 §1 a); and an optional `[1]` publicKey, a BIT STRING with no unused bits holding an uncompressed point of the curve's length (RFC 5480 §2.2), as a peer key must be. After the import, a carried publicKey must be the key's own public key; RFC 5915 §3 makes the field a convenience, and one that differs marks a corrupt key. Fields must appear in that order, once each, with nothing after them.
+
+Three refusals go beyond the RFC text. Fields and versions the RFCs do not define, which their ASN.1 extension markers (`...`) allow, are refused; if new ones are defined and emitted, the crate is adjusted then. Only DER is taken, though RFC 5958 §2 says receivers MUST support BER and RFC 5915 §4 says they SHOULD. `id-ecDH` and `id-ecMQV`, which RFC 5480 §2.1.2 defines and RFC 5915 §1 a) permits as the algorithm, are refused. Every one of these refusals is `CryptoError::KeyAgreementPrivateKey`.
+
+**DER only, whatever the backend (maintainer, 2026-11-02).** On 2026-11-02, both module lines (4.x and 3.x) were given fourteen BER encodings of a P-256 key: non-minimal and indefinite lengths on the outer and inner SEQUENCEs, non-minimal version INTEGERs, and constructed OCTET STRINGs for the privateKey and for the scalar. Both lines refused all fourteen and accepted the DER encoding, so refusing BER loses no key either line imports. The crate checks the DER encoding itself, before the backend parses the key, so a backend that accepts BER does not widen what the crate takes. A backend added later is not relied on for this check and need not refuse BER itself. Accepting BER would mean changing the crate's check and this decision once, for every backend.
+
+**Refusal order.** A key admits its curve when it is built (`EphemeralKey::generate`, `StaticKey::from_pkcs8_der`, `StaticKey::from_scalar`), before it reads any key material, and keeps the `Admitted` it was built under. `agree` then refuses, in this order: a `kdf::Spec` whose algorithm is not of its kind, or a DHKEM pairing outside RFC 9180 Table 2 (`KdfSpecMismatch`); a KDF the profile does not admit; an empty `info` or `fixed_info` under a profile that refuses one; an output length outside the KDF's bounds, or other than `Nsecret` for DHKEM; a peer key in the wrong form; and a peer key the module refuses.
+
+**Profiles.**
+
+| Profile | ECDH, in preference order | Governing text |
+|---|---|---|
+| `unrestricted` | P-384, P-521, P-256, X25519 | The backends' inventory; no government text |
+| `preferred` | P-384, P-521, P-256 | ISM-1761 (p. 8), "preferably the NIST P-384 curve"; X25519 excluded, because ISM-1761 names only the NIST curves |
+| `fips1403` | P-384, P-521, P-256 | SP 800-56A Rev. 3 Appendix D, Table 24 (p. 132); IG C.A (p. 135); IG D.F Scenario 2 (pp. 187-188). X25519 excluded: IG C.K Resolution 5 (p. 160) |
+| `fips1402` | P-384, P-521, P-256 | FIPS 140-2 Annex D item 3 (SP 800-56A Rev. 3), Table 24; IG D.8 Scenario X1 (p. 241) |
+| `cnsa1` | P-384 | CNSSP 15 (2016) Annex B ¶1 (p. B-1). `Options::cnsa1_unclassified_nss` does not widen it: ¶2b (p. B-2) requires NSA consultation for any other curve |
+| `bsi` | none | TR-02102-1 Table B.3 (p. 75) recommends only Brainpool curves; the NIST curves appear only in the Appendix C.2 MLS suites and the TR-02102-2 TLS fallback, neither of which is general (maintainer, 2026-11-01). No backend implements Brainpool |
+| `cnsa2` | none | CNSSP 15 (December 2024) Annex B ¶1 (p. B-1): ML-KEM-1024 is the only key establishment |
+
+| Profile | One-step KDF, in preference order | Governing text |
+|---|---|---|
+| `unrestricted`, `preferred`, `fips1403`, `fips1402` | SHA-512, SHA-384, SHA-256, after the HKDFs | SP 800-56C Rev. 2 §4 (pp. 11-16). The ISM names no KDF form, so `preferred` takes decision 0010's reading of its SP 800-56C Rev. 2 citation. FIPS 140-2 reaches it through Annex D item 12 (SP 800-56C Rev. 1) and IG D.8 Scenario X1 |
+| `cnsa1`, `cnsa2` | none | CNSSP 15 names no KDF; RFC 9151 §4 reaches HKDF only |
+| `bsi` | none | TR-02102-1 Table B.1 (p. 73) recommends HKDF and the two-step KDF only |
+
+Every admitted pairing of a curve and a KDF meets SP 800-56C Rev. 2 §7 (p. 26): the hash's output is at least the curve's security strength, because SHA-256 covers P-521's 256 bits. A test walks every pair.
+
+**Module cells.**
+
+| Cell | 3.x | 4.x dynamic | 4.x static |
+|---|---|---|---|
+| ECDH P-256, P-384, P-521 | `NotApproved` | `AlgorithmTested` on A7864 | `Unverified` |
+| X25519 | `NotApproved` | `NotApproved` | `NotApproved` |
+| One-step SHA-256, SHA-384, SHA-512 | `Approved` | `AlgorithmTested` on A7856 | `Unverified` |
+
+- **3.x ECDH outside TLS is `NotApproved`.** Table 5 (p. 10) lists KAS-ECC-SSC, but the security policy makes the SP 800-56A Rev. 3 assurances conditional on "an application that implements the 'TLS protocol'" and on ephemeral keys from the module's key pair generation, and says "The module does not support static keys" (p. 20, both policies). An `Approved` cell outside TLS would claim more than the policy states.
+- **4.x ECDH is `AlgorithmTested` on A7864**, which shows KAS-ECC-SSC Sp800-56Ar3 (ephemeralUnified, initiator and responder) and ECDSA KeyGen (FIPS 186-5) for each curve, the pair decision 0004 §3 requires. The certificate sampled the ephemeral-ephemeral scheme only (residual 2).
+- **X25519 is `NotApproved` on every module, in key agreement and as a TLS group** (maintainer, 2026-11-02, for the TLS group cell). IG C.K Resolution 5 (p. 160): X25519 is "not compliant to SP 800-56Arev3". On the 4.x line, which has no security policy, these are the two cells sourced from implementation guidance rather than a module's own evidence; the guidance settles them for every module. The 4.x `Kx(X25519)` cell was `Unverified`, and the 3.x one `NotApproved` on its absence from Table 5; both now cite IG C.K.
+- **3.x one-step is `Approved`.** Table 5 (p. 10) lists "KDA OneStep SP800-56Cr2" (shared secret 224-2048 bits, derived key 2048 bits), and the approved services list "Key Derivation with KDA OneStep" with indicator 1 (p. 26 of #5314, p. 27 of #5298). The Table 5 row names no hash. Its certificates do: every one of the eight each Table 5 row cites (A6288, A6289, A6291, A6295 and A6312-A6315 for #5314; A6176-A6180, A6184, A6278 and A6279 for #5298) lists SHA2-256, SHA2-384 and SHA2-512 with fixed info uPartyInfo||vPartyInfo, in byte-identical capability bodies (CAVP pages read 2026-11-02).
+- **4.x one-step is `AlgorithmTested` on A7856.** A7855's KDA OneStep lists SHA3 hashes only; A7856 is the lowest-numbered certificate with SHA2-256, SHA2-384 and SHA2-512 (fixed info uPartyInfo||vPartyInfo, shared secret 224-2048 bits, derived key 2048 bits). The same capability appears on A7857-A7859 and A7863 (x86) and A7872 (arm64).
+
+`assert_admitted_approved(&admitted, &[Family::KeyAgreement])` walks these cells. It refuses every profile that admits ECDH, on both lines.
+
+**`sealbox` on `ecdh` and `kdf`.** `sealbox::PrivateKey` wraps an `ecdh::StaticKey`, and `seal` generates an `ecdh::EphemeralKey`; both derive through `kdf::Spec::Hkdf` with HKDF-SHA384, salt = domain, info = domain ‖ suite label ‖ ephemeral point ‖ recipient SubjectPublicKeyInfo. The construction and the version-1 wire format are unchanged: a blob sealed by 0.9.0 opens. `seal`, `open`, `PrivateKey::generate` and `PrivateKey::from_pkcs8_der` take `&Admitted` and refuse unless the profile admits ECDH on P-384 and HKDF-SHA384, so `bsi` and `cnsa2` refuse the sealed box. The empty-domain refusal still comes before any key work. `sealbox::PrivateKey` holds its key once, in the `ecdh::StaticKey` (maintainer, 2026-11-02; decision 0012): `to_pkcs8_der()` keeps 0.9.0's `Result<Zeroizing<Vec<u8>>, CryptoError>`, encoded by the module on each call into a copy the caller owns and that is wiped on drop. `public_key()` is the raw key (the uncompressed point), as `signature::KeyPair::public_key()` is, and `recipient()` is the `sealbox::PublicKey` to seal to. `sealbox::PublicKey::from_spki_der` refuses a SubjectPublicKeyInfo whose point is not uncompressed, as `ecdh` refuses such a peer key, so a hybrid point the 4.x module alone decodes is refused on both lines.
+
+**The 4.x `ensure` exception returns.** Every 4.x cell is available again, so `ensure`'s `Ok(())` mutant is equivalent on that backend, and its single-mutant exception in `.cargo/mutants.toml` is restored, as decision 0012 foresaw.
+
+## Named residuals
+
+1. **Z is not fully destroyed.** AWS-LC's `pkey_ec_derive` leaves Z in a stack buffer it never cleanses, on both lines (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/evp/p_ec.c:144-175`; 0.13.17 `:145-176`). aws-lc-rs 1.17.4 also frees an unwiped heap copy on the 3.x line (`aws-lc-rs-1.17.4/src/evp_pkey.rs:532-540`); 1.18.2 wipes its copy. The crate's own buffers are `Zeroizing`. This falls short of SP 800-56A Rev. 3 §5.8, "destroyed immediately following its use", and the crate cannot fix it without changing the module.
+2. **The certificates sampled the ephemeral-ephemeral scheme only.** Neither line's certificates test one-pass Diffie-Hellman. The 4.x `AlgorithmTested` cells claim A7864's ephemeralUnified sample and nothing more, and the 3.x cells are `NotApproved` outside TLS.
+3. **The approval indicator is invisible and coarse.** The module marks every successful NIST-curve derivation approved, static or ephemeral, TLS or not, and aws-lc-rs keeps the indicator crate-private, so the crate cannot read it.
+4. **The protocol's jobs.** The crate cannot authenticate the public keys (RFC 6090 §10.2; BSI TR-02102-1 §2.3.6), give assurance that a static key's owner holds the private key (SP 800-56A Rev. 3 §5.6.3.2 item 4), keep one static key to one purpose (item 5), or confirm the key (§5.9, optional). The protocol that uses `ecdh` must.
+5. **CMS ECDH (RFC 5753) cannot be built.** It needs the ANSI X9.63 KDF, which AWS-LC lacks.
+6. **The one-step KDF's tested ranges.** The certificates tested shared secrets of 224-2048 bits and a 2048-bit output, with the fixed-info pattern uPartyInfo||vPartyInfo. The crate follows SP 800-56C Rev. 2 instead: any non-empty secret, any output of 1 to 2^30 bytes, any non-empty `fixed_info` the caller encodes.
+7. **Backend exhaustiveness.** The backends' matches over `KeyAgreementAlgorithm` carry a refusing `_` arm (decision 0012); the `ALL` walks catch a curve core gains and a backend lacks.
+
+## Consequences
+
+- An HPKE base-mode KEM is built from `ecdh` with `kdf::Spec::Dhkem`; its key schedule and AEAD are the consumer's.
+- `sealbox` is no longer outside every profile: `bsi` and `cnsa2` refuse it, and its callers pass an `Admitted`.
+- Decision 0001 §3 and §5 and decision 0004 §4 are amended for the two 4.x X25519 cells sourced from implementation guidance; decisions 0008, 0010 and 0012 note what this decision settles.

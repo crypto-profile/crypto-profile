@@ -12,6 +12,15 @@ use std::sync::{Arc, Mutex};
 /// `lib{FIPS_LIBRARY}.so` (Linux) or `lib{FIPS_LIBRARY}.dylib` (macOS).
 pub const FIPS_LIBRARY: &str = env!("CRYPTO_PROFILE_FIPS_LIBRARY");
 
+/// The raw ECDH shared secret between `key` and `peer`, for tests that check it against published
+/// vectors. Never compiled outside `test` and `test-support`.
+pub fn ecdh_shared_secret(
+    key: &crate::ecdh::StaticKey,
+    peer: &[u8],
+) -> Result<zeroize::Zeroizing<Vec<u8>>, crate::CryptoError> {
+    key.shared_secret(peer)
+}
+
 /// What a completed handshake negotiated.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]

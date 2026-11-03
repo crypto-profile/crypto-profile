@@ -1,9 +1,7 @@
+use super::{AGREEMENT, EPHEMERAL_KEY_LEN, admit};
+use crate::Admitted;
+use crate::ecdh::{StaticKey, spki_point};
 use crate::fips::assert_fips_module;
-use aws_lc_rs::agreement::{
-    ECDH_P384, ParsedPublicKey, ParsedPublicKeyFormat, PrivateKey as AgreementKey,
-    UnparsedPublicKey,
-};
-use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der, PublicKeyX509Der};
 use crypto_profile::CryptoError;
 use std::fmt;
 use zeroize::Zeroizing;
@@ -21,15 +19,12 @@ pub struct PublicKey {
 }
 
 impl PublicKey {
-    /// Parses a P-384 SubjectPublicKeyInfo, refusing any other key or encoding.
+    /// Parses a P-384 SubjectPublicKeyInfo holding an uncompressed point, refusing any other key or
+    /// encoding.
     pub fn from_spki_der(der: &[u8]) -> Result<Self, CryptoError> {
         let spki: [u8; SPKI_LEN] = der.try_into().map_err(|_| CryptoError::SealPublicKey)?;
-        let parsed = ParsedPublicKey::try_from(UnparsedPublicKey::new(&ECDH_P384, &spki[..]));
-        let parsed = parsed.map_err(|_| CryptoError::SealPublicKey)?;
-        match parsed.format() {
-            ParsedPublicKeyFormat::X509 => Ok(Self { spki }),
-            _ => Err(CryptoError::SealPublicKey),
-        }
+        spki_point(AGREEMENT, &spki).map_err(|_| CryptoError::SealPublicKey)?;
+        Ok(Self { spki })
     }
 
     /// Parses exactly one canonical `PUBLIC KEY` PEM block holding a P-384 key.
@@ -51,6 +46,12 @@ impl PublicKey {
     pub fn spki_der(&self) -> &[u8] {
         &self.spki
     }
+
+    /// The uncompressed point: the last bytes of a P-384 SubjectPublicKeyInfo, its
+    /// `subjectPublicKey` BIT STRING contents.
+    pub(super) fn point(&self) -> &[u8] {
+        &self.spki[SPKI_LEN - EPHEMERAL_KEY_LEN..]
+    }
 }
 
 impl fmt::Debug for PublicKey {
@@ -59,49 +60,52 @@ impl fmt::Debug for PublicKey {
     }
 }
 
-/// A sealed-box recipient's P-384 private key.
+/// A sealed-box recipient's P-384 private key, held once, as an `ecdh::StaticKey`.
 pub struct PrivateKey {
-    key: AgreementKey,
-    public: PublicKey,
+    key: StaticKey,
+    recipient: PublicKey,
 }
 
 impl PrivateKey {
-    /// Generates a fresh key in the FIPS module.
-    pub fn generate() -> Result<Self, CryptoError> {
-        let generated = assert_fips_module()
-            .and_then(|()| AgreementKey::generate(&ECDH_P384).map_err(|_| CryptoError::Primitive));
-        Self::from_key(generated?)
+    /// Generates a fresh key in the FIPS module. Refuses outside FIPS mode, and under a profile
+    /// that does not admit ECDH on P-384 and HKDF-SHA384.
+    pub fn generate(a: &Admitted) -> Result<Self, CryptoError> {
+        assert_fips_module().and_then(|()| admit(a))?;
+        Self::from_key(StaticKey::generate(a, AGREEMENT)?)
     }
 
-    /// Parses a P-384 PKCS#8 private key.
-    pub fn from_pkcs8_der(der: &[u8]) -> Result<Self, CryptoError> {
-        let parsed = assert_fips_module().and_then(|()| {
-            AgreementKey::from_private_key_der(&ECDH_P384, der)
-                .map_err(|_| CryptoError::SealPrivateKey)
-        });
-        Self::from_key(parsed?)
+    /// Imports a P-384 private key in a form [`crate::ecdh::StaticKey::from_pkcs8_der`] takes.
+    /// Refuses outside FIPS mode, under a profile that does not admit ECDH on P-384 and
+    /// HKDF-SHA384, and any key that function refuses on P-384 (`CryptoError::SealPrivateKey`).
+    pub fn from_pkcs8_der(a: &Admitted, der: &[u8]) -> Result<Self, CryptoError> {
+        assert_fips_module().and_then(|()| admit(a))?;
+        let key = StaticKey::from_pkcs8_der(a, AGREEMENT, der)
+            .map_err(|_| CryptoError::SealPrivateKey)?;
+        Self::from_key(key)
     }
 
-    fn from_key(key: AgreementKey) -> Result<Self, CryptoError> {
-        let spki = key.compute_public_key().and_then(|point| point.as_der());
-        let spki: PublicKeyX509Der<'static> = spki.map_err(|_| CryptoError::Primitive)?;
-        let public = PublicKey::from_spki_der(spki.as_ref())?;
-        Ok(Self { key, public })
+    fn from_key(key: StaticKey) -> Result<Self, CryptoError> {
+        let recipient = PublicKey::from_spki_der(&key.to_spki_der()?)?;
+        Ok(Self { key, recipient })
     }
 
-    /// The key's PKCS#8 DER, in a zeroizing buffer.
+    /// The key's PKCS#8 encoding, encoded by the module on each call into a buffer the caller
+    /// owns and that is wiped on drop.
     pub fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-        let der: Result<Pkcs8V1Der<'static>, _> = self.key.as_der();
-        let der = der.map_err(|_| CryptoError::Primitive)?;
-        Ok(Zeroizing::new(der.as_ref().to_vec()))
+        self.key.to_pkcs8_der()
     }
 
-    /// The matching public key.
-    pub fn public_key(&self) -> &PublicKey {
-        &self.public
+    /// The raw public key: the uncompressed P-384 point.
+    pub fn public_key(&self) -> &[u8] {
+        self.key.public_key()
     }
 
-    pub(super) fn agreement_key(&self) -> &AgreementKey {
+    /// The public key to seal to.
+    pub fn recipient(&self) -> &PublicKey {
+        &self.recipient
+    }
+
+    pub(super) fn agreement_key(&self) -> &StaticKey {
         &self.key
     }
 }
@@ -143,7 +147,9 @@ fn check_canonical(text: &str, spki: &[u8]) -> Result<(), CryptoError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aws_lc_rs::agreement::ECDH_P256;
+    use crate::{Options, Profile, admit};
+    use aws_lc_rs::agreement::{ECDH_P256, PrivateKey as AgreementKey};
+    use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
 
     fn p256_pkcs8() -> Vec<u8> {
         let key = AgreementKey::generate(&ECDH_P256).unwrap();
@@ -151,52 +157,150 @@ mod tests {
         der.as_ref().to_vec()
     }
 
+    fn fips() -> Admitted {
+        admit(Profile::Fips1403, Options::default())
+    }
+
     #[test]
     fn a_generated_key_has_a_120_byte_p384_spki_and_a_redacted_debug() {
-        let key = PrivateKey::generate().unwrap();
-        assert_eq!(key.public_key().spki_der().len(), SPKI_LEN);
+        let key = PrivateKey::generate(&fips()).unwrap();
+        assert_eq!(key.recipient().spki_der().len(), SPKI_LEN);
         assert_eq!(format!("{key:?}"), "PrivateKey(<redacted>)");
-        assert_eq!(format!("{:?}", key.public_key()), "PublicKey(P-384)");
+        assert_eq!(format!("{:?}", key.recipient()), "PublicKey(P-384)");
     }
 
     #[test]
     fn two_generated_keys_differ() {
-        let a = PrivateKey::generate().unwrap();
-        let b = PrivateKey::generate().unwrap();
-        assert_ne!(a.public_key(), b.public_key());
+        let a = PrivateKey::generate(&fips()).unwrap();
+        let b = PrivateKey::generate(&fips()).unwrap();
+        assert_ne!(a.recipient(), b.recipient());
     }
 
     #[test]
-    fn pkcs8_round_trips_into_the_same_public_key_and_does_not_grow() {
-        let key = PrivateKey::generate().unwrap();
+    fn pkcs8_round_trips_into_the_same_key_and_encoding_and_does_not_grow() {
+        let key = PrivateKey::generate(&fips()).unwrap();
         let der = key.to_pkcs8_der().unwrap();
         assert_eq!(der.len(), der.capacity());
-        let back = PrivateKey::from_pkcs8_der(&der).unwrap();
-        assert_eq!(back.public_key(), key.public_key());
+        let back = PrivateKey::from_pkcs8_der(&fips(), &der).unwrap();
+        assert_eq!(back.recipient(), key.recipient());
+        assert_eq!(back.to_pkcs8_der().unwrap(), der);
+    }
+
+    #[test]
+    fn the_raw_public_key_is_the_spkis_point() {
+        let key = PrivateKey::generate(&fips()).unwrap();
+        assert_eq!(key.public_key().len(), EPHEMERAL_KEY_LEN);
+        assert_eq!(key.public_key()[0], 0x04);
+        assert_eq!(key.recipient().point(), key.public_key());
+        assert!(key.recipient().spki_der().ends_with(key.public_key()));
+    }
+
+    #[test]
+    fn keys_refuse_a_profile_without_p384_ecdh_or_hkdf_sha384() {
+        let der = PrivateKey::generate(&fips())
+            .unwrap()
+            .to_pkcs8_der()
+            .unwrap();
+        for p in [Profile::Bsi, Profile::Cnsa2] {
+            let a = admit(p, Options::default());
+            let refused = Err(CryptoError::NotInProfile {
+                profile: p,
+                algorithm: crate::Algorithm::KeyAgreement(AGREEMENT),
+            });
+            assert_eq!(PrivateKey::generate(&a).map(|_| ()), refused, "{p}");
+            assert_eq!(
+                PrivateKey::from_pkcs8_der(&a, &der).map(|_| ()),
+                refused,
+                "{p}"
+            );
+        }
+        for p in [
+            Profile::Preferred,
+            Profile::Cnsa1,
+            Profile::Fips1402,
+            Profile::Unrestricted,
+        ] {
+            let a = admit(p, Options::default());
+            assert!(PrivateKey::generate(&a).is_ok(), "{p}");
+            assert!(PrivateKey::from_pkcs8_der(&a, &der).is_ok(), "{p}");
+        }
+    }
+
+    #[test]
+    fn a_hybrid_or_compressed_point_spki_is_refused() {
+        let key = PrivateKey::generate(&fips()).unwrap();
+        let spki = key.recipient().spki_der();
+        let at = SPKI_LEN - EPHEMERAL_KEY_LEN;
+        let mut hybrid = spki.to_vec();
+        hybrid[at] = 0x06 | (spki[SPKI_LEN - 1] & 1);
+        let mut compressed = crypto_profile::conformance::__hex::decode(
+            "3046301006072a8648ce3d020106052b81040022033200",
+        )
+        .unwrap();
+        compressed.push(0x02 | (spki[SPKI_LEN - 1] & 1));
+        compressed.extend_from_slice(&spki[at + 1..at + 49]);
+        compressed.resize(SPKI_LEN, 0xa5);
+        for bad in [hybrid, compressed] {
+            assert_eq!(bad.len(), SPKI_LEN);
+            assert!(
+                matches!(
+                    PublicKey::from_spki_der(&bad),
+                    Err(CryptoError::SealPublicKey)
+                ),
+                "{bad:02x?}"
+            );
+        }
     }
 
     #[test]
     fn a_p256_or_garbage_private_key_is_refused() {
         for der in [p256_pkcs8(), b"not a key".to_vec()] {
             assert!(matches!(
-                PrivateKey::from_pkcs8_der(&der),
+                PrivateKey::from_pkcs8_der(&fips(), &der),
                 Err(CryptoError::SealPrivateKey)
             ));
         }
     }
 
     #[test]
+    fn a_pkcs8_key_followed_by_other_bytes_is_refused() {
+        let der = PrivateKey::generate(&fips())
+            .unwrap()
+            .to_pkcs8_der()
+            .unwrap();
+        let padded = [&der[..], &[0]].concat();
+        assert!(matches!(
+            PrivateKey::from_pkcs8_der(&fips(), &padded),
+            Err(CryptoError::SealPrivateKey)
+        ));
+    }
+
+    #[test]
+    fn a_pkcs8_key_with_a_field_after_the_private_key_is_refused() {
+        let der = PrivateKey::generate(&fips())
+            .unwrap()
+            .to_pkcs8_der()
+            .unwrap();
+        assert_eq!(&der[..3], &[0x30, 0x81, 0xb6]);
+        let with_null = [&[0x30, 0x81, 0xb8][..], &der[3..], &[0x05, 0x00]].concat();
+        assert!(matches!(
+            PrivateKey::from_pkcs8_der(&fips(), &with_null),
+            Err(CryptoError::SealPrivateKey)
+        ));
+    }
+
+    #[test]
     fn the_public_pem_is_canonical_and_round_trips() {
-        let key = PrivateKey::generate().unwrap();
-        let text = key.public_key().to_pem();
+        let key = PrivateKey::generate(&fips()).unwrap();
+        let text = key.recipient().to_pem();
         assert_eq!(text.len(), PEM_LEN);
         assert!(text.starts_with("-----BEGIN PUBLIC KEY-----\n"));
         assert!(text.ends_with("-----END PUBLIC KEY-----\n"));
         assert!(!text.contains('\r'));
-        assert_eq!(&PublicKey::from_pem(&text).unwrap(), key.public_key());
+        assert_eq!(&PublicKey::from_pem(&text).unwrap(), key.recipient());
         assert_eq!(
-            &PublicKey::from_spki_der(key.public_key().spki_der()).unwrap(),
-            key.public_key()
+            &PublicKey::from_spki_der(key.recipient().spki_der()).unwrap(),
+            key.recipient()
         );
     }
 
@@ -204,10 +308,10 @@ mod tests {
 
     #[test]
     fn a_non_canonical_foreign_or_malformed_public_key_is_refused() {
-        let key = PrivateKey::generate().unwrap();
-        let canonical = key.public_key().to_pem();
-        let other = PrivateKey::generate().unwrap().public_key().to_pem();
-        let spki = key.public_key().spki_der();
+        let key = PrivateKey::generate(&fips()).unwrap();
+        let canonical = key.recipient().to_pem();
+        let other = PrivateKey::generate(&fips()).unwrap().recipient().to_pem();
+        let spki = key.recipient().spki_der();
         let mut reflowed = canonical.replacen('\n', "", 2);
         reflowed.insert(26, '\n');
         reflowed.push('\n');

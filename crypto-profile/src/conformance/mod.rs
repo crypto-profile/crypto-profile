@@ -3,6 +3,7 @@ use crate::{Algorithm, CryptoError, Module, SignatureAlgorithm, TlsSignatureSche
 
 #[doc(hidden)]
 pub mod golden;
+mod key_agreement_tests;
 mod peer_certificate_tests;
 mod peer_identity_tests;
 mod profile_tests;
@@ -174,7 +175,7 @@ pub fn __library_basename(name: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{KdfAlgorithm, KeyAgreementAlgorithm, Linkage, ModuleLine, Options};
+    use crate::{Linkage, ModuleLine, Options};
 
     const M3S: Module = Module {
         line: ModuleLine::AwsLcFips3,
@@ -212,13 +213,6 @@ mod tests {
                 [
                     Algorithm::Signature(ml_dsa),
                     Algorithm::Scheme(TlsSignatureScheme::MlDsa87),
-                    Algorithm::Kdf(KdfAlgorithm::OneStepSha256),
-                    Algorithm::Kdf(KdfAlgorithm::OneStepSha384),
-                    Algorithm::Kdf(KdfAlgorithm::OneStepSha512),
-                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP256),
-                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
-                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP521),
-                    Algorithm::KeyAgreement(KeyAgreementAlgorithm::X25519),
                 ],
                 "{m:?}"
             );
@@ -364,6 +358,52 @@ mod tests {
     }
 
     #[test]
+    fn ecdh_cases_carry_every_field() {
+        assert!(__wycheproof_ecdh_cases("not json").is_empty());
+        for (file, total, first_private) in [
+            (vectors::ECDH_P256, 355, 32),
+            (vectors::ECDH_P384, 790, 48),
+            (vectors::ECDH_P521, 661, 66),
+            (vectors::X25519, 518, 32),
+        ] {
+            let cases = __wycheproof_ecdh_cases(file);
+            assert_eq!(cases.len(), total);
+            let first = &cases[0];
+            assert_eq!((first.tc_id, first.private.len()), (1, first_private));
+            assert_eq!(first.result, "valid");
+            assert!(!first.public.is_empty() && !first.shared.is_empty());
+            assert!(!first.flags.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_scalar_is_fixed_to_the_field_length() {
+        assert_eq!(__fixed_len_scalar(&[0, 0, 1, 2], 3), [0, 1, 2]);
+        assert_eq!(__fixed_len_scalar(&[1, 2], 4), [0, 0, 1, 2]);
+        assert_eq!(__fixed_len_scalar(&[0, 0], 2), [0, 0]);
+        assert_eq!(__fixed_len_scalar(&[3, 2, 1], 2), [3, 2, 1]);
+    }
+
+    #[test]
+    fn one_step_cases_carry_every_field() {
+        assert!(__acvp_one_step_cases("not json").is_empty());
+        let cases = __acvp_one_step_cases(vectors::KDA_ONE_STEP);
+        assert_eq!(cases.len(), 78);
+        for (hash, count) in [("SHA2-256", 23), ("SHA2-384", 10), ("SHA2-512", 45)] {
+            assert_eq!(
+                cases.iter().filter(|c| c.hash == hash).count(),
+                count,
+                "{hash}"
+            );
+        }
+        assert!(cases.iter().all(|c| !c.z.is_empty()
+            && !c.fixed_info.is_empty()
+            && !c.dkm.is_empty()
+            && c.tc_id > 0
+            && (c.source == "KDA-OneStep-Sp800-56Cr2" || c.source == "KAS-IFC-Sp800-56Br2")));
+    }
+
+    #[test]
     fn aead_cases_keep_only_the_named_sizes() {
         let file = r#"{"testGroups":[
             {"keySize":128,"ivSize":96,"tagSize":128,"tests":[{"tcId":1,"key":"00","iv":"00","aad":"","msg":"","ct":"","tag":"00","result":"valid"}]},
@@ -468,6 +508,97 @@ pub fn __wycheproof_kdf_cases(file: &str) -> Vec<KdfCase> {
     out
 }
 
+/// One Wycheproof ECDH (`EcdhEcpointTest`) or X25519 (`XdhComp`) case.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct EcdhCase {
+    /// The peer's public key: a SEC 1 point, or 32 bytes for X25519.
+    pub public: Vec<u8>,
+    /// The private key: a big-endian integer of any length, or 32 bytes for X25519.
+    pub private: Vec<u8>,
+    /// The shared secret; empty for an invalid case.
+    pub shared: Vec<u8>,
+    /// `valid`, `acceptable` or `invalid`.
+    pub result: String,
+    /// The case's flags.
+    pub flags: Vec<String>,
+    /// The Wycheproof test-case id.
+    pub tc_id: u64,
+}
+
+/// Every case of a Wycheproof ECDH point or X25519 file.
+#[doc(hidden)]
+pub fn __wycheproof_ecdh_cases(file: &str) -> Vec<EcdhCase> {
+    let v: serde_json::Value = serde_json::from_str(file).unwrap_or_default();
+    let d = |x: &serde_json::Value| hex::decode(x.as_str().unwrap_or_default()).unwrap_or_default();
+    let mut out = Vec::new();
+    for g in v["testGroups"].as_array().into_iter().flatten() {
+        for t in g["tests"].as_array().into_iter().flatten() {
+            out.push(EcdhCase {
+                public: d(&t["public"]),
+                private: d(&t["private"]),
+                shared: d(&t["shared"]),
+                result: t["result"].as_str().unwrap_or_default().to_string(),
+                flags: t["flags"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|f| f.as_str().map(str::to_string))
+                    .collect(),
+                tc_id: t["tcId"].as_u64().unwrap_or_default(),
+            });
+        }
+    }
+    out
+}
+
+/// A big-endian integer as exactly `len` bytes: leading zero bytes dropped, then left-padded with
+/// zeros. One that is still longer than `len` is returned unpadded.
+#[doc(hidden)]
+pub fn __fixed_len_scalar(integer: &[u8], len: usize) -> Vec<u8> {
+    let digits = &integer[integer.iter().take_while(|b| **b == 0).count()..];
+    let mut out = vec![0; len.saturating_sub(digits.len())];
+    out.extend_from_slice(digits);
+    out
+}
+
+/// One one-step KDF known answer, transcribed from a NIST ACVP sample.
+#[doc(hidden)]
+#[derive(Debug, Clone)]
+pub struct OneStepCase {
+    /// The ACVP algorithm file it comes from.
+    pub source: String,
+    /// The ACVP test-case id within that file.
+    pub tc_id: u64,
+    /// The auxiliary hash: `SHA2-256`, `SHA2-384` or `SHA2-512`.
+    pub hash: String,
+    /// The shared secret.
+    pub z: Vec<u8>,
+    /// The fixed information, assembled from the case's fields.
+    pub fixed_info: Vec<u8>,
+    /// The derived keying material.
+    pub dkm: Vec<u8>,
+}
+
+/// Every case of the transcribed ACVP one-step KDF file.
+#[doc(hidden)]
+pub fn __acvp_one_step_cases(file: &str) -> Vec<OneStepCase> {
+    let v: serde_json::Value = serde_json::from_str(file).unwrap_or_default();
+    let d = |x: &serde_json::Value| hex::decode(x.as_str().unwrap_or_default()).unwrap_or_default();
+    v.as_array()
+        .into_iter()
+        .flatten()
+        .map(|t| OneStepCase {
+            source: t["source"].as_str().unwrap_or_default().to_string(),
+            tc_id: t["tcId"].as_u64().unwrap_or_default(),
+            hash: t["hash"].as_str().unwrap_or_default().to_string(),
+            z: d(&t["z"]),
+            fixed_info: d(&t["fixedInfo"]),
+            dkm: d(&t["dkm"]),
+        })
+        .collect()
+}
+
 /// Known-answer data every backend's conformance run checks.
 pub mod vectors {
     /// Wycheproof ECDSA P-256 / SHA-256.
@@ -506,12 +637,98 @@ pub mod vectors {
     pub const HKDF_SHA384: &str = include_str!("vectors/hkdf_sha384_test.json");
     /// Wycheproof HKDF-SHA512.
     pub const HKDF_SHA512: &str = include_str!("vectors/hkdf_sha512_test.json");
+    /// Wycheproof ECDH on P-256, raw points.
+    pub const ECDH_P256: &str = include_str!("vectors/ecdh_secp256r1_ecpoint_test.json");
+    /// Wycheproof ECDH on P-384, raw points.
+    pub const ECDH_P384: &str = include_str!("vectors/ecdh_secp384r1_ecpoint_test.json");
+    /// Wycheproof ECDH on P-521, raw points.
+    pub const ECDH_P521: &str = include_str!("vectors/ecdh_secp521r1_ecpoint_test.json");
+    /// Wycheproof X25519.
+    pub const X25519: &str = include_str!("vectors/x25519_test.json");
+    /// NIST ACVP one-step KDF samples, SHA2-256, SHA2-384 and SHA2-512.
+    pub const KDA_ONE_STEP: &str = include_str!("vectors/kda_onestep_acvp.json");
     /// NIST CAVP SHA-256 short messages.
     pub const SHA256_SHORT: &str = include_str!("vectors/SHA256ShortMsg.rsp");
     /// NIST CAVP SHA-384 short messages.
     pub const SHA384_SHORT: &str = include_str!("vectors/SHA384ShortMsg.rsp");
     /// NIST CAVP SHA-512 short messages.
     pub const SHA512_SHORT: &str = include_str!("vectors/SHA512ShortMsg.rsp");
+
+    /// RFC 7518 Appendix C: ECDH-ES on P-256 with the Concat KDF (SHA-256), for A128GCM.
+    pub mod rfc7518 {
+        /// Alice's (the producer's) ephemeral private key `d`, big-endian.
+        pub const ALICE_D_HEX: &str =
+            "d3f3716913d4310a0026de741b3f18893afc8114f0c84682ba677e313a13988a";
+        /// Alice's ephemeral public key `epk`, an uncompressed point.
+        pub const ALICE_EPK_HEX: &str = "04808d060082c176eed3e776a4ac598cc8672c1779f974eecc9b03411ca5b9495d48b5bfc527dfce53d6ac7115237d031ccff87a0570b77350a9e503ee7305a69b";
+        /// Bob's (the consumer's) private key `d`, big-endian.
+        pub const BOB_D_HEX: &str =
+            "5449836690d75caf29f0dd029ddb31b3ddb8aba9d2d515c5012465e817d4a9dc";
+        /// Bob's public key, an uncompressed point.
+        pub const BOB_PUBLIC_HEX: &str = "04c1e349cb61ec70248ce801034c3834e1b88ebe1161cb25af38741f785fcfc4c47bc96708ef80952b53f8d2555fe72b841ed04588628b1d378a594939500ec9c9";
+        /// The shared secret Z.
+        pub const Z_HEX: &str = "9e56d91d817135d372834283bf84269cfb316ea3da806a48f6daa7798cfe90c4";
+        /// The OtherInfo: AlgorithmID "A128GCM", PartyUInfo "Alice", PartyVInfo "Bob", SuppPubInfo 128.
+        pub const OTHER_INFO_HEX: &str =
+            "000000074131323847434d00000005416c69636500000003426f6200000080";
+        /// The derived content-encryption key.
+        pub const CEK_HEX: &str = "56aa8deaf8236d205c2228cd71a7101a";
+    }
+
+    /// RFC 9180 Appendix A, base mode: the DHKEM key pairs and shared secret of every suite the
+    /// appendix carries (A.1.1, A.3.1, A.6.1).
+    pub mod rfc9180 {
+        /// One DHKEM base-mode case.
+        #[derive(Debug, Clone, Copy)]
+        pub struct Case {
+            /// The section it comes from.
+            pub section: &'static str,
+            /// The RFC 9180 §7.1 Table 2 `kem_id`.
+            pub kem_id: u16,
+            /// `skEm`, the sender's ephemeral private key.
+            pub sk_em_hex: &'static str,
+            /// `enc`, the sender's ephemeral public key (`pkEm`).
+            pub enc_hex: &'static str,
+            /// `skRm`, the recipient's private key.
+            pub sk_rm_hex: &'static str,
+            /// `pkRm`, the recipient's public key.
+            pub pk_rm_hex: &'static str,
+            /// `shared_secret`, the KEM's output.
+            pub shared_secret_hex: &'static str,
+        }
+
+        /// A.1.1 (DHKEM(X25519, HKDF-SHA256)), A.3.1 (DHKEM(P-256, HKDF-SHA256)) and A.6.1
+        /// (DHKEM(P-521, HKDF-SHA512)). The appendix carries no DHKEM(P-384, HKDF-SHA384) case.
+        pub const CASES: &[Case] = &[
+            Case {
+                section: "A.1.1",
+                kem_id: 0x0020,
+                sk_em_hex: "52c4a758a802cd8b936eceea314432798d5baf2d7e9235dc084ab1b9cfa2f736",
+                enc_hex: "37fda3567bdbd628e88668c3c8d7e97d1d1253b6d4ea6d44c150f741f1bf4431",
+                sk_rm_hex: "4612c550263fc8ad58375df3f557aac531d26850903e55a9f23f21d8534e8ac8",
+                pk_rm_hex: "3948cfe0ad1ddb695d780e59077195da6c56506b027329794ab02bca80815c4d",
+                shared_secret_hex: "fe0e18c9f024ce43799ae393c7e8fe8fce9d218875e8227b0187c04e7d2ea1fc",
+            },
+            Case {
+                section: "A.3.1",
+                kem_id: 0x0010,
+                sk_em_hex: "4995788ef4b9d6132b249ce59a77281493eb39af373d236a1fe415cb0c2d7beb",
+                enc_hex: "04a92719c6195d5085104f469a8b9814d5838ff72b60501e2c4466e5e67b325ac98536d7b61a1af4b78e5b7f951c0900be863c403ce65c9bfcb9382657222d18c4",
+                sk_rm_hex: "f3ce7fdae57e1a310d87f1ebbde6f328be0a99cdbcadf4d6589cf29de4b8ffd2",
+                pk_rm_hex: "04fe8c19ce0905191ebc298a9245792531f26f0cece2460639e8bc39cb7f706a826a779b4cf969b8a0e539c7f62fb3d30ad6aa8f80e30f1d128aafd68a2ce72ea0",
+                shared_secret_hex: "c0d26aeab536609a572b07695d933b589dcf363ff9d93c93adea537aeabb8cb8",
+            },
+            Case {
+                section: "A.6.1",
+                kem_id: 0x0012,
+                sk_em_hex: "014784c692da35df6ecde98ee43ac425dbdd0969c0c72b42f2e708ab9d535415a8569bdacfcc0a114c85b8e3f26acf4d68115f8c91a66178cdbd03b7bcc5291e374b",
+                enc_hex: "040138b385ca16bb0d5fa0c0665fbbd7e69e3ee29f63991d3e9b5fa740aab8900aaeed46ed73a49055758425a0ce36507c54b29cc5b85a5cee6bae0cf1c21f2731ece2013dc3fb7c8d21654bb161b463962ca19e8c654ff24c94dd2898de12051f1ed0692237fb02b2f8d1dc1c73e9b366b529eb436e98a996ee522aef863dd5739d2f29b0",
+                sk_rm_hex: "01462680369ae375e4b3791070a7458ed527842f6a98a79ff5e0d4cbde83c27196a3916956655523a6a2556a7af62c5cadabe2ef9da3760bb21e005202f7b2462847",
+                pk_rm_hex: "0401b45498c1714e2dce167d3caf162e45e0642afc7ed435df7902ccae0e84ba0f7d373f646b7738bbbdca11ed91bdeae3cdcba3301f2457be452f271fa6837580e661012af49583a62e48d44bed350c7118c0d8dc861c238c72a2bda17f64704f464b57338e7f40b60959480c0e58e6559b190d81663ed816e523b6b6a418f66d2451ec64",
+                shared_secret_hex: "776ab421302f6eff7d7cb5cb1adaea0cd50872c71c2d63c30c4f1d5e43653336fef33b103c67e7a98add2d3b66e2fda95b5b2a667aa9dac7e59cc1d46d30e818",
+            },
+        ];
+    }
 
     /// The sealed-box known-answer vectors, produced by an independent implementation.
     pub mod sealbox {
@@ -528,6 +745,20 @@ pub mod vectors {
         pub const FIXED_SHARED_CT_HEX: &str = "0b97a82530c1e3b734c40e1d1bd3021ecd6c502e16d304d333ccdfdf7e0f35672a70c0815ce1d2c6c5ad3ab9c8968987c6c3";
         /// The nonce of [`FIXED_SHARED_CT_HEX`].
         pub const NONCE: [u8; 12] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
+
+        /// A blob sealed by crypto-profile 0.9.0 (`crypto-profile-awslc4`), with its key.
+        pub mod release_0_9_0 {
+            /// The domain.
+            pub const DOMAIN: &[u8] = b"crypto-profile sealbox 0.9.0 golden";
+            /// The additional authenticated data.
+            pub const AAD: &[u8] = b"crypto-profile 0.9.0 golden aad";
+            /// The plaintext.
+            pub const PLAINTEXT: &[u8] = b"sealed by crypto-profile 0.9.0";
+            /// The recipient's P-384 private key as PKCS#8 DER, hex-encoded.
+            pub const PRIVATE_KEY_PKCS8_HEX: &str = "3081b6020100301006072a8648ce3d020106052b8104002204819e30819b02010104301605a5a345ffab181ad7062a845c03e9f567a1fb169036c692f818ffc048b377ad51be14e7a8703c65e95c3fd4754403a16403620004db56e7d8b2aecccccaea62609b378fe7e2095c772ced07f13738be27fb7070727d2308a5ca587c7cacae32865fa56716a5e07ebafd8551911daefddf62e63f982969af28142b4aebec27ad6b786c80ab93018c661061f0b145736fbb263cbdc5";
+            /// The sealed blob, hex-encoded.
+            pub const BLOB_HEX: &str = "0104d226c2abec589372bf2eedf632418fe1507df48e39c5302d8742993fbf6677a0856e7aa80085993157fc7b0df59a3f5572a09d1b9c8ca84b63179abd57f07facfdbdffeb3f95fc4f04ed31103dcc5a4c47c1845a2ba38f82883ae8606f87ad0a9038e95c9d0ec64d31dae22c0be4dbcc60f4500c90b6ce6cedf1ffa5dbfa5e7d9c603e1e5a0ebf8db24d315ca5532c44d0d3efff55e08df522d7";
+        }
 
         /// The additional authenticated data of the known-answer blob.
         pub fn aad() -> Vec<u8> {
@@ -1084,8 +1315,42 @@ macro_rules! conformance_tests {
             }
         }
 
+        fn kdf_spec(k: KdfAlgorithm, info: &[u8]) -> kdf::Spec<'_> {
+            match k {
+                KdfAlgorithm::HkdfSha256 | KdfAlgorithm::HkdfSha384 | KdfAlgorithm::HkdfSha512 => {
+                    kdf::Spec::Hkdf {
+                        algorithm: k,
+                        salt: None,
+                        info,
+                    }
+                }
+                KdfAlgorithm::OneStepSha256
+                | KdfAlgorithm::OneStepSha384
+                | KdfAlgorithm::OneStepSha512 => kdf::Spec::OneStep {
+                    algorithm: k,
+                    fixed_info: info,
+                },
+                _ => panic!("{k:?}: no specification for this KDF"),
+            }
+        }
+
+        fn other_kind(k: KdfAlgorithm, info: &[u8]) -> kdf::Spec<'_> {
+            match kdf_spec(k, info) {
+                kdf::Spec::Hkdf { .. } => kdf::Spec::OneStep {
+                    algorithm: k,
+                    fixed_info: info,
+                },
+                kdf::Spec::OneStep { .. } => kdf::Spec::Hkdf {
+                    algorithm: k,
+                    salt: None,
+                    info,
+                },
+                other => panic!("{other:?}: no other kind"),
+            }
+        }
+
         #[test]
-        fn conformance_hkdf_refusal_matrix() {
+        fn conformance_kdf_refusal_matrix() {
             for &(p, off, on) in $crate::conformance::golden::KDF_GOLDEN {
                 for (unclassified, admitted) in [(false, off), (true, on)] {
                     let mut o = Options::default();
@@ -1093,40 +1358,102 @@ macro_rules! conformance_tests {
                     let a = admit(p, o);
                     assert_eq!(a.kdfs(), admitted, "{p} {o}");
                     for &k in KdfAlgorithm::ALL {
-                        let len = |info: &[u8]| {
-                            let spec = kdf::Spec::Hkdf {
-                                algorithm: k,
-                                salt: None,
-                                info,
-                            };
-                            kdf::derive(&a, &[7; 32], &spec, 32).map(|d| d.as_bytes().len())
+                        let derive = |spec: &kdf::Spec<'_>| {
+                            kdf::derive(&a, &[7; 32], spec, 32).map(|d| d.as_bytes().len())
                         };
-                        let one_step = matches!(
-                            k,
-                            KdfAlgorithm::OneStepSha256
-                                | KdfAlgorithm::OneStepSha384
-                                | KdfAlgorithm::OneStepSha512
-                        );
-                        let refused = Err(if one_step {
-                            CryptoError::KdfSpecMismatch { algorithm: k }
-                        } else {
-                            CryptoError::NotInProfile {
-                                profile: p,
-                                algorithm: Algorithm::Kdf(k),
-                            }
+                        let not_admitted = Err(CryptoError::NotInProfile {
+                            profile: p,
+                            algorithm: Algorithm::Kdf(k),
                         });
-                        let (want, want_empty_info) = if !admitted.contains(&k) {
-                            (refused, refused)
+                        let (want, want_empty) = if !admitted.contains(&k) {
+                            (not_admitted, not_admitted)
                         } else if p == Profile::Unrestricted {
                             (Ok(32), Ok(32))
                         } else {
                             (Ok(32), Err(CryptoError::KdfInfoEmpty { profile: p }))
                         };
-                        assert_eq!(len(b"matrix"), want, "{p} {o} {k:?}");
-                        assert_eq!(len(b""), want_empty_info, "{p} {o} {k:?} empty info");
+                        assert_eq!(derive(&kdf_spec(k, b"matrix")), want, "{p} {o} {k:?}");
+                        assert_eq!(derive(&kdf_spec(k, b"")), want_empty, "{p} {o} {k:?}");
+                        assert_eq!(
+                            derive(&other_kind(k, b"matrix")),
+                            Err(CryptoError::KdfSpecMismatch { algorithm: k }),
+                            "{p} {o} {k:?}"
+                        );
+                        assert_eq!(
+                            derive(&kdf::Spec::Dhkem { algorithm: k }),
+                            Err(CryptoError::KdfSpecMismatch { algorithm: k }),
+                            "{p} {o} {k:?} DHKEM"
+                        );
                     }
                 }
             }
+        }
+
+        #[test]
+        fn conformance_one_step_bounds_under_every_profile() {
+            for &p in Profile::ALL {
+                let a = admit(p, Options::default());
+                for &k in KdfAlgorithm::ALL {
+                    let one_step = matches!(kdf_spec(k, b""), kdf::Spec::OneStep { .. });
+                    if !one_step || !a.kdfs().contains(&k) {
+                        continue;
+                    }
+                    let derive = |secret: &[u8], info: &[u8], len| {
+                        kdf::derive(&a, secret, &kdf_spec(k, info), len).map(|d| d.as_bytes().len())
+                    };
+                    let empty_info = if p == Profile::Unrestricted {
+                        Ok(32)
+                    } else {
+                        Err(CryptoError::KdfInfoEmpty { profile: p })
+                    };
+                    assert_eq!(derive(&[7; 32], b"", 32), empty_info, "{p} {k:?}");
+                    for len in [0, (1 << 30) + 1] {
+                        assert_eq!(
+                            derive(&[7; 32], b"x", len),
+                            Err(CryptoError::KdfOutputLength {
+                                algorithm: k,
+                                bytes: len,
+                                max_bytes: 1 << 30,
+                            }),
+                            "{p} {k:?}"
+                        );
+                    }
+                    assert_eq!(
+                        derive(&[], b"x", 32),
+                        Err(CryptoError::KdfSecretEmpty),
+                        "{p} {k:?}"
+                    );
+                    assert_eq!(derive(&[7; 32], b"x", 1), Ok(1), "{p} {k:?}");
+                }
+            }
+        }
+
+        #[test]
+        fn conformance_acvp_one_step_kdf() {
+            let a = admit(Profile::Fips1403, Options::default());
+            let cases = $crate::conformance::__acvp_one_step_cases(vectors::KDA_ONE_STEP);
+            let mut counts = [0; 3];
+            for c in &cases {
+                let (k, i) = match c.hash.as_str() {
+                    "SHA2-256" => (KdfAlgorithm::OneStepSha256, 0),
+                    "SHA2-384" => (KdfAlgorithm::OneStepSha384, 1),
+                    "SHA2-512" => (KdfAlgorithm::OneStepSha512, 2),
+                    other => panic!("{} tcId {}: {other}", c.source, c.tc_id),
+                };
+                counts[i] += 1;
+                let spec = kdf::Spec::OneStep {
+                    algorithm: k,
+                    fixed_info: &c.fixed_info,
+                };
+                assert_eq!(
+                    kdf::derive(&a, &c.z, &spec, c.dkm.len()).map(|d| d.as_bytes().to_vec()),
+                    Ok(c.dkm.clone()),
+                    "{} tcId {}",
+                    c.source,
+                    c.tc_id
+                );
+            }
+            assert_eq!(counts, [23, 10, 45]);
         }
 
         #[test]
@@ -1156,8 +1483,9 @@ macro_rules! conformance_tests {
             use vectors::sealbox as kat;
             let pkcs8 = $crate::conformance::__hex::decode(kat::PRIVATE_KEY_PKCS8_HEX).unwrap();
             let blob = $crate::conformance::__hex::decode(kat::BLOB_HEX).unwrap();
-            let key = sealbox::PrivateKey::from_pkcs8_der(&pkcs8).unwrap();
-            let opened = sealbox::open(&key, kat::DOMAIN, &kat::aad(), &blob).unwrap();
+            let a = admit(Profile::Fips1403, Options::default());
+            let key = sealbox::PrivateKey::from_pkcs8_der(&a, &pkcs8).unwrap();
+            let opened = sealbox::open(&a, &key, kat::DOMAIN, &kat::aad(), &blob).unwrap();
             assert_eq!(&opened[..], kat::PLAINTEXT);
         }
 
@@ -1188,29 +1516,46 @@ macro_rules! conformance_tests {
                         assert_eq!(key.sign(b"").as_ref().len(), m.tag_len(), "{m:?}");
                     }
                     Algorithm::Kdf(k) => {
+                        assert!(cap.available, "{k:?}");
+                        let unrestricted = admit(Profile::Unrestricted, Options::default());
+                        let spec = match k {
+                            KdfAlgorithm::HkdfSha256
+                            | KdfAlgorithm::HkdfSha384
+                            | KdfAlgorithm::HkdfSha512 => kdf::Spec::Hkdf {
+                                algorithm: k,
+                                salt: None,
+                                info: b"capability",
+                            },
+                            KdfAlgorithm::OneStepSha256
+                            | KdfAlgorithm::OneStepSha384
+                            | KdfAlgorithm::OneStepSha512 => kdf::Spec::OneStep {
+                                algorithm: k,
+                                fixed_info: b"capability",
+                            },
+                            _ => panic!("{k:?}: no capability check for this KDF"),
+                        };
+                        let len = k.max_output_len().min(16320);
+                        let key = kdf::derive(&unrestricted, &[7; 32], &spec, len)
+                            .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                        assert_eq!(key.as_bytes().len(), len, "{k:?}");
+                    }
+                    Algorithm::KeyAgreement(k) => {
+                        assert!(cap.available, "{k:?}");
                         let unrestricted = admit(Profile::Unrestricted, Options::default());
                         let spec = kdf::Spec::Hkdf {
-                            algorithm: k,
+                            algorithm: KdfAlgorithm::HkdfSha256,
                             salt: None,
                             info: b"capability",
                         };
-                        if cap.available {
-                            let key =
-                                kdf::derive(&unrestricted, &[7; 32], &spec, k.max_output_len())
-                                    .unwrap_or_else(|e| panic!("{k:?}: {e}"));
-                            assert_eq!(key.as_bytes().len(), k.max_output_len(), "{k:?}");
-                        } else {
-                            assert!(!unrestricted.kdfs().contains(&k), "{k:?}");
-                            assert_eq!(
-                                kdf::derive(&unrestricted, &[7; 32], &spec, 32).err(),
-                                Some(CryptoError::KdfSpecMismatch { algorithm: k }),
-                                "{k:?}"
-                            );
-                        }
-                    }
-                    Algorithm::KeyAgreement(k) => {
-                        assert!(!cap.available, "{k:?}");
-                        assert_eq!(cap.approval, Approval::Unverified, "{k:?}");
+                        let recipient = ecdh::EphemeralKey::generate(&unrestricted, k)
+                            .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                        let sender = ecdh::EphemeralKey::generate(&unrestricted, k)
+                            .unwrap_or_else(|e| panic!("{k:?}: {e}"));
+                        let to_recipient = recipient.public_key().to_vec();
+                        let to_sender = sender.public_key().to_vec();
+                        let sent = sender.agree(&to_recipient, &spec, 32).unwrap();
+                        let received = recipient.agree(&to_sender, &spec, 32).unwrap();
+                        assert_eq!(sent.as_bytes(), received.as_bytes(), "{k:?}");
                     }
                     Algorithm::Kx(k) => {
                         let p = policy(
@@ -1406,6 +1751,10 @@ macro_rules! conformance_tests {
 
         mod conformance_profiles {
             $crate::__conformance_profile_tests!($b);
+        }
+
+        mod conformance_key_agreement {
+            $crate::__conformance_key_agreement_tests!($b);
         }
     };
 }

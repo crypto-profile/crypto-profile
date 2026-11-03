@@ -17,7 +17,7 @@ Cargo resolves one aws-lc-rs 1.x per lockfile, so a single crate cannot offer bo
 
 Call `crypto::awslc_version()` for the exact runtime-linked AWS-LC release. This is separate from `certificate(MODULE)`, which reports the certified release and status.
 
-Every backend exposes the same module paths (`aead`, `csr`, `digest`, `fips`, `hmac`, `kdf`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
+Every backend exposes the same module paths (`aead`, `csr`, `digest`, `ecdh`, `fips`, `hmac`, `kdf`, `random`, `sealbox`, `signature`, `tls`), re-exports the core crate, and declares `pub const MODULE: Module`. Writing `use crypto_profile_awslc4 as crypto;` keeps a later change of module line to one line of `Cargo.toml`.
 
 ML-DSA is available only on the 4.x backend: aws-lc-rs 1.17.4 compiles its `pqdsa` module out under `fips` (`aws-lc-rs-1.17.4/src/lib.rs:283-284`), while 1.18.2 exposes `signature::ML_DSA_87_SIGNING` unconditionally (`aws-lc-rs-1.18.2/src/signature.rs:1177`). The capability table marks ML-DSA unavailable on 3.x, so the 3.x backend refuses it with `CryptoError::Unavailable` (`crypto-profile/src/capability.rs`, `three_x` and `ensure_available`).
 
@@ -179,7 +179,8 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile/src/backend_body/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
-- **`csr`, `aead`, `digest` and `sealbox`.** No profile governs them ([`profiles.md`](profiles.md) §5). `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`: the domain is the box's HKDF salt, and the module does not mark an HKDF call with an empty salt approved.
+- **`csr`, `aead` and `digest`.** No profile governs them ([`profiles.md`](profiles.md) §5).
+- **`sealbox`'s AES-256-GCM.** A profile governs the sealed box's ECDH on P-384 and HKDF-SHA384, and refuses the box unless it admits both; its AEAD is not checked. `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`: the domain is the box's HKDF salt, and the module does not mark an HKDF call with an empty salt approved.
 - **Server session resumption and identity checks.** A resumed server session is not re-verified, so a configuration whose client verifier carries an identity check must not share `session_storage` or a `ticketer` with one whose check differs. Default stores are per configuration ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Identity checks that change over time.** A resumed session does not call the check again, so a check whose answer can change, such as a revocable allow-list, needs a new verifier and configuration when it changes, or resumption disabled ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Unauthenticated clients and identity checks.** With `allow_unauthenticated`, a client that presents no certificate is admitted without the identity check.
@@ -199,6 +200,8 @@ The crate holds secret material in zeroizing buffers that are sized at allocatio
 - **Keys handed to rustls.** A `PrivateKeyDer` passed to `tls::load_private_key`, or to a rustls configuration, is rustls's to hold and drop; so is the copy of a `KeyPair`'s PKCS#8 encoding that `Resolved::certified_key` loads.
 - **HMAC key state.** An `hmac::Key` holds the module's HMAC context, which `HMAC_CTX_cleanup` clears with `OPENSSL_cleanse` when the key drops (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hmac/hmac.c:331-334`; 0.13.17 `:310-313`). aws-lc-rs builds that context on the stack and moves it into its key (`aws-lc-rs-1.18.2/src/hmac.rs:301-318`), and `hmac::Key::new` moves it again; each move can leave a copy of the keyed hash state, which nothing clears. The slice passed to `hmac::Key::new` stays the caller's.
 - **HKDF inside the module.** `kdf::derive` returns a `kdf::DerivedKey` that is `Zeroizing` from allocation. aws-lc-rs copies the secret into a buffer it wipes on drop (`aws-lc-rs-1.18.2/src/hkdf.rs:181`, `:293`), and the pseudorandom key exists only inside the module's one-shot `HKDF()`. SP 800-56C Rev. 2 §5 requires that key to "be destroyed (along with all other sensitive, locally stored data) after its use" (p. 20). The 4.x module meets that: `HKDF()` calls `OPENSSL_cleanse` on it on every exit (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:50`). The 3.x module does not: `HKDF()` returns with it still in a stack buffer it never cleanses (`aws-lc-fips-sys-0.13.17/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:32-56`), and the crate cannot fix that without changing the validated module. aws-lc-rs copies the salt and `info` into buffers it does not wipe (`aws-lc-rs-1.18.2/src/hkdf.rs:132`, `:440-465`). SP 800-56C Rev. 2 §5.1 and RFC 5869 §3.1 allow a secret salt, but this crate supports only a non-secret salt and a non-secret `info`: put no secret in either. The secret slice stays the caller's.
+
+- **The ECDH shared secret inside the module.** `ecdh`'s `agree` hands the shared secret Z straight to `kdf`, and no function returns it. The module's `pkey_ec_derive` leaves Z in a stack buffer it never cleanses, on both lines (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/evp/p_ec.c:144-175`; 0.13.17 `:145-176`), and aws-lc-rs 1.17.4 frees an unwiped heap copy on the 3.x line (`aws-lc-rs-1.17.4/src/evp_pkey.rs:532-540`); 1.18.2 wipes its copy. SP 800-56A Rev. 3 §5.8 requires each copy of Z to be "destroyed immediately following its use" (p. 53); the crate cannot fix the module's copies ([decision 0011](decisions/0011-ecdh-and-one-step-kdf.md)). The crate treats the one-step KDF's `fixed_info` as non-secret: put no secret in it. The `test-support` feature adds `test_support::ecdh_shared_secret`, which returns Z: enabling `test-support` outside test builds exposes the raw shared secret, so a production dependency graph must not enable it. A static key's private scalar is cleansed by the module when the key drops; the slice passed to `StaticKey::from_scalar` or `from_pkcs8_der` stays the caller's.
 
 A further residual holds no secret material:
 
@@ -221,8 +224,12 @@ The conformance suite (`crypto-profile/src/conformance/`, run by every backend) 
 | AES-256-GCM | Wycheproof, 256-bit keys with 96-bit nonces and 128-bit tags, opening only |
 | HMAC-SHA256, HMAC-SHA384, HMAC-SHA512 | Wycheproof: full-length tags sign and verify, or are refused when invalid; truncated tags are refused, and the valid ones match the leading bytes of the full tag |
 | HKDF-SHA256, HKDF-SHA384, HKDF-SHA512 | RFC 5869 Appendix A cases 1-3 (SHA-256); Wycheproof: every valid case derives under `unrestricted`, and under every other profile that admits the hash when `info` is non-empty (empty-`info` cases are refused with `KdfInfoEmpty`), and outputs over 255 × HashLen are refused |
+| One-step KDF, SHA-256, SHA-384, SHA-512 | NIST ACVP sample cases (KDA OneStep for SHA2-512; the one-step KDF of the KAS-IFC sample for SHA2-256 and SHA2-384); RFC 7518 Appendix C (Concat KDF) |
+| ECDH on P-256, P-384, P-521 | Wycheproof raw-point files: every valid case agrees, through HKDF and the one-step KDF, to what the vector's shared secret derives, and the test hook returns that shared secret; every compressed or invalid point is refused, identically on both lines. RFC 7518 Appendix C (`ECDH-ES`, both parties) |
+| X25519 | Wycheproof: every case derives what its shared secret derives, except the 31 whose shared secret is all zeros, which are refused |
+| HPKE DHKEM | RFC 9180 Appendix A.1.1 (X25519), A.3.1 (P-256) and A.6.1 (P-521), base mode: the KEM shared secret through `StaticKey::agree` with `kdf::Spec::Dhkem`, and `EphemeralKey::agree` agreeing with it |
 | SHA-256, SHA-384, SHA-512 | NIST CAVP byte-oriented short messages |
-| Sealed box | a version-1 known-answer blob from an independent implementation, which must open unchanged |
+| Sealed box | a version-1 known-answer blob from an independent implementation, and a blob sealed by crypto-profile 0.9.0, each of which must open unchanged |
 
 **A module refusal on aarch64 ([#24](https://github.com/crypto-profile/crypto-profile/issues/24)).** On every aarch64 target, both module lines refuse two valid Wycheproof P-256/SHA-256 signatures: tcId 483 (s = 2^128) and tcId 484 (s = n - 2^128). The refusal fails closed, and no invalid signature is accepted on any target. An honest signature lands on either value with probability about 2^-255. The conformance test asserts both refusals on aarch64, so it fails once a module fixes them.
 
@@ -248,7 +255,7 @@ key.verify(message, tag.as_ref())?;
 - **Comparing tags.** `Key::verify` compares in constant time, and refuses a tag of any other length with `CryptoError::MacVerify`, whatever the cause. It is the only constant-time comparison: comparing `Tag::as_ref()` bytes directly is not one, and `Tag` has no `==`.
 - **Full-length tags only.** The crate offers no truncation.
 - **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 and HKDF-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
-- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC or KDF the profile does not admit. Read it through `profile()`, `options()`, `macs()`, `kdfs()` and `excluded()`.
+- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC or KDF the profile does not admit. Read it through `profile()`, `options()`, `macs()`, `kdfs()`, `key_agreements()` and `excluded()`.
 - **Asserting approval.** Name the families you use: `assert_admitted_approved(&admitted, &[Family::Mac])` walks the MAC cells only. Under `unrestricted` it passes the MACs wherever the module approves them; the empty-`info` refusal (§14) applies only when `Family::Kdf` is named. A TLS family is refused with `CryptoError::FamilyNotAdmitted`, because `assert_module_approves` checks TLS, and an empty list approves nothing.
 - **Panics.** `Key::new`, `sign` and `verify` panic only if the module's HMAC context fails, as aws-lc-rs's do.
 
@@ -267,13 +274,14 @@ let key = kdf::derive(&admitted, &shared_secret, &spec, 32)?;
 let key_bytes: &[u8] = key.as_bytes();
 ```
 
-- **One call.** `kdf::derive` with `kdf::Spec::Hkdf` extracts and expands; the pseudorandom key is never returned. There is no separate extract or expand.
-- **The specification.** `kdf::Spec` carries the KDF and every input but the secret. It is `#[non_exhaustive]`: a later KDF is a new variant, so a `match` on it needs a `_` arm. An algorithm that does not match its variant, such as a one-step `KdfAlgorithm` in `Spec::Hkdf`, is refused with `CryptoError::KdfSpecMismatch` before anything else. The one-step variants exist as types only until #33's ECDH change implements them.
-- **What belongs in `info`.** What the key is for and who it is between: a purpose label, the parties' identifiers, and the public keys each contributed (SP 800-56A Rev. 3 §5.8.2). Every profile but `unrestricted` refuses an empty `info` with `CryptoError::KdfInfoEmpty`, because the module does not mark such a call approved.
-- **Salt.** Pass `None` unless the protocol defines a salt; `None` and an empty salt both mean RFC 5869's default, HashLen zero bytes. The standards allow a secret salt, but the salt and `info` are copied without wiping, so pass neither a secret (§11).
-- **Lengths.** 1 to 255 × HashLen bytes of output (`CryptoError::KdfOutputLength` otherwise); any non-empty secret (`CryptoError::KdfSecretEmpty` for an empty one).
+- **Two KDFs.** `kdf::Spec::Hkdf` is RFC 5869 HKDF, extract and expand in one call; the pseudorandom key is never returned. `kdf::Spec::OneStep { algorithm, fixed_info }` is the one-step KDF of SP 800-56C Rev. 2 §4.1 with a hash, `H(counter ‖ secret ‖ fixed_info)`, which is RFC 7518's Concat KDF. `kdf::Spec::Dhkem` is RFC 9180's DHKEM and works only in `ecdh`'s `agree` (§16); `kdf::derive` refuses it. There is no separate extract or expand.
+- **The specification.** `kdf::Spec` carries the KDF and every input but the secret. It is `#[non_exhaustive]`: a later KDF is a new variant, so a `match` on it needs a `_` arm. An algorithm that does not match its variant, such as a one-step `KdfAlgorithm` in `Spec::Hkdf`, is refused with `CryptoError::KdfSpecMismatch` before anything else.
+- **What belongs in `info` and `fixed_info`.** What the key is for and who it is between: a purpose label, the parties' identifiers, and the public keys each contributed (SP 800-56A Rev. 3 §5.8.2). The one-step KDF hashes `fixed_info` as given, so encode it as your protocol says (RFC 7518 §4.6.2 for JOSE). Every profile but `unrestricted` refuses an empty one with `CryptoError::KdfInfoEmpty`, because the module does not mark such a call approved.
+- **Salt.** HKDF only. Pass `None` unless the protocol defines a salt; `None` and an empty salt both mean RFC 5869's default, HashLen zero bytes. The standards allow a secret salt, but the salt, `info` and `fixed_info` are copied without wiping, so pass none of them a secret (§11).
+- **Lengths.** HKDF: 1 to 255 × HashLen bytes of output. One-step: 1 to 2^30 bytes. `CryptoError::KdfOutputLength` otherwise; any non-empty secret (`CryptoError::KdfSecretEmpty` for an empty one).
 - **The derived key** is zeroized on drop, and its `Debug` prints only its length.
 - **Refusals** come in order: specification, admission, `info`, output length, secret.
+- **Which profiles admit the one-step KDF.** `unrestricted`, `preferred`, `fips1403` and `fips1402`; `cnsa1`, `cnsa2` and `bsi` refuse it ([`profiles.md`](profiles.md) §11).
 - **`assert_admitted_approved(&admitted, &[Family::Kdf])` refuses `unrestricted`** with `CryptoError::KdfInfoMayBeEmpty`, on both module lines: `unrestricted` admits an empty `info`, which the module does not approve. It promises no approval; it also admits entries no module approves (X25519, ChaCha20-Poly1305), so `assert_module_approves` could never pass it either. `derive` under `unrestricted` still derives with an empty `info`. Use another profile where approval matters.
 
 ## 15. Migrating from 0.9
@@ -294,6 +302,62 @@ let key_bytes: &[u8] = key.as_bytes();
 - **Signature keys.** `KeyPair::from_pkcs8(a, der)` is `KeyPair::from_pkcs8_der(a, der)`, `key.pkcs8_der()` is `key.to_pkcs8_der()`, and `key.public_key()` returns `&[u8]`: call `.to_vec()` where you kept the `Vec`.
 - **Hashing.** `digest::digest(h, data)` and `digest::Hasher::new(h)` return a `Result`; a hash the backend does not implement is refused with `CryptoError::Unavailable`.
 - **Parse errors.** `ParseAlgorithmError` and `ParseProfileError` are `#[non_exhaustive]` tuple structs: read the message with `.0`, and do not construct or destructure one.
-- **New variants and fields.** `Algorithm` has `Mac`, `Kdf` and `KeyAgreement`; `ProfileSpec` has `macs` and `kdfs`; `Options` has `cnsa1_unclassified_nss`; `CryptoError` and `Family` have new variants.
+- **New variants and fields.** `Algorithm` has `Mac`, `Kdf` and `KeyAgreement`; `ProfileSpec` has `macs`, `kdfs` and `key_agreements`; `Options` has `cnsa1_unclassified_nss`; `CryptoError` and `Family` have new variants.
 - **`ParseAlgorithmError`** displays as "unknown algorithm name …", since `KeyAgreementAlgorithm` parses with it too.
 - **Sealed boxes.** `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`; a blob sealed under an empty domain by 0.9.0 no longer opens.
+- **Sealed boxes take an `Admitted`.** `sealbox::seal(&admitted, recipient, ..)`, `sealbox::open(&admitted, key, ..)`, `sealbox::PrivateKey::generate(&admitted)` and `sealbox::PrivateKey::from_pkcs8_der(&admitted, der)` refuse unless the profile admits ECDH on P-384 and HKDF-SHA384, so `bsi` and `cnsa2` refuse the sealed box. `PrivateKey::to_pkcs8_der()` is unchanged; `PrivateKey::public_key()` is now the raw public key, the uncompressed point, and the `PublicKey` to seal to is `PrivateKey::recipient()`. The wire format is unchanged: a blob sealed by 0.9.0 opens.
+
+## 16. ECDH key agreement
+
+One-pass Diffie-Hellman (SP 800-56A Rev. 3 §6.2.2.2) in both roles. The sender generates a key for one agreement and sends its public key; the recipient holds a static key from its PKI or HSM tooling. Each side's `agree` completes into `kdf` in the same call, so the shared secret never leaves the crate.
+
+```rust
+use crypto_profile_awslc4::{Family, KdfAlgorithm, KeyAgreementAlgorithm, Options, Profile, admit, assert_admitted_approved, ecdh, kdf};
+
+let admitted = admit(Profile::Fips1403, Options::default());
+// Today this refuses on every module line (profiles.md §12): every ECDH cell is NotApproved,
+// AlgorithmTested or Unverified. Where approval is required, stop here; otherwise log and go on.
+if let Err(e) = assert_admitted_approved(&admitted, &[Family::KeyAgreement, Family::Kdf]) {
+    if approval_required {
+        return Err(e.into());
+    }
+    eprintln!("ECDH under {} is not module-approved: {e}", admitted.profile());
+}
+
+// The sender: an ephemeral key, used once.
+let ephemeral = ecdh::EphemeralKey::generate(&admitted, KeyAgreementAlgorithm::EcdhP384)?;
+let ephemeral_public = ephemeral.public_key().to_vec();
+let mut info = b"example-app v1 key wrap".to_vec();
+info.extend_from_slice(&ephemeral_public);
+info.extend_from_slice(&recipient_public_key);
+let spec = kdf::Spec::Hkdf { algorithm: KdfAlgorithm::HkdfSha384, salt: None, info: &info };
+let wrapping_key = ephemeral.agree(&recipient_public_key, &spec, 32)?;
+// send ephemeral_public with what wrapping_key protects
+
+// The recipient: a static key, imported.
+let recipient = ecdh::StaticKey::from_pkcs8_der(&admitted, KeyAgreementAlgorithm::EcdhP384, &recipient_pkcs8)?;
+let same_key = recipient.agree(&ephemeral_public, &spec, 32)?;
+```
+
+HPKE's DHKEM (RFC 9180 §4.1) is `kdf::Spec::Dhkem`. Its HKDF must be the one RFC 9180 §7.1 Table 2 pairs with the curve (P-256 and X25519 with HKDF-SHA256, P-384 with HKDF-SHA384, P-521 with HKDF-SHA512) and its length `Nsecret`, the hash's length; the crate builds `kem_context` from the two public keys:
+
+```rust
+let spec = kdf::Spec::Dhkem { algorithm: KdfAlgorithm::HkdfSha384 };
+let sender = ecdh::EphemeralKey::generate(&admitted, KeyAgreementAlgorithm::EcdhP384)?;
+let enc = sender.public_key().to_vec();
+let shared_secret = sender.agree(&recipient_public_key, &spec, 48)?; // Encap; send enc
+let same = recipient.agree(&enc, &spec, 48)?; // Decap
+```
+
+The HPKE key schedule and AEAD are the caller's, from `shared_secret` through `kdf::derive` with its own labelled inputs. Any other pairing is refused with `CryptoError::KdfSpecMismatch`, and another length with `CryptoError::KdfOutputLength`.
+
+JOSE `ECDH-ES` (RFC 7518 §4.6) is the same shape with `kdf::Spec::OneStep`, `fixed_info` being the encoded AlgorithmID, PartyUInfo, PartyVInfo and SuppPubInfo, and an `algorithm` whose hash is SHA-256.
+
+- **Public keys.** A NIST-curve public key is an uncompressed SEC 1 point (65, 97 or 133 bytes), an X25519 key 32 bytes. A compressed or hybrid point, or a SubjectPublicKeyInfo, is refused with `CryptoError::KeyAgreementPeerKey` before the module sees it; the module then validates the key and refuses one off the curve the same way. An X25519 agreement whose shared secret is all zeros is refused too.
+- **Ephemeral keys** are generated in the module and never exported. `agree` takes the key by value, so a second agreement with it does not compile.
+- **Static keys** are imported: `ecdh` neither generates nor exports one (`sealbox::PrivateKey` keeps its own P-384 generation and export for the sealed box). `StaticKey::from_pkcs8_der` takes a NIST-curve key as a DER RFC 5958 §2 `PrivateKeyInfo` of version v1 or an RFC 5915 §3 `ECPrivateKey` with its parameters, checked field by field against those RFCs (decision 0011), and `StaticKey::from_scalar` a raw private key of exactly 32, 48 or 66 bytes (big-endian), or the 32-byte RFC 7748 key for X25519. A zero scalar, or one not below the curve order, is refused with `CryptoError::KeyAgreementPrivateKey`. The module cleanses the key when it drops.
+- **Refusals.** A key refuses a curve the profile does not admit when it is built. `agree` refuses, in this order: a mismatched `kdf::Spec` or a DHKEM pairing outside RFC 9180 Table 2, a KDF the profile does not admit, an empty `info` or `fixed_info`, an output length outside the KDF's bounds, a peer key in the wrong form, and a peer key the module refuses. The KDF is admitted under the profile the key was built under.
+- **Which profiles admit which curves.** [`profiles.md`](profiles.md) §12: `cnsa1` admits P-384 only, `bsi` and `cnsa2` none, and only `unrestricted` admits X25519.
+- **What the protocol must do.** `ecdh` does not authenticate the public keys, check that a static key's owner holds its private key, keep a static key to one purpose, or confirm the agreed key (SP 800-56A Rev. 3 §5.6.3.2, §5.9). Authenticate the recipient's public key before you send to it.
+- **The test hook.** `test_support::ecdh_shared_secret` returns the raw shared secret for the conformance suite. It exists only in test builds and under the `test-support` feature: enabling `test-support` outside test builds exposes the raw shared secret, so a production dependency graph must not enable it.
+- **What it cannot produce.** CMS ECDH (RFC 5753) needs the ANSI X9.63 KDF, which AWS-LC lacks.
