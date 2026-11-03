@@ -224,7 +224,7 @@ macro_rules! __conformance_peer_certificate_tests {
                     assert_eq!(resolve(P::Cnsa2, options).err().as_ref().and_then(__empty_profile),
                         Some((P::Cnsa2, options, Family::SignatureScheme)));
                 }
-                assert_eq!(signature::KeyPair::generate(S::MlDsa87).err(),
+                assert_eq!(signature::KeyPair::generate(&admit(P::Unrestricted, Options::default()), S::MlDsa87).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(S::MlDsa87))));
                 return;
             }
@@ -256,13 +256,13 @@ macro_rules! __conformance_peer_certificate_tests {
             let algorithms: Vec<(&'static rcgen::SignatureAlgorithm, ML)> = $crate::__conformance_peer_ml_algorithms!($b);
             assert_eq!(algorithms.len(), if MODULE.line == ModuleLine::AwsLcFips3 { 0 } else { 2 });
             if MODULE.line == ModuleLine::AwsLcFips3 {
-                assert_eq!(signature::KeyPair::generate(S::MlDsa87).err(),
+                assert_eq!(signature::KeyPair::generate(&admit(P::Unrestricted, Options::default()), S::MlDsa87).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(S::MlDsa87))));
             }
             for (algorithm, parameter) in algorithms {
                 let generated = rcgen::KeyPair::generate_for(algorithm);
                 let key = generated.unwrap();
-                let root = signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+                let root = signature::KeyPair::generate(&admit(P::Unrestricted, Options::default()), S::EcdsaP384Sha384).unwrap();
                 let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
                 params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
                 let ca = params.self_signed(&root).unwrap();

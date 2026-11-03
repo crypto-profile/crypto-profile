@@ -89,7 +89,13 @@ fn version(v: V) -> &'static rustls::SupportedProtocolVersion {
 }
 
 fn key_der(p: &Pki) -> PrivateKeyDer<'static> {
-    PrivateKeyDer::Pkcs8(p.key.to_pkcs8_der().to_vec().into())
+    PrivateKeyDer::Pkcs8(
+        p.key
+            .to_pkcs8_der()
+            .unwrap_or_else(|e| panic!("{e}"))
+            .to_vec()
+            .into(),
+    )
 }
 
 #[expect(clippy::disallowed_methods)]
@@ -548,10 +554,15 @@ fn every_verifier_accepts_and_refuses_as_the_reference() {
 
     use webpki::aws_lc_rs as w;
     let fixed = |pk: &str, sig: &str| (unhex(pk), unhex(sig));
+    let unrestricted = crypto_profile_awslc4::admit(
+        crypto_profile_awslc4::Profile::Unrestricted,
+        crypto_profile_awslc4::Options::default(),
+    );
     let rsa_key = signature::RsaKeyPair::from_pkcs8(
-        crypto_profile_awslc4::signature::KeyPair::generate(S::Rsa2048Sha384)
+        &crypto_profile_awslc4::signature::KeyPair::generate(&unrestricted, S::Rsa2048Sha384)
             .unwrap()
-            .to_pkcs8_der(),
+            .to_pkcs8_der()
+            .unwrap(),
     )
     .unwrap();
     let ed = signature::Ed25519KeyPair::generate().unwrap();

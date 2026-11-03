@@ -3,21 +3,22 @@ use aws_lc_rs::signature as sig;
 use zeroize::Zeroizing;
 
 pub(crate) struct MlDsa;
+
+/// An ML-DSA-87 key, which this module line never makes: every constructor refuses.
+pub(crate) struct MlDsaKey(());
+
+fn unavailable<T>() -> Result<T, CryptoError> {
+    Err(CryptoError::Unavailable(Algorithm::Signature(
+        SignatureAlgorithm::MlDsa87,
+    )))
+}
+
 impl MlDsa {
-    pub(crate) fn generate() -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-        Err(CryptoError::Unavailable(Algorithm::Signature(
-            SignatureAlgorithm::MlDsa87,
-        )))
+    pub(crate) fn generate() -> Result<MlDsaKey, CryptoError> {
+        unavailable().map(MlDsaKey)
     }
-    pub(crate) fn public_key(_: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        Err(CryptoError::Unavailable(Algorithm::Signature(
-            SignatureAlgorithm::MlDsa87,
-        )))
-    }
-    pub(crate) fn sign(_: &[u8], _: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        Err(CryptoError::Unavailable(Algorithm::Signature(
-            SignatureAlgorithm::MlDsa87,
-        )))
+    pub(crate) fn from_pkcs8(_: &[u8]) -> Result<MlDsaKey, CryptoError> {
+        unavailable().map(MlDsaKey)
     }
     pub(crate) fn verifier() -> Result<&'static dyn sig::VerificationAlgorithm, CryptoError> {
         Err(CryptoError::Unavailable(Algorithm::Signature(
@@ -36,6 +37,18 @@ impl MlDsa {
     #[cfg(test)]
     pub(crate) fn fixture65() -> Option<Zeroizing<Vec<u8>>> {
         None
+    }
+}
+
+impl MlDsaKey {
+    pub(crate) fn public_key(&self) -> Result<Vec<u8>, CryptoError> {
+        unavailable()
+    }
+    pub(crate) fn sign(&self, _: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        unavailable()
+    }
+    pub(crate) fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        unavailable()
     }
 }
 
@@ -69,9 +82,8 @@ mod tests {
     fn every_facade_operation_refuses_the_unavailable_key() {
         let unavailable =
             CryptoError::Unavailable(Algorithm::Signature(SignatureAlgorithm::MlDsa87));
-        assert_eq!(MlDsa::generate(), Err(unavailable));
-        assert_eq!(MlDsa::public_key(b"invalid"), Err(unavailable));
-        assert_eq!(MlDsa::sign(b"invalid", b"message"), Err(unavailable));
+        assert_eq!(MlDsa::generate().err(), Some(unavailable));
+        assert_eq!(MlDsa::from_pkcs8(b"invalid").err(), Some(unavailable));
         assert_eq!(MlDsa::verifier().err(), Some(unavailable));
         assert_eq!(MlDsa::rcgen_alg().err(), Some(unavailable));
         assert_eq!(
@@ -80,5 +92,9 @@ mod tests {
         );
         assert!(MlDsa::fixture44().is_none());
         assert!(MlDsa::fixture65().is_none());
+        let key = MlDsaKey(());
+        assert_eq!(key.public_key(), Err(unavailable));
+        assert_eq!(key.sign(b"message"), Err(unavailable));
+        assert_eq!(key.to_pkcs8_der(), Err(unavailable));
     }
 }

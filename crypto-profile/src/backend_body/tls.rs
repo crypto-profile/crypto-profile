@@ -1176,7 +1176,7 @@ mod tests {
         sans: Vec<rcgen::SanType>,
         extensions: Vec<rcgen::CustomExtension>,
     ) -> CertificateDer<'static> {
-        let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
         params.subject_alt_names = sans;
         params.custom_extensions = extensions;
@@ -1543,7 +1543,8 @@ mod tests {
     }
     impl rcgen::SigningKey for Sha256<'_> {
         fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
-            let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(self.0.to_pkcs8_der()).unwrap();
+            let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(&self.0.to_pkcs8_der().unwrap())
+                .unwrap();
             let mut sig = vec![0; key.public_modulus_len()];
             key.sign(
                 &aws_lc_rs::signature::RSA_PKCS1_SHA256,
@@ -1575,12 +1576,12 @@ mod tests {
                 V::ChainSignature(CS::RsaPkcs1(H::Sha256)),
             ),
         ] {
-            let root_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+            let root_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
             let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
             params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
             let root = params.self_signed(&root_key).unwrap();
             let root_issuer = Issuer::new(params.clone(), &root_key);
-            let intermediate_key = crate::signature::KeyPair::generate(algorithm).unwrap();
+            let intermediate_key = crate::signature::KeyPair::generate_tls_key(algorithm).unwrap();
             let intermediate = params.signed_by(&intermediate_key, &root_issuer).unwrap();
             let sha256_key = Sha256(&intermediate_key);
             let signing_key: &dyn rcgen::SigningKey = if sha256 {
@@ -1589,7 +1590,7 @@ mod tests {
                 &intermediate_key
             };
             let issuer = Issuer::new(params, signing_key);
-            let leaf_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+            let leaf_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
             let leaf = CertificateParams::new(vec!["localhost".into()])
                 .unwrap()
                 .signed_by(&leaf_key, &issuer)
@@ -1661,15 +1662,16 @@ mod tests {
             params.distinguished_name.push(DnType::CommonName, name);
             params
         };
-        let good_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
-        let bad_key = crate::signature::KeyPair::generate(S::EcdsaP256Sha256).unwrap();
+        let good_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let bad_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP256Sha256).unwrap();
         let good_params = ca_params("good root");
         let bad_params = ca_params("bad root");
         let good_root = good_params.self_signed(&good_key).unwrap();
         let bad_root = bad_params.self_signed(&bad_key).unwrap();
         let good_issuer = Issuer::new(good_params, &good_key);
         let bad_issuer = Issuer::new(bad_params, &bad_key);
-        let intermediate_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let intermediate_key =
+            crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
         let intermediate_params = ca_params("shared intermediate");
         let good = intermediate_params
             .signed_by(&intermediate_key, &good_issuer)
@@ -1708,7 +1710,7 @@ mod tests {
             .unwrap()
             .with_expiration_policy(webpki::ExpirationPolicy::Enforce)
             .build();
-        let leaf_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let leaf_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
         let leaf = CertificateParams::new(vec!["localhost".into()])
             .unwrap()
             .signed_by(&leaf_key, &issuer)
@@ -1822,14 +1824,14 @@ mod tests {
     fn peer_certificates_sha256_crls_stay_baseline_with_strict_sha384_paths() {
         use rcgen::{CertificateParams, CertificateRevocationListParams, SerialNumber};
         use rustls::server::danger::ClientCertVerifier;
-        let key = crate::signature::KeyPair::generate(S::Rsa3072Sha384).unwrap();
+        let key = crate::signature::KeyPair::generate_tls_key(S::Rsa3072Sha384).unwrap();
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let root = params.self_signed(&Sha256(&key)).unwrap();
         let issuer = rcgen::Issuer::new(params.clone(), &key);
         let sha256 = Sha256(&key);
         let crl_issuer = rcgen::Issuer::new(params, &sha256);
-        let leaf_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let leaf_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
         let mut params = CertificateParams::new(vec!["localhost".into()]).unwrap();
         params.serial_number = Some(SerialNumber::from(42));
         let leaf = params.signed_by(&leaf_key, &issuer).unwrap();
@@ -1974,12 +1976,12 @@ mod tests {
         use rcgen::{CertificateParams, CertificateRevocationListParams, SerialNumber};
         use rustls::pki_types::{ServerName, UnixTime};
         use rustls::server::danger::ClientCertVerifier;
-        let ca_key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let ca_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let ca = params.self_signed(&ca_key).unwrap();
         let issuer = rcgen::Issuer::new(params, &ca_key);
-        let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
         let mut leaf_params = CertificateParams::new(vec!["localhost".into()]).unwrap();
         leaf_params.serial_number = Some(SerialNumber::from(42));
         let leaf = leaf_params.signed_by(&key, &issuer).unwrap();
@@ -2197,7 +2199,7 @@ mod tests {
         let client_config = client_builder
             .with_client_auth_cert(
                 client_pki.chain,
-                PrivateKeyDer::Pkcs8(client_pki.key.to_pkcs8_der().to_vec().into()),
+                PrivateKeyDer::Pkcs8(client_pki.key.to_pkcs8_der().unwrap().to_vec().into()),
             )
             .unwrap();
         let server_builder = if server_checks_client {
@@ -2215,7 +2217,7 @@ mod tests {
         let server_config = server_builder
             .with_single_cert(
                 server_pki.chain,
-                PrivateKeyDer::Pkcs8(server_pki.key.to_pkcs8_der().to_vec().into()),
+                PrivateKeyDer::Pkcs8(server_pki.key.to_pkcs8_der().unwrap().to_vec().into()),
             )
             .unwrap();
         let mut client = rustls::ClientConnection::new(
@@ -2629,12 +2631,13 @@ mod tests {
 
     #[test]
     fn a_server_config_with_x25519_is_not_fips() {
-        let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
         let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
             .unwrap()
             .self_signed(&key)
             .unwrap();
-        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into());
+        let der =
+            rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().unwrap().to_vec().into());
         let fips = server_builder(&one13(K::Secp384r1))
             .unwrap()
             .with_no_client_auth()
@@ -2654,7 +2657,7 @@ mod tests {
 
     #[test]
     fn verifiers_carry_the_policys_schemes_in_the_canonical_order() {
-        let key = crate::signature::KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let mut roots = rustls::RootCertStore::empty();
@@ -2928,7 +2931,7 @@ mod tests {
             }
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    crate::signature::KeyPair::generate(a).err(),
+                    crate::signature::KeyPair::generate_tls_key(a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
@@ -2960,7 +2963,7 @@ mod tests {
         for (a, t) in cases {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    crate::signature::KeyPair::generate(a).err(),
+                    crate::signature::KeyPair::generate_tls_key(a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
@@ -3003,8 +3006,9 @@ mod tests {
     }
 
     fn chosen(p: &Policy, a: S, offered: &[T]) -> Option<u16> {
-        let key = crate::signature::KeyPair::generate(a).unwrap();
-        let der = rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().to_vec().into());
+        let key = crate::signature::KeyPair::generate_tls_key(a).unwrap();
+        let der =
+            rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().unwrap().to_vec().into());
         let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t).unwrap()).collect();
         load_private_key(p, der)
             .unwrap()

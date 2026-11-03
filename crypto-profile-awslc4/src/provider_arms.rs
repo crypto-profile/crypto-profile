@@ -233,11 +233,16 @@ mod tests {
 
     #[test]
     fn a_key_that_is_not_ml_dsa_is_not_loaded() {
-        let k = crate::signature::KeyPair::generate(
+        let k = crate::signature::KeyPair::generate_tls_key(
             crypto_profile::SignatureAlgorithm::EcdsaP384Sha384,
         )
         .unwrap();
-        assert!(load_pqdsa(&PrivatePkcs8KeyDer::from(k.to_pkcs8_der().to_vec())).is_none());
+        assert!(
+            load_pqdsa(&PrivatePkcs8KeyDer::from(
+                k.to_pkcs8_der().unwrap().to_vec()
+            ))
+            .is_none()
+        );
         assert!(load_pqdsa(&PrivatePkcs8KeyDer::from(b"x".to_vec())).is_none());
     }
 
@@ -264,8 +269,10 @@ mod tests {
 
     #[test]
     fn an_ml_dsa_87_signature_verifies_and_a_flipped_one_does_not() {
-        let k = crate::signature::KeyPair::generate(crypto_profile::SignatureAlgorithm::MlDsa87)
-            .unwrap();
+        let k = crate::signature::KeyPair::generate_tls_key(
+            crypto_profile::SignatureAlgorithm::MlDsa87,
+        )
+        .unwrap();
         let pk = k.public_key();
         let sig = k.sign(b"m").unwrap();
         assert!(ML_DSA_87.verify_signature(pk, b"m", &sig).is_ok());

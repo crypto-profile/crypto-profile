@@ -335,7 +335,7 @@ mod tests {
 
     #[test]
     fn an_ecdsa_signature_verifies_and_a_flipped_one_or_a_bad_point_prefix_does_not() {
-        let k = crate::signature::KeyPair::generate(
+        let k = crate::signature::KeyPair::generate_tls_key(
             crypto_profile::SignatureAlgorithm::EcdsaP256Sha256,
         )
         .unwrap();

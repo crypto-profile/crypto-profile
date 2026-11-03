@@ -211,6 +211,12 @@ pub enum CryptoError {
         /// The signature algorithm.
         algorithm: SignatureAlgorithm,
     },
+    /// A public key that is not the raw key of the signature algorithm's shape, such as a
+    /// SubjectPublicKeyInfo or a compressed point.
+    SignaturePublicKey {
+        /// The signature algorithm.
+        algorithm: SignatureAlgorithm,
+    },
     /// A signature algorithm that is not a TLS certificate key algorithm, refused where a TLS key
     /// or a certificate request is made: an RSA-PSS variant.
     NotTlsKey {
@@ -371,6 +377,9 @@ impl fmt::Display for CryptoError {
             CryptoError::SignaturePrivateKey { algorithm } => {
                 write!(f, "the {algorithm} private key was refused")
             }
+            CryptoError::SignaturePublicKey { algorithm } => {
+                write!(f, "the public key is not a raw {algorithm} public key")
+            }
             CryptoError::NotTlsKey { algorithm } => {
                 write!(f, "{algorithm} is not a TLS certificate key algorithm")
             }
@@ -520,7 +529,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 20] = [
+        let table: [(CryptoError, &str); 21] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -549,6 +558,12 @@ mod tests {
                     algorithm: SignatureAlgorithm::Ed25519,
                 },
                 "the ed25519 private key was refused",
+            ),
+            (
+                CryptoError::SignaturePublicKey {
+                    algorithm: SignatureAlgorithm::MlDsa87,
+                },
+                "the public key is not a raw ml-dsa-87 public key",
             ),
             (
                 CryptoError::NotTlsKey {

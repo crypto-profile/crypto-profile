@@ -4,33 +4,24 @@ use zeroize::Zeroizing;
 
 pub(crate) struct MlDsa;
 
+/// An ML-DSA-87 key, held parsed.
+pub(crate) struct MlDsaKey(sig::PqdsaKeyPair);
+
 impl MlDsa {
-    pub(crate) fn generate() -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-        let doc = sig::PqdsaKeyPair::generate(&sig::ML_DSA_87_SIGNING)
-            .and_then(|k| k.to_pkcs8v1())
-            .map_err(|_| {
-                CryptoError::KeyGeneration(Algorithm::Signature(SignatureAlgorithm::MlDsa87))
-            })?;
-        Ok(Zeroizing::new(doc.as_ref().to_vec()))
+    pub(crate) fn generate() -> Result<MlDsaKey, CryptoError> {
+        let key = sig::PqdsaKeyPair::generate(&sig::ML_DSA_87_SIGNING).map_err(|_| {
+            CryptoError::KeyGeneration(Algorithm::Signature(SignatureAlgorithm::MlDsa87))
+        })?;
+        Ok(MlDsaKey(key))
     }
 
-    pub(crate) fn public_key(der: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        Ok(sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der)
-            .map_err(|_| CryptoError::SignaturePrivateKey {
+    pub(crate) fn from_pkcs8(der: &[u8]) -> Result<MlDsaKey, CryptoError> {
+        let key = sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der).map_err(|_| {
+            CryptoError::SignaturePrivateKey {
                 algorithm: SignatureAlgorithm::MlDsa87,
-            })?
-            .public_key()
-            .as_ref()
-            .to_vec())
-    }
-
-    pub(crate) fn sign(der: &[u8], msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let key = sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der)
-            .map_err(|_| CryptoError::PrivateKey)?;
-        let mut out = vec![0u8; sig::ML_DSA_87_SIGNING.signature_len()];
-        let n = key.sign(msg, &mut out).map_err(|_| CryptoError::Sign)?;
-        out.truncate(n);
-        Ok(out)
+            }
+        })?;
+        Ok(MlDsaKey(key))
     }
 
     pub(crate) fn verifier() -> Result<&'static dyn sig::VerificationAlgorithm, CryptoError> {
@@ -60,6 +51,24 @@ impl MlDsa {
     }
 }
 
+impl MlDsaKey {
+    pub(crate) fn public_key(&self) -> Result<Vec<u8>, CryptoError> {
+        Ok(self.0.public_key().as_ref().to_vec())
+    }
+
+    pub(crate) fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        let mut out = vec![0u8; sig::ML_DSA_87_SIGNING.signature_len()];
+        let n = self.0.sign(msg, &mut out).map_err(|_| CryptoError::Sign)?;
+        out.truncate(n);
+        Ok(out)
+    }
+
+    pub(crate) fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        let doc = self.0.to_pkcs8v1().map_err(|_| CryptoError::Primitive)?;
+        Ok(Zeroizing::new(doc.as_ref().to_vec()))
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn csr_oracle(
     a: SignatureAlgorithm,
@@ -84,22 +93,22 @@ mod tests {
 
     #[test]
     fn facade_roundtrip_and_refusals() {
-        let der = MlDsa::generate().unwrap();
-        let public = MlDsa::public_key(&der).unwrap();
-        let signature = MlDsa::sign(&der, b"message").unwrap();
+        let key = MlDsa::generate().unwrap();
+        let signature = key.sign(b"message").unwrap();
         assert_eq!(signature.len(), 4627);
-        let verifier = sig::UnparsedPublicKey::new(MlDsa::verifier().unwrap(), public);
+        let public = key.public_key().unwrap();
+        assert_eq!(public.len(), 2592);
+        let verifier = sig::UnparsedPublicKey::new(MlDsa::verifier().unwrap(), &public);
         assert!(verifier.verify(b"message", &signature).is_ok());
         assert!(verifier.verify(b"different", &signature).is_err());
+        let der = key.to_pkcs8_der().unwrap();
+        assert_eq!(der.len(), 54);
+        assert_eq!(MlDsa::from_pkcs8(&der).unwrap().public_key(), Ok(public));
         assert_eq!(
-            MlDsa::public_key(b"invalid"),
-            Err(CryptoError::SignaturePrivateKey {
+            MlDsa::from_pkcs8(b"invalid").err(),
+            Some(CryptoError::SignaturePrivateKey {
                 algorithm: SignatureAlgorithm::MlDsa87
             })
-        );
-        assert_eq!(
-            MlDsa::sign(b"invalid", b"message"),
-            Err(CryptoError::PrivateKey)
         );
         assert_eq!(MlDsa::rcgen_alg().unwrap(), &rcgen::PKCS_ML_DSA_87);
     }
@@ -157,9 +166,15 @@ mod tests {
         use crate::signature::KeyPair;
         let a = SignatureAlgorithm::MlDsa87;
         let refused = Some(CryptoError::SignaturePrivateKey { algorithm: a });
-        let generated = KeyPair::generate(a).unwrap();
-        let f = Forms::of(generated.to_pkcs8_der());
-        let other = Forms::of(KeyPair::generate(a).unwrap().to_pkcs8_der());
+        let unrestricted = crate::admit(crate::Profile::Unrestricted, crate::Options::default());
+        let generated = KeyPair::generate(&unrestricted, a).unwrap();
+        let f = Forms::of(&generated.to_pkcs8_der().unwrap());
+        let other = Forms::of(
+            &KeyPair::generate(&unrestricted, a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap(),
+        );
         let seed = tlv(0x80, &f.seed);
         let both = tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, &f.expanded)].concat());
         for der in [
@@ -168,7 +183,7 @@ mod tests {
             f.key(&seed, Some(&f.public)),
             f.key(&both, Some(&f.public)),
         ] {
-            let k = KeyPair::from_pkcs8_der(a, &der).unwrap();
+            let k = KeyPair::from_pkcs8_der(&unrestricted, a, &der).unwrap();
             assert_eq!(k.public_key(), generated.public_key());
         }
         for (why, der) in [
@@ -196,7 +211,11 @@ mod tests {
                 ),
             ),
         ] {
-            assert_eq!(KeyPair::from_pkcs8_der(a, &der).err(), refused, "{why}");
+            assert_eq!(
+                KeyPair::from_pkcs8_der(&unrestricted, a, &der).err(),
+                refused,
+                "{why}"
+            );
         }
     }
 

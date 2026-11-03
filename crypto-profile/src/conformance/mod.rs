@@ -9,6 +9,7 @@ mod key_agreement_tests;
 mod peer_certificate_tests;
 mod peer_identity_tests;
 mod profile_tests;
+mod signature_tests;
 
 #[doc(hidden)]
 pub use hex as __hex;
@@ -43,6 +44,36 @@ pub fn __wycheproof_sig_cases(file: &str, pk_field: &str, pk_sub: &str) -> Vec<S
                 hex::decode(t["sig"].as_str().unwrap_or_default()).unwrap_or_default(),
                 t["result"].as_str().unwrap_or_default().to_string(),
                 t["tcId"].as_u64().unwrap_or_default(),
+            ));
+        }
+    }
+    out
+}
+
+/// The RSA-PSS cases of a Wycheproof file, each with its group's hash, MGF1 hash and salt length:
+/// `("SHA-384/SHA-384/48", case)`.
+#[doc(hidden)]
+pub fn __wycheproof_pss_cases(file: &str) -> Vec<(String, SigCase)> {
+    let v: serde_json::Value = serde_json::from_str(file).unwrap_or_default();
+    let mut out = Vec::new();
+    for g in v["testGroups"].as_array().into_iter().flatten() {
+        let params = format!(
+            "{}/{}/{}",
+            g["sha"].as_str().unwrap_or_default(),
+            g["mgfSha"].as_str().unwrap_or_default(),
+            g["sLen"].as_u64().unwrap_or_default()
+        );
+        let pk = hex::decode(g["publicKeyAsn"].as_str().unwrap_or_default()).unwrap_or_default();
+        for t in g["tests"].as_array().into_iter().flatten() {
+            out.push((
+                params.clone(),
+                (
+                    pk.clone(),
+                    hex::decode(t["msg"].as_str().unwrap_or_default()).unwrap_or_default(),
+                    hex::decode(t["sig"].as_str().unwrap_or_default()).unwrap_or_default(),
+                    t["result"].as_str().unwrap_or_default().to_string(),
+                    t["tcId"].as_u64().unwrap_or_default(),
+                ),
             ));
         }
     }
@@ -293,6 +324,21 @@ mod tests {
             vec![vec![2], vec![6]]
         );
         assert!(__wycheproof_sig_cases("not json", "flat", "").is_empty());
+    }
+
+    #[test]
+    fn pss_cases_carry_their_group_parameters() {
+        let file = r#"{"testGroups":[
+            {"sha":"SHA-384","mgfSha":"SHA-256","sLen":32,"publicKeyAsn":"01","tests":[{"tcId":3,"msg":"02","sig":"03","result":"valid"}]}
+        ]}"#;
+        assert_eq!(
+            __wycheproof_pss_cases(file),
+            vec![(
+                "SHA-384/SHA-256/32".to_string(),
+                (vec![1], vec![2], vec![3], "valid".to_string(), 3)
+            )]
+        );
+        assert!(__wycheproof_pss_cases("not json").is_empty());
     }
 
     #[test]
@@ -621,6 +667,14 @@ pub mod vectors {
     /// Wycheproof RSA PKCS#1 v1.5, 4096-bit, SHA-384.
     pub const RSA4096_PKCS1_SHA384: &str =
         include_str!("vectors/rsa_signature_4096_sha384_test.json");
+    /// Wycheproof RSASSA-PSS, 2048-bit, SHA-384, MGF1 with SHA-384, 48-byte salt.
+    pub const RSA_PSS_2048_SHA384: &str =
+        include_str!("vectors/rsa_pss_2048_sha384_mgf1_48_test.json");
+    /// Wycheproof RSASSA-PSS, 4096-bit, SHA-384, MGF1 with SHA-384, 48-byte salt.
+    pub const RSA_PSS_4096_SHA384: &str =
+        include_str!("vectors/rsa_pss_4096_sha384_mgf1_48_test.json");
+    /// Wycheproof RSASSA-PSS, 2048-bit, one signature for each hash, MGF1 hash and salt length.
+    pub const RSA_PSS_MISC: &str = include_str!("vectors/rsa_pss_misc_test.json");
     /// Wycheproof ML-DSA-87 verification.
     pub const ML_DSA_87: &str = include_str!("vectors/mldsa_87_verify_test.json");
     /// Wycheproof AES-GCM.
@@ -994,9 +1048,10 @@ macro_rules! conformance_tests {
                 ),
             ] {
                 let available = capability(MODULE, Algorithm::Signature(a)).available;
+                let unrestricted = admit(Profile::Unrestricted, Options::default());
                 let (mut valid, mut invalid) = (0, 0);
                 for (pk, msg, sig, result, id) in __wycheproof_sig_cases(file, field, sub) {
-                    let verdict = signature::verify(a, &pk, &msg, &sig);
+                    let verdict = signature::verify(&unrestricted, a, &pk, &msg, &sig);
                     if !available {
                         assert_eq!(
                             verdict,
@@ -1522,6 +1577,7 @@ macro_rules! conformance_tests {
             for t in cases {
                 assert_eq!(
                     signature::verify(
+                        &admit(Profile::Unrestricted, Options::default()),
                         SignatureAlgorithm::Ed25519,
                         &d(&t["pk"]),
                         &d(&t["msg"]),
@@ -1712,9 +1768,10 @@ macro_rules! conformance_tests {
         }
 
         fn sign_and_verify(s: SignatureAlgorithm) -> Result<(), CryptoError> {
-            let k = signature::KeyPair::generate(s)?;
+            let unrestricted = admit(Profile::Unrestricted, Options::default());
+            let k = signature::KeyPair::generate(&unrestricted, s)?;
             let sig = k.sign(b"m")?;
-            signature::verify(s, k.public_key(), b"m", &sig)
+            signature::verify(&unrestricted, s, k.public_key(), b"m", &sig)
         }
 
         #[test]
@@ -1833,6 +1890,10 @@ macro_rules! conformance_tests {
 
         mod conformance_hash {
             $crate::__conformance_hash_tests!($b);
+        }
+
+        mod conformance_signature {
+            $crate::__conformance_signature_tests!($b);
         }
     };
 }

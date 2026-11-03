@@ -106,6 +106,24 @@ mod aead_keys_are_not_clone {}
 #[allow(dead_code)]
 mod hashers_are_not_clone {}
 
+/// A `signature::KeyPair` is not `Clone`, so its private key is held once:
+///
+/// ```
+/// use crypto_profile_awslc4::{Options, Profile, SignatureAlgorithm, admit, signature};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let key = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// assert_eq!(key.algorithm(), SignatureAlgorithm::EcdsaP384Sha384);
+/// ```
+///
+/// ```compile_fail,E0599
+/// use crypto_profile_awslc4::{Options, Profile, SignatureAlgorithm, admit, signature};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let key = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let copy = key.clone();
+/// ```
+#[allow(dead_code)]
+mod signature_key_pairs_are_not_clone {}
+
 #[cfg(not(crypto_profile_provider_direct))]
 crypto_profile::provider!(crate::provider_arms);
 #[cfg(crypto_profile_provider_direct)]
@@ -167,11 +185,18 @@ mod tests {
 mod shared_body_tests {
     #[test]
     fn shared_exports_and_facade_agree() {
-        let key =
-            crate::backend_body::signature::KeyPair::generate(crate::SignatureAlgorithm::MlDsa87)
-                .unwrap();
+        let unrestricted = crate::admit(crate::Profile::Unrestricted, crate::Options::default());
+        let key = crate::backend_body::signature::KeyPair::generate(
+            &unrestricted,
+            crate::SignatureAlgorithm::MlDsa87,
+        )
+        .unwrap();
+        let der = key.to_pkcs8_der().unwrap();
         assert_eq!(
-            crate::backend_arms::MlDsa::public_key(key.to_pkcs8_der()).unwrap(),
+            crate::backend_arms::MlDsa::from_pkcs8(&der)
+                .unwrap()
+                .public_key()
+                .unwrap(),
             key.public_key()
         );
         assert_eq!(

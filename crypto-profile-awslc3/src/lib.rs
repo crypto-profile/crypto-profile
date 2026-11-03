@@ -106,6 +106,24 @@ mod aead_keys_are_not_clone {}
 #[allow(dead_code)]
 mod hashers_are_not_clone {}
 
+/// A `signature::KeyPair` is not `Clone`, so its private key is held once:
+///
+/// ```
+/// use crypto_profile_awslc3::{Options, Profile, SignatureAlgorithm, admit, signature};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let key = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// assert_eq!(key.algorithm(), SignatureAlgorithm::EcdsaP384Sha384);
+/// ```
+///
+/// ```compile_fail,E0599
+/// use crypto_profile_awslc3::{Options, Profile, SignatureAlgorithm, admit, signature};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let key = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let copy = key.clone();
+/// ```
+#[allow(dead_code)]
+mod signature_key_pairs_are_not_clone {}
+
 crypto_profile::provider!(crate::provider_arms);
 mod provider_arms;
 
