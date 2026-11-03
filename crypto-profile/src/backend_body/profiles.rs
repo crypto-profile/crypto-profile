@@ -2,8 +2,8 @@
 use crate::signature::KeyPair;
 use crate::tls::{Policy, load_private_key};
 use crate::{
-    AeadAlgorithm, Algorithm, Approval, CryptoError, Family, KdfAlgorithm, KeyAgreementAlgorithm,
-    MacAlgorithm, Options, Profile, SignatureAlgorithm, TlsError,
+    AeadAlgorithm, Algorithm, Approval, CryptoError, Family, HashAlgorithm, KdfAlgorithm,
+    KeyAgreementAlgorithm, MacAlgorithm, Options, Profile, SignatureAlgorithm, TlsError,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
@@ -153,7 +153,7 @@ pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
 
 /// A profile's non-TLS families on this backend's module, under `options`. Independent of
 /// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs, KDFs, key
-/// agreement and AEADs.
+/// agreement, AEADs and hashes.
 /// Built only by [`admit`], and read-only, so a constructor that takes it checks the profile's
 /// own admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -164,6 +164,7 @@ pub struct Admitted {
     kdfs: Vec<KdfAlgorithm>,
     key_agreements: Vec<KeyAgreementAlgorithm>,
     aeads: Vec<AeadAlgorithm>,
+    hashes: Vec<HashAlgorithm>,
     excluded: Vec<Algorithm>,
 }
 
@@ -178,6 +179,7 @@ pub fn admit(profile: Profile, options: Options) -> Admitted {
         kdfs: s.kdfs,
         key_agreements: s.key_agreements,
         aeads: s.aeads,
+        hashes: s.hashes,
         excluded: s.excluded,
     }
 }
@@ -213,6 +215,11 @@ impl Admitted {
         &self.aeads
     }
 
+    /// The hash functions the profile admits, in preference order.
+    pub fn hashes(&self) -> &[HashAlgorithm] {
+        &self.hashes
+    }
+
     /// Entries unavailable on the module line, in family and preference order.
     pub fn excluded(&self) -> &[Algorithm] {
         &self.excluded
@@ -242,6 +249,12 @@ impl Admitted {
         self.admit_one(self.aeads.contains(&d), Algorithm::Aead(d))
     }
 
+    /// Refuses a hash function the profile does not admit, and one the module line lacks with
+    /// `CryptoError::Unavailable`.
+    pub fn admit_hash(&self, h: HashAlgorithm) -> Result<(), CryptoError> {
+        self.admit_one(self.hashes.contains(&h), Algorithm::Hash(h))
+    }
+
     fn cells(&self, family: Family) -> Result<Vec<Algorithm>, CryptoError> {
         match family {
             Family::Mac => Ok(self.macs.iter().map(|m| Algorithm::Mac(*m)).collect()),
@@ -252,6 +265,7 @@ impl Admitted {
                 .map(|k| Algorithm::KeyAgreement(*k))
                 .collect()),
             Family::Aead => Ok(self.aeads.iter().map(|d| Algorithm::Aead(*d)).collect()),
+            Family::Hash => Ok(self.hashes.iter().map(|h| Algorithm::Hash(*h)).collect()),
             _ => Err(CryptoError::FamilyNotAdmitted(family)),
         }
     }
@@ -264,6 +278,7 @@ impl Admitted {
         self.key_agreements
             .retain(|k| Algorithm::KeyAgreement(*k) != algorithm);
         self.aeads.retain(|d| Algorithm::Aead(*d) != algorithm);
+        self.hashes.retain(|h| Algorithm::Hash(*h) != algorithm);
         self
     }
 
@@ -299,7 +314,13 @@ fn admitted_approved_given(
     {
         return Err(CryptoError::KdfInfoMayBeEmpty { profile: a.profile });
     }
-    for f in [Family::Mac, Family::Kdf, Family::KeyAgreement, Family::Aead] {
+    for f in [
+        Family::Mac,
+        Family::Kdf,
+        Family::KeyAgreement,
+        Family::Aead,
+        Family::Hash,
+    ] {
         if !families.contains(&f) {
             continue;
         }
@@ -323,10 +344,9 @@ fn admitted_approved_given(
 /// `Family::Kdf`, with `CryptoError::KdfInfoMayBeEmpty` if `a`'s profile admits KDFs and an empty
 /// `info`, which the module does not approve (`unrestricted`); then unless every algorithm `a`
 /// admits in each named family is `Approved` for the running module, walking `Family::Mac`,
-/// `Family::Kdf`, `Family::KeyAgreement`, then `Family::Aead`, and failing on the first that is
-/// not. Asserting
-/// nothing approves nothing: an empty `families`, or a named family `a` admits nothing in, is not a
-/// refusal. Independent of `assert_module_approves`.
+/// `Family::Kdf`, `Family::KeyAgreement`, `Family::Aead`, then `Family::Hash`, and failing on the
+/// first that is not. Asserting nothing approves nothing: an empty `families`, or a named family
+/// `a` admits nothing in, is not a refusal. Independent of `assert_module_approves`.
 pub fn assert_admitted_approved(a: &Admitted, families: &[Family]) -> Result<(), CryptoError> {
     admitted_approved_given(aws_lc_rs::try_fips_mode().is_ok(), a, families, |x| {
         crypto_profile::capability(crate::MODULE, x).approval
@@ -810,6 +830,10 @@ mod admitted_tests {
                     a.aeads(),
                     crypto_profile::select_admitted(p, o, crate::MODULE).aeads
                 );
+                assert_eq!(
+                    a.hashes(),
+                    crypto_profile::select_admitted(p, o, crate::MODULE).hashes
+                );
                 assert_eq!(a.excluded(), []);
             }
         }
@@ -828,6 +852,14 @@ mod admitted_tests {
         assert_eq!(
             admit(Profile::Cnsa1, on()).kdfs(),
             [Kd::HkdfSha384, Kd::HkdfSha256]
+        );
+        assert_eq!(
+            admit(Profile::Cnsa2, Options::default()).hashes(),
+            [HashAlgorithm::Sha384, HashAlgorithm::Sha512]
+        );
+        assert_eq!(
+            admit(Profile::Cnsa1, on()).hashes(),
+            [HashAlgorithm::Sha384, HashAlgorithm::Sha256]
         );
         assert_eq!(admit(Profile::Cnsa1, on()).options(), on());
     }
@@ -954,7 +986,7 @@ mod admitted_tests {
     }
 
     #[test]
-    fn the_aead_family_is_walked_last() {
+    fn the_aead_family_is_walked_after_key_agreement() {
         let a = admit(Profile::Fips1403, Options::default());
         let ecdh = Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384);
         let gcm = Algorithm::Aead(AeadAlgorithm::Aes256Gcm);
@@ -1031,7 +1063,187 @@ mod admitted_tests {
         }
     }
 
-    const NON_TLS: [Family; 4] = [Family::Mac, Family::Kdf, Family::KeyAgreement, Family::Aead];
+    #[test]
+    fn admit_hash_admits_exactly_the_profile_hashes() {
+        for &p in Profile::ALL {
+            for o in [Options::default(), on()] {
+                let a = admit(p, o);
+                for &h in HashAlgorithm::ALL {
+                    let want = if a.hashes.contains(&h) {
+                        Ok(())
+                    } else {
+                        Err(CryptoError::NotInProfile {
+                            profile: p,
+                            algorithm: Algorithm::Hash(h),
+                        })
+                    };
+                    assert_eq!(a.admit_hash(h), want, "{p} {o} {h:?}");
+                }
+            }
+        }
+        assert_eq!(
+            admit(Profile::Cnsa2, on()).admit_hash(HashAlgorithm::Sha256),
+            Err(CryptoError::NotInProfile {
+                profile: Profile::Cnsa2,
+                algorithm: Algorithm::Hash(HashAlgorithm::Sha256),
+            })
+        );
+        assert_eq!(
+            admit(Profile::Cnsa1, on()).admit_hash(HashAlgorithm::Sha256),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn a_hash_the_module_lacks_is_unavailable() {
+        let mut a = admit(Profile::Fips1403, Options::default());
+        a.hashes.retain(|h| *h != HashAlgorithm::Sha3_256);
+        a.excluded.push(Algorithm::Hash(HashAlgorithm::Sha3_256));
+        assert_eq!(
+            a.admit_hash(HashAlgorithm::Sha3_256),
+            Err(CryptoError::Unavailable(Algorithm::Hash(
+                HashAlgorithm::Sha3_256
+            )))
+        );
+        assert_eq!(a.admit_hash(HashAlgorithm::Sha3_512), Ok(()));
+        let without = admit(Profile::Cnsa2, Options::default())
+            .without(Algorithm::Hash(HashAlgorithm::Sha384));
+        assert_eq!(without.hashes(), [HashAlgorithm::Sha512]);
+    }
+
+    #[test]
+    fn the_hash_family_is_walked_last() {
+        let a = admit(Profile::Fips1403, Options::default());
+        let gcm = Algorithm::Aead(AeadAlgorithm::Aes256Gcm);
+        let sha = Algorithm::Hash(HashAlgorithm::Sha512);
+        let neither = |x: Algorithm| {
+            if x == gcm || x == sha {
+                Approval::Unverified
+            } else {
+                approved(x)
+            }
+        };
+        for families in [[Family::Hash, Family::Aead], [Family::Aead, Family::Hash]] {
+            assert_eq!(
+                admitted_approved_given(true, &a, &families, neither),
+                Err(CryptoError::NotApproved {
+                    algorithm: gcm,
+                    approval: Approval::Unverified,
+                }),
+                "{families:?}"
+            );
+        }
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Hash], neither),
+            Err(CryptoError::NotApproved {
+                algorithm: sha,
+                approval: Approval::Unverified,
+            })
+        );
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Hash], all_but(gcm)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_hash_walk_visits_exactly_the_admitted_hashes() {
+        use HashAlgorithm as H;
+        for (p, o, want) in [
+            (
+                Profile::Cnsa2,
+                Options::default(),
+                &[H::Sha384, H::Sha512][..],
+            ),
+            (Profile::Cnsa1, Options::default(), &[H::Sha384]),
+            (Profile::Cnsa1, on(), &[H::Sha384, H::Sha256]),
+            (
+                Profile::Preferred,
+                Options::default(),
+                &[H::Sha512, H::Sha384, H::Sha256],
+            ),
+            (
+                Profile::Bsi,
+                Options::default(),
+                &[
+                    H::Sha512,
+                    H::Sha384,
+                    H::Sha256,
+                    H::Sha3_512,
+                    H::Sha3_384,
+                    H::Sha3_256,
+                ],
+            ),
+        ] {
+            let seen = std::cell::RefCell::new(Vec::new());
+            let record = |x: Algorithm| {
+                seen.borrow_mut().push(x);
+                approved(x)
+            };
+            assert_eq!(
+                admitted_approved_given(true, &admit(p, o), &[Family::Hash], record),
+                Ok(()),
+                "{p} {o}"
+            );
+            let want: Vec<Algorithm> = want.iter().map(|h| Algorithm::Hash(*h)).collect();
+            assert_eq!(seen.into_inner(), want, "{p} {o}");
+        }
+    }
+
+    #[test]
+    fn admitted_hash_approval_follows_this_modules_cells() {
+        let cell = |h| crypto_profile::capability(crate::MODULE, Algorithm::Hash(h)).approval;
+        for &p in Profile::ALL {
+            for o in [Options::default(), on()] {
+                let a = admit(p, o);
+                let first = a.hashes[0];
+                let want = match crate::MODULE.line {
+                    crate::ModuleLine::AwsLcFips3 => Ok(()),
+                    crate::ModuleLine::AwsLcFips4 => Err(CryptoError::NotApproved {
+                        algorithm: Algorithm::Hash(first),
+                        approval: cell(first),
+                    }),
+                    other => panic!("{other:?}: no expected approval"),
+                };
+                assert_eq!(
+                    assert_admitted_approved(&a, &[Family::Hash]),
+                    want,
+                    "{p} {o}"
+                );
+            }
+        }
+        for &h in HashAlgorithm::ALL {
+            match crate::MODULE.line {
+                crate::ModuleLine::AwsLcFips3 => assert!(cell(h).is_approved(), "{h:?}"),
+                crate::ModuleLine::AwsLcFips4 => {
+                    assert!(matches!(cell(h), Approval::AlgorithmTested { .. }), "{h:?}")
+                }
+                other => panic!("{other:?}: no expected approval"),
+            }
+        }
+        assert_eq!(
+            assert_admitted_approved(
+                &admit(Profile::Fips1403, Options::default()),
+                &[Family::Hash]
+            ),
+            if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                Ok(())
+            } else {
+                Err(CryptoError::NotApproved {
+                    algorithm: Algorithm::Hash(HashAlgorithm::Sha512),
+                    approval: cell(HashAlgorithm::Sha512),
+                })
+            }
+        );
+    }
+
+    const NON_TLS: [Family; 5] = [
+        Family::Mac,
+        Family::Kdf,
+        Family::KeyAgreement,
+        Family::Aead,
+        Family::Hash,
+    ];
     const TLS: [Family; 5] = [
         Family::Version,
         Family::CipherSuite,
@@ -1166,6 +1378,7 @@ mod admitted_tests {
             kdfs: vec![],
             key_agreements: vec![],
             aeads: vec![],
+            hashes: vec![],
             ..admit(Profile::Unrestricted, Options::default())
         };
         assert_eq!(

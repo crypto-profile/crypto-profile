@@ -468,16 +468,22 @@ impl KxGroup {
     }
 }
 
-/// A hash function.
+/// A hash function: SHA-2 (FIPS 180-4) or SHA-3 (FIPS 202), with its full-length output.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HashAlgorithm {
-    /// SHA-256.
+    /// SHA-256 (FIPS 180-4).
     Sha256,
-    /// SHA-384.
+    /// SHA-384 (FIPS 180-4).
     Sha384,
-    /// SHA-512.
+    /// SHA-512 (FIPS 180-4).
     Sha512,
+    /// SHA3-256 (FIPS 202).
+    Sha3_256,
+    /// SHA3-384 (FIPS 202).
+    Sha3_384,
+    /// SHA3-512 (FIPS 202).
+    Sha3_512,
 }
 
 impl HashAlgorithm {
@@ -486,6 +492,9 @@ impl HashAlgorithm {
         HashAlgorithm::Sha256,
         HashAlgorithm::Sha384,
         HashAlgorithm::Sha512,
+        HashAlgorithm::Sha3_256,
+        HashAlgorithm::Sha3_384,
+        HashAlgorithm::Sha3_512,
     ];
 
     /// The position of `self` in [`Self::ALL`].
@@ -495,16 +504,48 @@ impl HashAlgorithm {
             HashAlgorithm::Sha256 => 0,
             HashAlgorithm::Sha384 => 1,
             HashAlgorithm::Sha512 => 2,
+            HashAlgorithm::Sha3_256 => 3,
+            HashAlgorithm::Sha3_384 => 4,
+            HashAlgorithm::Sha3_512 => 5,
+        }
+    }
+
+    /// The algorithm's stable configuration name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            HashAlgorithm::Sha256 => "sha256",
+            HashAlgorithm::Sha384 => "sha384",
+            HashAlgorithm::Sha512 => "sha512",
+            HashAlgorithm::Sha3_256 => "sha3-256",
+            HashAlgorithm::Sha3_384 => "sha3-384",
+            HashAlgorithm::Sha3_512 => "sha3-512",
         }
     }
 
     /// The digest length in bytes.
     pub const fn output_len(self) -> usize {
         match self {
-            HashAlgorithm::Sha256 => 32,
-            HashAlgorithm::Sha384 => 48,
-            HashAlgorithm::Sha512 => 64,
+            HashAlgorithm::Sha256 | HashAlgorithm::Sha3_256 => 32,
+            HashAlgorithm::Sha384 | HashAlgorithm::Sha3_384 => 48,
+            HashAlgorithm::Sha512 | HashAlgorithm::Sha3_512 => 64,
         }
+    }
+}
+
+impl FromStr for HashAlgorithm {
+    type Err = ParseAlgorithmError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        HashAlgorithm::ALL
+            .iter()
+            .copied()
+            .find(|a| a.as_str() == s)
+            .ok_or_else(|| ParseAlgorithmError(s.to_string()))
+    }
+}
+
+impl fmt::Display for HashAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -1110,8 +1151,36 @@ mod tests {
                 .copied()
                 .map(HashAlgorithm::output_len)
                 .collect::<Vec<_>>(),
-            [32, 48, 64]
+            [32, 48, 64, 32, 48, 64]
         );
+    }
+
+    #[test]
+    fn hash_names_are_stable_and_round_trip() {
+        assert_eq!(
+            HashAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(HashAlgorithm::as_str)
+                .collect::<Vec<_>>(),
+            [
+                "sha256", "sha384", "sha512", "sha3-256", "sha3-384", "sha3-512"
+            ]
+        );
+        for &h in HashAlgorithm::ALL {
+            assert_eq!(h.as_str().parse::<HashAlgorithm>(), Ok(h));
+            assert_eq!(h.to_string(), h.as_str());
+        }
+        for bad in [
+            "", "SHA256", "sha-256", "sha256 ", "sha3_256", "sha3256", "sha224", "sha3-224",
+            "shake256",
+        ] {
+            assert_eq!(
+                bad.parse::<HashAlgorithm>(),
+                Err(ParseAlgorithmError(bad.to_string())),
+                "{bad:?}"
+            );
+        }
     }
 
     #[test]
@@ -1128,7 +1197,7 @@ mod tests {
             + KeyAgreementAlgorithm::ALL.len()
             + AeadAlgorithm::ALL.len();
         assert_eq!(all.len(), expected);
-        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3 + 6 + 4 + 3);
+        assert_eq!(expected, 9 + 11 + 7 + 9 + 6 + 2 + 3 + 6 + 4 + 3);
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
@@ -1267,7 +1336,11 @@ mod tests {
                 .copied()
                 .map(MacAlgorithm::hash)
                 .collect::<Vec<_>>(),
-            HashAlgorithm::ALL
+            [
+                HashAlgorithm::Sha256,
+                HashAlgorithm::Sha384,
+                HashAlgorithm::Sha512
+            ]
         );
         assert_eq!(
             MacAlgorithm::ALL
@@ -1425,12 +1498,23 @@ mod tests {
     #[test]
     fn hash_algorithm_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
+            HashAlgorithm::ALL,
+            [
+                HashAlgorithm::Sha256,
+                HashAlgorithm::Sha384,
+                HashAlgorithm::Sha512,
+                HashAlgorithm::Sha3_256,
+                HashAlgorithm::Sha3_384,
+                HashAlgorithm::Sha3_512,
+            ]
+        );
+        assert_eq!(
             HashAlgorithm::ALL
                 .iter()
                 .copied()
                 .map(HashAlgorithm::ordinal)
                 .collect::<Vec<_>>(),
-            std::array::from_fn::<usize, 3, _>(|i| i)
+            std::array::from_fn::<usize, 6, _>(|i| i)
         );
     }
 

@@ -6,6 +6,9 @@ fn alg(h: HashAlgorithm) -> Result<&'static aws_lc_rs::digest::Algorithm, Crypto
         HashAlgorithm::Sha256 => Ok(&aws_lc_rs::digest::SHA256),
         HashAlgorithm::Sha384 => Ok(&aws_lc_rs::digest::SHA384),
         HashAlgorithm::Sha512 => Ok(&aws_lc_rs::digest::SHA512),
+        HashAlgorithm::Sha3_256 => Ok(&aws_lc_rs::digest::SHA3_256),
+        HashAlgorithm::Sha3_384 => Ok(&aws_lc_rs::digest::SHA3_384),
+        HashAlgorithm::Sha3_512 => Ok(&aws_lc_rs::digest::SHA3_512),
         _ => Err(CryptoError::Unavailable(Algorithm::Hash(h))),
     }
 }

@@ -1186,6 +1186,29 @@ macro_rules! conformance_tests {
         }
 
         #[test]
+        fn conformance_hash_refusal_matrix() {
+            for &(p, off, on) in $crate::conformance::golden::HASH_GOLDEN {
+                for (unclassified, admitted) in [(false, off), (true, on)] {
+                    let mut o = Options::default();
+                    o.cnsa1_unclassified_nss = unclassified;
+                    let a = admit(p, o);
+                    assert_eq!(a.hashes(), admitted, "{p} {o}");
+                    for &h in HashAlgorithm::ALL {
+                        let want = if admitted.contains(&h) {
+                            Ok(())
+                        } else {
+                            Err(CryptoError::NotInProfile {
+                                profile: p,
+                                algorithm: Algorithm::Hash(h),
+                            })
+                        };
+                        assert_eq!(a.admit_hash(h), want, "{p} {o} {h:?}");
+                    }
+                }
+            }
+        }
+
+        #[test]
         fn conformance_rfc5869_hkdf() {
             let v: $crate::conformance::__serde_json::Value =
                 $crate::conformance::__serde_json::from_str(vectors::HKDF_RFC5869).unwrap();
