@@ -23,8 +23,9 @@ enum Sealer {
     Drawn,
 }
 
-/// An AEAD key the profile admits. It seals under nonces chosen inside its own module call, never
-/// the caller's, and refuses its 2^32 + 1th seal with `CryptoError::AeadLimit`. It opens under
+/// An AEAD key the profile admits. It seals under nonces the crate chooses, never the caller's:
+/// AES-GCM's is drawn inside the module's seal, ChaCha20-Poly1305's from the module's DRBG just
+/// before its seal. It refuses its 2^32 + 1th seal with `CryptoError::AeadLimit`. It opens under
 /// the nonce stored beside a ciphertext. It is not `Clone`, so its seal count cannot be copied.
 /// Its key schedule is held in the module's AEAD contexts, which the module clears on drop.
 pub struct Key {
@@ -99,8 +100,8 @@ impl Key {
     /// Scenario 2); ChaCha20-Poly1305 draws it from the module's DRBG. Refuses, in order: a
     /// plaintext longer than `algorithm.max_plaintext_len()` (`CryptoError::AeadPlaintextLength`);
     /// a 2^32 + 1th seal (`CryptoError::AeadLimit`); a module failure (`CryptoError::AeadSeal`, or
-    /// `CryptoError::Random`). A seal refused after the length check still counts toward the
-    /// limit.
+    /// `CryptoError::Random`). A seal the module refuses after reserving its invocation still
+    /// counts toward the limit; an `AeadLimit` refusal reserves nothing.
     pub fn seal_in_place(
         &self,
         aad: &[u8],
@@ -152,7 +153,7 @@ impl Key {
         plaintext_fits(self.algorithm, len)?;
         self.invocations
             .try_update(Ordering::SeqCst, Ordering::SeqCst, |n| {
-                (n < INVOCATION_LIMIT).then_some(n + 1)
+                (n < INVOCATION_LIMIT).then(|| n + 1)
             })
             .map(|_| ())
             .map_err(|_| CryptoError::AeadLimit {
@@ -400,6 +401,36 @@ mod tests {
             k.set_invocations(INVOCATION_LIMIT);
             assert_eq!(k.reserve(max + 1), refused);
             assert_eq!(k.reserve(max), Err(CryptoError::AeadLimit { algorithm: d }));
+        }
+    }
+
+    #[test]
+    fn chacha20_poly1305_stops_one_byte_below_the_modules_refusal() {
+        let d = D::Chacha20Poly1305;
+        let module_refuses = 274_877_906_880usize;
+        assert_eq!(d.max_plaintext_len(), module_refuses as u64 - 1);
+        assert_eq!(plaintext_fits(d, module_refuses - 1), Ok(()));
+        let refused = Err(CryptoError::AeadPlaintextLength {
+            algorithm: d,
+            bytes: module_refuses,
+        });
+        assert_eq!(plaintext_fits(d, module_refuses), refused);
+        let k = key(d);
+        assert_eq!(k.reserve(module_refuses), refused);
+        assert_eq!(count(&k), 0);
+    }
+
+    #[test]
+    fn a_count_of_u64_max_is_a_limit_refusal() {
+        for &d in AeadAlgorithm::ALL {
+            let k = key(d);
+            k.set_invocations(u64::MAX);
+            assert_eq!(
+                k.seal_in_place(b"", &mut []).err(),
+                Some(CryptoError::AeadLimit { algorithm: d }),
+                "{d:?}"
+            );
+            assert_eq!(count(&k), u64::MAX);
         }
     }
 

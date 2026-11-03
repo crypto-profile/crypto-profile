@@ -595,9 +595,9 @@ mod tests {
             (
                 CryptoError::AeadPlaintextLength {
                     algorithm: AeadAlgorithm::Chacha20Poly1305,
-                    bytes: 274_877_906_881,
+                    bytes: 274_877_906_880,
                 },
-                "a plaintext of 274877906881 bytes exceeds chacha20-poly1305's maximum of 274877906880 bytes",
+                "a plaintext of 274877906880 bytes exceeds chacha20-poly1305's maximum of 274877906879 bytes",
             ),
             (
                 CryptoError::AeadLimit {

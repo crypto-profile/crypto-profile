@@ -733,12 +733,12 @@ impl AeadAlgorithm {
     }
 
     /// The longest plaintext one seal takes, in bytes. AES-GCM: 2^36 − 32, SP 800-38D §5.2.1.1
-    /// (p. 8), len(P) ≤ 2^39 − 256 bits. ChaCha20-Poly1305: 274,877,906,880, RFC 8439 §2.8's
-    /// P_MAX.
+    /// (p. 8), len(P) ≤ 2^39 − 256 bits. ChaCha20-Poly1305: RFC 8439 §2.8 gives 274,877,906,880
+    /// and the module refuses that length, so the bound is one byte below it.
     pub const fn max_plaintext_len(self) -> u64 {
         match self {
             AeadAlgorithm::Aes128Gcm | AeadAlgorithm::Aes256Gcm => (1 << 36) - 32,
-            AeadAlgorithm::Chacha20Poly1305 => 274_877_906_880,
+            AeadAlgorithm::Chacha20Poly1305 => 274_877_906_879,
         }
     }
 }
@@ -1226,7 +1226,7 @@ mod tests {
             [
                 (16, 68_719_476_704),
                 (32, 68_719_476_704),
-                (32, 274_877_906_880)
+                (32, 274_877_906_879)
             ]
         );
         assert_eq!(
@@ -1235,7 +1235,7 @@ mod tests {
         );
         assert_eq!(
             AeadAlgorithm::Chacha20Poly1305.max_plaintext_len(),
-            64 * ((1 << 32) - 1)
+            64 * ((1 << 32) - 1) - 1
         );
     }
 
