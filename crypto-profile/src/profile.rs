@@ -2,8 +2,8 @@
 //! admits. A profile is an algorithm set, not a validation claim; whether the running module is
 //! validated for it is a separate check.
 use crate::algorithm::{
-    Algorithm, CipherSuite as C, KdfAlgorithm, KeyAgreementAlgorithm, KxGroup as K, MacAlgorithm,
-    SignatureAlgorithm as S, TlsSignatureScheme as T, TlsVersion as V,
+    AeadAlgorithm, Algorithm, CipherSuite as C, KdfAlgorithm, KeyAgreementAlgorithm, KxGroup as K,
+    MacAlgorithm, SignatureAlgorithm as S, TlsSignatureScheme as T, TlsVersion as V,
 };
 use crate::capability::{Module, capability};
 use crate::error::{CryptoError, Family};
@@ -172,7 +172,7 @@ pub struct Options {
     /// ¶2b (p. B-2) allows SHA-256 in the near term for UNCLASSIFIED NSS data and
     /// community-of-interest separation only. Ignored by every other profile, and by every family
     /// but message authentication and HKDF. It admits no one-step KDF, and does not widen `cnsa1`'s
-    /// key agreement beyond P-384. Off by default.
+    /// key agreement beyond P-384 or its AEADs beyond AES-256-GCM. Off by default.
     pub cnsa1_unclassified_nss: bool,
 }
 
@@ -220,6 +220,8 @@ pub struct ProfileSpec {
     pub kdfs: &'static [KdfAlgorithm],
     /// Key agreement outside TLS, for `ecdh`; admitted through `admit`, not `resolve`.
     pub key_agreements: &'static [KeyAgreementAlgorithm],
+    /// Authenticated encryption outside TLS, for `aead`; admitted through `admit`, not `resolve`.
+    pub aeads: &'static [AeadAlgorithm],
 }
 
 impl Profile {
@@ -244,6 +246,7 @@ impl Profile {
 /// - MACs: every HMAC in the inventory.
 /// - KDFs: every HKDF and one-step KDF in the inventory.
 /// - Key agreement: ECDH on P-384, P-521 and P-256, and X25519: every curve the backends implement.
+/// - AEADs: AES-256-GCM, AES-128-GCM and ChaCha20-Poly1305: every AEAD the backends implement.
 pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -309,6 +312,11 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
         KeyAgreementAlgorithm::EcdhP256,
         KeyAgreementAlgorithm::X25519,
     ],
+    aeads: &[
+        AeadAlgorithm::Aes256Gcm,
+        AeadAlgorithm::Aes128Gcm,
+        AeadAlgorithm::Chacha20Poly1305,
+    ],
 };
 
 /// `preferred`: the crate's recommendation. Not a government profile; see `docs/profiles.md`.
@@ -342,6 +350,11 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 /// - Key agreement: ECDH on P-384, P-521 and P-256, "preferably the NIST P-384 curve", ISM-1761
 ///   (p. 8). X25519 excluded: ISM-1761 names only the NIST curves. ECDH "will not be approved
 ///   beyond 2030" (p. 8).
+/// - AEADs: AES-256-GCM, AES-128-GCM. "The only approved symmetric cryptographic algorithm is
+///   ... AES" (p. 6); AES-128, AES-192 or AES-256, "preferably AES-256", ISM-1769 (p. 11); GCM,
+///   named on p. 11 and required by ISM-1771 (p. 15), ISM-0998 (p. 16) and ISM-1369 (p. 20).
+///   AES-128 "will not be approved beyond 2030" (p. 11). ChaCha20-Poly1305 excluded: p. 6 and
+///   ISM-0471 (p. 7).
 pub const PREFERRED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384, C::Tls13Aes128GcmSha256],
@@ -389,6 +402,7 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
         KeyAgreementAlgorithm::EcdhP521,
         KeyAgreementAlgorithm::EcdhP256,
     ],
+    aeads: &[AeadAlgorithm::Aes256Gcm, AeadAlgorithm::Aes128Gcm],
 };
 
 /// `cnsa2`: the CNSA 2.0 algorithm set of CNSSP 15 (December 2024), Annex B, pp. B-1 to B-2, on
@@ -406,6 +420,8 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
 ///   RFC 9151 §4 reaches HKDF only.
 /// - No key agreement outside TLS: Annex B ¶1 table (p. B-1) lists ML-KEM-1024 as the only key
 ///   establishment.
+/// - AEADs: AES-256-GCM. Annex B ¶1 table (p. B-1), AES "Use 256 bit keys"; the mode through
+///   ¶8a and fn. 1 (p. 5): RFC 9151 §4 (AES-256 in GCM) and RFC 9206.
 pub const CNSA2: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384],
@@ -415,6 +431,7 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
     macs: &[MacAlgorithm::HmacSha384, MacAlgorithm::HmacSha512],
     kdfs: &[KdfAlgorithm::HkdfSha384, KdfAlgorithm::HkdfSha512],
     key_agreements: &[],
+    aeads: &[AeadAlgorithm::Aes256Gcm],
 };
 
 /// `cnsa1`: the CNSA 1.0 algorithm set of CNSSP 15 (20 October 2016), Annex B (p. B-1), in the
@@ -438,6 +455,9 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
 ///   RFC 9151 §4 reaches HKDF only.
 /// - Key agreement: ECDH on P-384, Annex B ¶1 table (p. B-1). `Options::cnsa1_unclassified_nss`
 ///   does not widen it: ¶2b (p. B-2) requires NSA consultation for any other curve.
+/// - AEADs: AES-256-GCM. Annex B ¶1 table (p. B-1), AES "Use 256 bit keys"; RFC 9151 §4 (AES-256
+///   in GCM). `Options::cnsa1_unclassified_nss` does not widen it: ¶2b (p. B-2) names RSA, DH
+///   and SHA-256 only.
 pub const CNSA1: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -451,6 +471,7 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
     macs: &[MacAlgorithm::HmacSha384],
     kdfs: &[KdfAlgorithm::HkdfSha384],
     key_agreements: &[KeyAgreementAlgorithm::EcdhP384],
+    aeads: &[AeadAlgorithm::Aes256Gcm],
 };
 
 /// `bsi`: BSI TR-02102-2 (TLS) and TR-02102-1, version 2026-01.
@@ -470,6 +491,9 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
 ///   (p. 73), with a Table 4.1 hash (p. 47). The one-step KDF is not among them.
 /// - No key agreement outside TLS: TR-02102-1 Table B.3 (p. 75) recommends only Brainpool curves,
 ///   which no backend implements.
+/// - AEADs: AES-256-GCM, AES-128-GCM. TR-02102-1 Table 3.1 (p. 40), Table 3.2 (p. 42), §3.1.2
+///   (pp. 42-43). ChaCha20-Poly1305 excluded: §3.2 (p. 44), "no dedicated stream ciphers are
+///   recommended".
 pub const BSI: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -501,6 +525,7 @@ pub const BSI: ProfileSpec = ProfileSpec {
         KdfAlgorithm::HkdfSha256,
     ],
     key_agreements: &[],
+    aeads: &[AeadAlgorithm::Aes256Gcm, AeadAlgorithm::Aes128Gcm],
 };
 
 /// `fips1403`: NIST SP 800-140C r2 and SP 800-140D r2 with the CMVP lists (updated August 21,
@@ -534,6 +559,10 @@ pub const BSI: ProfileSpec = ProfileSpec {
 /// - Key agreement: ECDH on P-384, P-521 and P-256: SP 800-56A r3 Appendix D, Table 24 (p. 132);
 ///   IG C.A (p. 135); IG D.F Scenario 2 (pp. 187-188). X25519 excluded: IG C.K Resolution 5
 ///   (p. 160).
+/// - AEADs: AES-256-GCM, AES-128-GCM. CMVP SP 800-140C list §6.2.2.1 (FIPS 197-upd1, SP
+///   800-38D), through SP 800-140C r2 §6.2 (p. 2); SP 800-131A r2 Table 1 (p. 7).
+///   ChaCha20-Poly1305 excluded: SP 800-140C r2 §6.1 (p. 2) precludes every function not on the
+///   §6.2 list.
 pub const FIPS1403: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -594,6 +623,7 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
         KeyAgreementAlgorithm::EcdhP521,
         KeyAgreementAlgorithm::EcdhP256,
     ],
+    aeads: &[AeadAlgorithm::Aes256Gcm, AeadAlgorithm::Aes128Gcm],
 };
 
 /// `fips1402`: FIPS 140-2 Annex A and Annex D (2021-10-12 editions), FIPS 186-4, SP 800-131A r2
@@ -616,6 +646,8 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
 ///   IG D.8 Scenario X1 (p. 241) admits for key agreement.
 /// - Key agreement: ECDH on P-384, P-521 and P-256: Annex D item 3 (SP 800-56A r3), Table 24;
 ///   IG D.8 Scenario X1 (p. 241). X25519 excluded: not in Table 24.
+/// - AEADs: AES-256-GCM, AES-128-GCM. Annex A (pp. 1, 3): AES, SP 800-38D; IV rules, FIPS 140-2
+///   IG A.5. ChaCha20-Poly1305 excluded: Annex A.
 pub const FIPS1402: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -665,6 +697,7 @@ pub const FIPS1402: ProfileSpec = ProfileSpec {
         KeyAgreementAlgorithm::EcdhP521,
         KeyAgreementAlgorithm::EcdhP256,
     ],
+    aeads: &[AeadAlgorithm::Aes256Gcm, AeadAlgorithm::Aes128Gcm],
 };
 
 /// A profile narrowed by its options, every entry implemented by the module's backend, in the
@@ -779,6 +812,8 @@ pub struct AdmittedSelection {
     pub kdfs: Vec<KdfAlgorithm>,
     /// Key agreement.
     pub key_agreements: Vec<KeyAgreementAlgorithm>,
+    /// Authenticated encryption.
+    pub aeads: Vec<AeadAlgorithm>,
     /// Entries unavailable on the module line, in family and preference order.
     pub excluded: Vec<Algorithm>,
 }
@@ -804,6 +839,7 @@ fn select_admitted_with(
         kdfs.extend_from_slice(unclassified_nss_kdfs(profile));
     }
     let mut key_agreements = spec.key_agreements.to_vec();
+    let mut aeads = spec.aeads.to_vec();
     let mut excluded = Vec::new();
     retain_available(&mut macs, Algorithm::Mac, &available, &mut excluded);
     retain_available(&mut kdfs, Algorithm::Kdf, &available, &mut excluded);
@@ -813,10 +849,12 @@ fn select_admitted_with(
         &available,
         &mut excluded,
     );
+    retain_available(&mut aeads, Algorithm::Aead, &available, &mut excluded);
     AdmittedSelection {
         macs,
         kdfs,
         key_agreements,
+        aeads,
         excluded,
     }
 }
@@ -954,6 +992,8 @@ mod tests {
             no_duplicates(s.key_algorithms);
             no_duplicates(s.macs);
             no_duplicates(s.kdfs);
+            no_duplicates(s.key_agreements);
+            no_duplicates(s.aeads);
             assert!(!s.versions.is_empty() && !s.kx_groups.is_empty(), "{p}");
             assert!(
                 !s.signature_schemes.is_empty() && !s.key_algorithms.is_empty(),
@@ -981,6 +1021,7 @@ mod tests {
         );
         assert!(!s.signature_schemes.contains(&TlsSignatureScheme::Ed25519));
         assert!(!s.key_algorithms.contains(&SignatureAlgorithm::Ed25519));
+        assert!(!s.aeads.contains(&AeadAlgorithm::Chacha20Poly1305));
     }
 
     #[test]
@@ -1081,6 +1122,7 @@ mod tests {
             macs: &[],
             kdfs: &[],
             key_agreements: &[],
+            aeads: &[],
         };
         let empty = |category| {
             Err(CryptoError::EmptyProfile {
@@ -1475,6 +1517,7 @@ mod tests {
         let spec = ProfileSpec {
             macs: &[],
             kdfs: &[],
+            aeads: &[],
             ..BSI
         };
         assert_eq!(
@@ -1483,6 +1526,7 @@ mod tests {
                 macs: vec![],
                 kdfs: vec![],
                 key_agreements: vec![],
+                aeads: vec![],
                 excluded: vec![],
             }
         );
@@ -1490,6 +1534,7 @@ mod tests {
 
     #[test]
     fn select_admitted_records_what_the_module_lacks() {
+        use AeadAlgorithm as D;
         use KdfAlgorithm as K;
         use KeyAgreementAlgorithm as E;
         use MacAlgorithm as M;
@@ -1498,6 +1543,7 @@ mod tests {
             Algorithm::Kdf(K::HkdfSha512),
             Algorithm::Kdf(K::OneStepSha384),
             Algorithm::KeyAgreement(E::EcdhP521),
+            Algorithm::Aead(D::Aes128Gcm),
         ];
         assert_eq!(
             select_admitted_with(Profile::Fips1403, &FIPS1403, Options::default(), |a| {
@@ -1512,6 +1558,7 @@ mod tests {
                     K::OneStepSha256
                 ],
                 key_agreements: vec![E::EcdhP384, E::EcdhP256],
+                aeads: vec![D::Aes256Gcm],
                 excluded: lacking.to_vec(),
             }
         );

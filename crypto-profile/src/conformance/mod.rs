@@ -1184,6 +1184,29 @@ macro_rules! conformance_tests {
         }
 
         #[test]
+        fn conformance_aead_refusal_matrix() {
+            for &(p, admitted) in $crate::conformance::golden::AEAD_GOLDEN {
+                for unclassified in [false, true] {
+                    let mut o = Options::default();
+                    o.cnsa1_unclassified_nss = unclassified;
+                    let a = admit(p, o);
+                    assert_eq!(a.aeads(), admitted, "{p} {o}");
+                    for &d in AeadAlgorithm::ALL {
+                        let want = if admitted.contains(&d) {
+                            Ok(())
+                        } else {
+                            Err(CryptoError::NotInProfile {
+                                profile: p,
+                                algorithm: Algorithm::Aead(d),
+                            })
+                        };
+                        assert_eq!(a.admit_aead(d), want, "{p} {o} {d:?}");
+                    }
+                }
+            }
+        }
+
+        #[test]
         fn conformance_rfc5869_hkdf() {
             let v: $crate::conformance::__serde_json::Value =
                 $crate::conformance::__serde_json::from_str(vectors::HKDF_RFC5869).unwrap();
@@ -1556,6 +1579,9 @@ macro_rules! conformance_tests {
                         let sent = sender.agree(&to_recipient, &spec, 32).unwrap();
                         let received = recipient.agree(&to_sender, &spec, 32).unwrap();
                         assert_eq!(sent.as_bytes(), received.as_bytes(), "{k:?}");
+                    }
+                    Algorithm::Aead(d) => {
+                        assert!(cap.available, "{d:?}");
                     }
                     Algorithm::Kx(k) => {
                         let p = policy(

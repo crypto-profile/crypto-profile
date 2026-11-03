@@ -180,6 +180,17 @@ const fn x25519_absent(l: Linkage) -> &'static str {
     }
 }
 
+const fn gcm_scenario_2(l: Linkage) -> &'static str {
+    match l {
+        Linkage::Static => {
+            "AWS-LC FIPS 3.1.0 Security Policy, cert #5314 (static), Table 5, p. 8 (AES-GCM: IV Generation Internal, IV Generation Mode 8.2.2, Key Length 128, 256); §2.7 GCM IV, Scenario 2, pp. 18-19 (EVP_aead_aes_128_gcm_randnonce, EVP_aead_aes_256_gcm_randnonce)"
+        }
+        Linkage::Dynamic => {
+            "AWS-LC FIPS 3.1.0 Security Policy, cert #5298 (dynamic), Table 5, p. 8 (AES-GCM: IV Generation Internal, IV Generation Mode 8.2.2, Key Length 128, 256); §2.7 GCM IV, Scenario 2, p. 19 (EVP_aead_aes_128_gcm_randnonce, EVP_aead_aes_256_gcm_randnonce)"
+        }
+    }
+}
+
 /// X25519, in key agreement and as a TLS group, on a module with no security policy: IG C.K
 /// settles it for every module.
 const X25519_NOT_APPROVED: Approval = Approval::NotApproved {
@@ -273,6 +284,15 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
                 },
             ),
         },
+        Algorithm::Aead(d) => match d {
+            AeadAlgorithm::Aes128Gcm | AeadAlgorithm::Aes256Gcm => (
+                true,
+                Approval::Approved {
+                    source: gcm_scenario_2(l),
+                },
+            ),
+            AeadAlgorithm::Chacha20Poly1305 => (true, no),
+        },
     };
     Capability {
         available,
@@ -290,7 +310,8 @@ const fn four_x(l: Linkage, a: Algorithm) -> Capability {
     }
 }
 
-/// The 4.x static build has no CAVP certificate (decision 0004 §4).
+/// The 4.x static build: AES-GCM on its CAVP certificate A7887; everything else `Unverified`
+/// (decision 0004 §4).
 const fn four_x_static(a: Algorithm) -> Approval {
     match a {
         Algorithm::KeyAgreement(k) => match k {
@@ -298,6 +319,15 @@ const fn four_x_static(a: Algorithm) -> Approval {
             KeyAgreementAlgorithm::EcdhP256
             | KeyAgreementAlgorithm::EcdhP384
             | KeyAgreementAlgorithm::EcdhP521 => Approval::Unverified,
+        },
+        Algorithm::Aead(d) => match d {
+            AeadAlgorithm::Aes128Gcm => tested(
+                "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
+            ),
+            AeadAlgorithm::Aes256Gcm => tested(
+                "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
+            ),
+            AeadAlgorithm::Chacha20Poly1305 => Approval::Unverified,
         },
         Algorithm::Kx(k) => match k {
             KxGroup::X25519 => X25519_NOT_APPROVED,
@@ -446,6 +476,15 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             ),
             KeyAgreementAlgorithm::X25519 => X25519_NOT_APPROVED,
         },
+        Algorithm::Aead(d) => match d {
+            AeadAlgorithm::Aes128Gcm => tested(
+                "A7840 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
+            ),
+            AeadAlgorithm::Aes256Gcm => tested(
+                "A7840 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
+            ),
+            AeadAlgorithm::Chacha20Poly1305 => Approval::Unverified,
+        },
     }
 }
 
@@ -530,7 +569,10 @@ mod tests {
                         assert!(source.contains(want), "{m:?} {a:?} cites {source}");
                     }
                     Approval::AlgorithmTested { cavp } => {
-                        assert_eq!(m, M4D, "{a:?}");
+                        assert!(
+                            m == M4D || (m == M4S && matches!(a, Algorithm::Aead(_))),
+                            "{m:?} {a:?}"
+                        );
                         assert!(cavp.starts_with("A78"), "{a:?} cites {cavp}");
                         assert_eq!(cavp.matches("A78").count(), 1, "{a:?} cites {cavp}");
                     }
@@ -541,10 +583,18 @@ mod tests {
     }
 
     #[test]
-    fn four_x_static_is_unverified_but_for_x25519() {
+    fn four_x_static_is_unverified_but_for_x25519_and_aes_gcm() {
         for a in Algorithm::all() {
             let approval = if a == X25519 || a == KX_X25519 {
                 X25519_NOT_APPROVED
+            } else if a == Algorithm::Aead(AeadAlgorithm::Aes128Gcm) {
+                Approval::AlgorithmTested {
+                    cavp: "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
+                }
+            } else if a == Algorithm::Aead(AeadAlgorithm::Aes256Gcm) {
+                Approval::AlgorithmTested {
+                    cavp: "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
+                }
             } else {
                 Approval::Unverified
             };
@@ -575,6 +625,47 @@ mod tests {
                     other => panic!("{m:?} {a:?}: {other:?}"),
                 }
             }
+        }
+    }
+
+    #[test]
+    fn three_x_approves_aes_gcm_outside_tls_on_scenario_2() {
+        for (m, cert, scenario) in [
+            (M3S, "#5314 (static)", "Scenario 2, pp. 18-19"),
+            (M3D, "#5298 (dynamic)", "Scenario 2, p. 19"),
+        ] {
+            for d in [AeadAlgorithm::Aes128Gcm, AeadAlgorithm::Aes256Gcm] {
+                let c = capability(m, Algorithm::Aead(d));
+                assert_eq!(
+                    c,
+                    Capability {
+                        available: true,
+                        approval: Approval::Approved {
+                            source: gcm_scenario_2(m.linkage)
+                        }
+                    },
+                    "{m:?} {d:?}"
+                );
+                for want in [
+                    cert,
+                    "Table 5, p. 8",
+                    "IV Generation Internal, IV Generation Mode 8.2.2",
+                    scenario,
+                    "EVP_aead_aes_128_gcm_randnonce, EVP_aead_aes_256_gcm_randnonce",
+                ] {
+                    assert!(gcm_scenario_2(m.linkage).contains(want), "{m:?} {want}");
+                }
+            }
+            assert_eq!(
+                capability(m, Algorithm::Aead(AeadAlgorithm::Chacha20Poly1305)),
+                Capability {
+                    available: true,
+                    approval: Approval::NotApproved {
+                        source: absent(m.linkage)
+                    }
+                },
+                "{m:?}"
+            );
         }
     }
 
@@ -616,7 +707,7 @@ mod tests {
         use SignatureAlgorithm as S;
         use TlsSignatureScheme as T;
         use TlsVersion as V;
-        let expected: [(Algorithm, Option<&'static str>); 54] = [
+        let expected: [(Algorithm, Option<&'static str>); 57] = [
             (
                 A::Signature(S::MlDsa87),
                 Some("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)"),
@@ -792,13 +883,27 @@ mod tests {
                 ),
             ),
             (X25519, None),
+            (
+                A::Aead(AeadAlgorithm::Aes128Gcm),
+                Some(
+                    "A7840 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
+                ),
+            ),
+            (
+                A::Aead(AeadAlgorithm::Aes256Gcm),
+                Some(
+                    "A7840 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
+                ),
+            ),
+            (A::Aead(AeadAlgorithm::Chacha20Poly1305), None),
         ];
+        assert_eq!(expected.len(), Algorithm::all().len());
         assert!(
             Algorithm::all()
                 .iter()
                 .all(|a| expected.iter().any(|(b, _)| b == a))
         );
-        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 34);
+        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 36);
         for (a, cavp) in expected {
             let approval = match cavp {
                 Some(cavp) => Approval::AlgorithmTested { cavp },
@@ -846,12 +951,15 @@ mod tests {
         assert!(approved(A::Kdf(KdfAlgorithm::HkdfSha512)));
         assert!(approved(A::Kdf(KdfAlgorithm::OneStepSha256)));
         assert!(approved(A::Protocol(TlsVersion::Tls12)));
+        assert!(approved(A::Aead(AeadAlgorithm::Aes128Gcm)));
+        assert!(approved(A::Aead(AeadAlgorithm::Aes256Gcm)));
         for a in [
             A::Signature(SignatureAlgorithm::MlDsa87),
             A::Scheme(TlsSignatureScheme::MlDsa87),
             A::Kx(KxGroup::X25519),
             A::Cipher(CipherSuite::Tls13Chacha20Poly1305Sha256),
             A::Cipher(CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256),
+            A::Aead(AeadAlgorithm::Chacha20Poly1305),
         ] {
             assert!(
                 matches!(capability(M3S, a).approval, Approval::NotApproved { .. }),
@@ -894,7 +1002,7 @@ mod tests {
             Unverified,
         }
         use K::{Approved as Y, NotApproved as N, Unverified as U};
-        let expected: [(Algorithm, bool, K); 54] = [
+        let expected: [(Algorithm, bool, K); 57] = [
             (A::Signature(S::MlDsa87), false, N),
             (A::Signature(S::EcdsaP256Sha256), true, Y),
             (A::Signature(S::EcdsaP384Sha384), true, Y),
@@ -973,6 +1081,9 @@ mod tests {
             (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384), true, N),
             (A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521), true, N),
             (X25519, true, N),
+            (A::Aead(AeadAlgorithm::Aes128Gcm), true, Y),
+            (A::Aead(AeadAlgorithm::Aes256Gcm), true, Y),
+            (A::Aead(AeadAlgorithm::Chacha20Poly1305), true, N),
         ];
         assert_eq!(expected.len(), Algorithm::all().len());
         for m in [M3S, M3D] {

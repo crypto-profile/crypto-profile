@@ -1,6 +1,6 @@
 //! The crate's refusals.
 use crate::algorithm::{
-    Algorithm, KdfAlgorithm, KeyAgreementAlgorithm, SignatureAlgorithm, TlsVersion,
+    AeadAlgorithm, Algorithm, KdfAlgorithm, KeyAgreementAlgorithm, SignatureAlgorithm, TlsVersion,
 };
 use crate::capability::Approval;
 use crate::peer_certificate::PeerCertificateViolation;
@@ -27,6 +27,8 @@ pub enum Family {
     Kdf,
     /// Key agreement, outside TLS.
     KeyAgreement,
+    /// Authenticated encryption, outside TLS.
+    Aead,
 }
 
 /// Why a certificate signing request could not be produced.
@@ -271,6 +273,25 @@ pub enum CryptoError {
         /// The key-agreement algorithm.
         algorithm: KeyAgreementAlgorithm,
     },
+    /// An AEAD key whose length is not the algorithm's `key_len()`.
+    AeadKeyLength {
+        /// The AEAD algorithm.
+        algorithm: AeadAlgorithm,
+        /// The key's length in bytes.
+        bytes: usize,
+    },
+    /// A plaintext longer than the AEAD algorithm's `max_plaintext_len()`.
+    AeadPlaintextLength {
+        /// The AEAD algorithm.
+        algorithm: AeadAlgorithm,
+        /// The plaintext's length in bytes.
+        bytes: usize,
+    },
+    /// An AEAD key that has sealed 2^32 times (SP 800-38D §8.3); a new key is needed.
+    AeadLimit {
+        /// The AEAD algorithm.
+        algorithm: AeadAlgorithm,
+    },
     /// A family `assert_admitted_approved` does not check: a TLS family, which
     /// `assert_module_approves` checks, or one this backend does not walk.
     FamilyNotAdmitted(Family),
@@ -381,6 +402,22 @@ impl fmt::Display for CryptoError {
             CryptoError::KeyAgreementPrivateKey { algorithm } => {
                 write!(f, "the {algorithm} private key was refused")
             }
+            CryptoError::AeadKeyLength { algorithm, bytes } => write!(
+                f,
+                "the {algorithm} key must be {} bytes, not {bytes}",
+                algorithm.key_len()
+            ),
+            CryptoError::AeadPlaintextLength { algorithm, bytes } => write!(
+                f,
+                "a plaintext of {bytes} bytes exceeds {algorithm}'s maximum of {} bytes",
+                algorithm.max_plaintext_len()
+            ),
+            CryptoError::AeadLimit { algorithm } => {
+                write!(
+                    f,
+                    "the {algorithm} key has sealed 2^32 times; use a new key"
+                )
+            }
             CryptoError::FamilyNotAdmitted(family) => write!(
                 f,
                 "assert_admitted_approved does not check the {family:?} family; assert_module_approves checks the TLS families"
@@ -395,8 +432,8 @@ impl std::error::Error for CryptoError {}
 mod tests {
     use super::*;
     use crate::algorithm::{
-        Algorithm, KdfAlgorithm, KeyAgreementAlgorithm, KxGroup, MacAlgorithm, SignatureAlgorithm,
-        TlsSignatureScheme,
+        AeadAlgorithm, Algorithm, KdfAlgorithm, KeyAgreementAlgorithm, KxGroup, MacAlgorithm,
+        SignatureAlgorithm, TlsSignatureScheme,
     };
     use crate::capability::Approval;
     use crate::profile::{Options, Profile};
@@ -420,8 +457,9 @@ mod tests {
             "the TLS policy names no KxGroup"
         );
         assert_eq!(
-            [Family::Mac, Family::Kdf, Family::KeyAgreement].map(|f| format!("{f:?}")),
-            ["Mac", "Kdf", "KeyAgreement"]
+            [Family::Mac, Family::Kdf, Family::KeyAgreement, Family::Aead]
+                .map(|f| format!("{f:?}")),
+            ["Mac", "Kdf", "KeyAgreement", "Aead"]
         );
         assert_eq!(
             CryptoError::PolicyVersionUnusable {
@@ -453,7 +491,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 16] = [
+        let table: [(CryptoError, &str); 19] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -546,6 +584,26 @@ mod tests {
                     algorithm: KeyAgreementAlgorithm::X25519,
                 },
                 "the x25519 private key was refused",
+            ),
+            (
+                CryptoError::AeadKeyLength {
+                    algorithm: AeadAlgorithm::Aes128Gcm,
+                    bytes: 32,
+                },
+                "the aes-128-gcm key must be 16 bytes, not 32",
+            ),
+            (
+                CryptoError::AeadPlaintextLength {
+                    algorithm: AeadAlgorithm::Chacha20Poly1305,
+                    bytes: 274_877_906_881,
+                },
+                "a plaintext of 274877906881 bytes exceeds chacha20-poly1305's maximum of 274877906880 bytes",
+            ),
+            (
+                CryptoError::AeadLimit {
+                    algorithm: AeadAlgorithm::Aes256Gcm,
+                },
+                "the aes-256-gcm key has sealed 2^32 times; use a new key",
             ),
             (
                 CryptoError::FamilyNotAdmitted(Family::CipherSuite),

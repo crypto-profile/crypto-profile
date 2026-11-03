@@ -2,8 +2,8 @@
 use crate::signature::KeyPair;
 use crate::tls::{Policy, load_private_key};
 use crate::{
-    Algorithm, Approval, CryptoError, Family, KdfAlgorithm, KeyAgreementAlgorithm, MacAlgorithm,
-    Options, Profile, SignatureAlgorithm, TlsError,
+    AeadAlgorithm, Algorithm, Approval, CryptoError, Family, KdfAlgorithm, KeyAgreementAlgorithm,
+    MacAlgorithm, Options, Profile, SignatureAlgorithm, TlsError,
 };
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use rustls::sign::CertifiedKey;
@@ -152,8 +152,8 @@ pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
 }
 
 /// A profile's non-TLS families on this backend's module, under `options`. Independent of
-/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs, KDFs and
-/// key agreement.
+/// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs, KDFs, key
+/// agreement and AEADs.
 /// Built only by [`admit`], and read-only, so a constructor that takes it checks the profile's
 /// own admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -163,6 +163,7 @@ pub struct Admitted {
     macs: Vec<MacAlgorithm>,
     kdfs: Vec<KdfAlgorithm>,
     key_agreements: Vec<KeyAgreementAlgorithm>,
+    aeads: Vec<AeadAlgorithm>,
     excluded: Vec<Algorithm>,
 }
 
@@ -176,6 +177,7 @@ pub fn admit(profile: Profile, options: Options) -> Admitted {
         macs: s.macs,
         kdfs: s.kdfs,
         key_agreements: s.key_agreements,
+        aeads: s.aeads,
         excluded: s.excluded,
     }
 }
@@ -206,6 +208,11 @@ impl Admitted {
         &self.key_agreements
     }
 
+    /// The AEADs the profile admits, in preference order.
+    pub fn aeads(&self) -> &[AeadAlgorithm] {
+        &self.aeads
+    }
+
     /// Entries unavailable on the module line, in family and preference order.
     pub fn excluded(&self) -> &[Algorithm] {
         &self.excluded
@@ -229,6 +236,12 @@ impl Admitted {
         self.admit_one(self.key_agreements.contains(&k), Algorithm::KeyAgreement(k))
     }
 
+    /// Refuses an AEAD the profile does not admit, and one the module line lacks with
+    /// `CryptoError::Unavailable`.
+    pub fn admit_aead(&self, d: AeadAlgorithm) -> Result<(), CryptoError> {
+        self.admit_one(self.aeads.contains(&d), Algorithm::Aead(d))
+    }
+
     fn cells(&self, family: Family) -> Result<Vec<Algorithm>, CryptoError> {
         match family {
             Family::Mac => Ok(self.macs.iter().map(|m| Algorithm::Mac(*m)).collect()),
@@ -238,6 +251,7 @@ impl Admitted {
                 .iter()
                 .map(|k| Algorithm::KeyAgreement(*k))
                 .collect()),
+            Family::Aead => Ok(self.aeads.iter().map(|d| Algorithm::Aead(*d)).collect()),
             _ => Err(CryptoError::FamilyNotAdmitted(family)),
         }
     }
@@ -249,6 +263,7 @@ impl Admitted {
         self.kdfs.retain(|k| Algorithm::Kdf(*k) != algorithm);
         self.key_agreements
             .retain(|k| Algorithm::KeyAgreement(*k) != algorithm);
+        self.aeads.retain(|d| Algorithm::Aead(*d) != algorithm);
         self
     }
 
@@ -284,7 +299,7 @@ fn admitted_approved_given(
     {
         return Err(CryptoError::KdfInfoMayBeEmpty { profile: a.profile });
     }
-    for f in [Family::Mac, Family::Kdf, Family::KeyAgreement] {
+    for f in [Family::Mac, Family::Kdf, Family::KeyAgreement, Family::Aead] {
         if !families.contains(&f) {
             continue;
         }
@@ -308,7 +323,8 @@ fn admitted_approved_given(
 /// `Family::Kdf`, with `CryptoError::KdfInfoMayBeEmpty` if `a`'s profile admits KDFs and an empty
 /// `info`, which the module does not approve (`unrestricted`); then unless every algorithm `a`
 /// admits in each named family is `Approved` for the running module, walking `Family::Mac`,
-/// `Family::Kdf`, then `Family::KeyAgreement`, and failing on the first that is not. Asserting
+/// `Family::Kdf`, `Family::KeyAgreement`, then `Family::Aead`, and failing on the first that is
+/// not. Asserting
 /// nothing approves nothing: an empty `families`, or a named family `a` admits nothing in, is not a
 /// refusal. Independent of `assert_module_approves`.
 pub fn assert_admitted_approved(a: &Admitted, families: &[Family]) -> Result<(), CryptoError> {
@@ -790,6 +806,10 @@ mod admitted_tests {
                     a.kdfs(),
                     crypto_profile::select_admitted(p, o, crate::MODULE).kdfs
                 );
+                assert_eq!(
+                    a.aeads(),
+                    crypto_profile::select_admitted(p, o, crate::MODULE).aeads
+                );
                 assert_eq!(a.excluded(), []);
             }
         }
@@ -892,7 +912,126 @@ mod admitted_tests {
         assert_eq!(a.admit_mac(M::HmacSha384), Ok(()));
     }
 
-    const NON_TLS: [Family; 3] = [Family::Mac, Family::Kdf, Family::KeyAgreement];
+    #[test]
+    fn admit_aead_admits_exactly_the_profile_aeads() {
+        for &p in Profile::ALL {
+            for o in [Options::default(), on()] {
+                let a = admit(p, o);
+                for &d in AeadAlgorithm::ALL {
+                    let want = if a.aeads.contains(&d) {
+                        Ok(())
+                    } else {
+                        Err(CryptoError::NotInProfile {
+                            profile: p,
+                            algorithm: Algorithm::Aead(d),
+                        })
+                    };
+                    assert_eq!(a.admit_aead(d), want, "{p} {o} {d:?}");
+                }
+            }
+        }
+        assert_eq!(
+            admit(Profile::Cnsa1, on()).aeads(),
+            [AeadAlgorithm::Aes256Gcm]
+        );
+    }
+
+    #[test]
+    fn an_aead_the_module_lacks_is_unavailable() {
+        let mut a = admit(Profile::Fips1403, Options::default());
+        a.aeads.retain(|d| *d != AeadAlgorithm::Aes128Gcm);
+        a.excluded.push(Algorithm::Aead(AeadAlgorithm::Aes128Gcm));
+        assert_eq!(
+            a.admit_aead(AeadAlgorithm::Aes128Gcm),
+            Err(CryptoError::Unavailable(Algorithm::Aead(
+                AeadAlgorithm::Aes128Gcm
+            )))
+        );
+        assert_eq!(a.admit_aead(AeadAlgorithm::Aes256Gcm), Ok(()));
+        let without = admit(Profile::Fips1403, Options::default())
+            .without(Algorithm::Aead(AeadAlgorithm::Aes256Gcm));
+        assert_eq!(without.aeads(), [AeadAlgorithm::Aes128Gcm]);
+    }
+
+    #[test]
+    fn the_aead_family_is_walked_last() {
+        let a = admit(Profile::Fips1403, Options::default());
+        let ecdh = Algorithm::KeyAgreement(KeyAgreementAlgorithm::EcdhP384);
+        let gcm = Algorithm::Aead(AeadAlgorithm::Aes256Gcm);
+        let neither = |x: Algorithm| {
+            if x == ecdh || x == gcm {
+                Approval::Unverified
+            } else {
+                approved(x)
+            }
+        };
+        for families in [
+            [Family::Aead, Family::KeyAgreement],
+            [Family::KeyAgreement, Family::Aead],
+        ] {
+            assert_eq!(
+                admitted_approved_given(true, &a, &families, neither),
+                Err(CryptoError::NotApproved {
+                    algorithm: ecdh,
+                    approval: Approval::Unverified,
+                }),
+                "{families:?}"
+            );
+        }
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Aead], neither),
+            Err(CryptoError::NotApproved {
+                algorithm: gcm,
+                approval: Approval::Unverified,
+            })
+        );
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Aead], all_but(ecdh)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn admitted_aead_approval_follows_this_modules_cells() {
+        let cell = |d| crypto_profile::capability(crate::MODULE, Algorithm::Aead(d)).approval;
+        let refused = |d| {
+            Err(CryptoError::NotApproved {
+                algorithm: Algorithm::Aead(d),
+                approval: cell(d),
+            })
+        };
+        for &p in Profile::ALL {
+            let a = admit(p, Options::default());
+            let want = match (crate::MODULE.line, p) {
+                (crate::ModuleLine::AwsLcFips3, Profile::Unrestricted) => {
+                    refused(AeadAlgorithm::Chacha20Poly1305)
+                }
+                (crate::ModuleLine::AwsLcFips3, _) => Ok(()),
+                (crate::ModuleLine::AwsLcFips4, _) => refused(AeadAlgorithm::Aes256Gcm),
+                (other, _) => panic!("{other:?}: no expected approval"),
+            };
+            assert_eq!(assert_admitted_approved(&a, &[Family::Aead]), want, "{p}");
+        }
+        match crate::MODULE.line {
+            crate::ModuleLine::AwsLcFips3 => {
+                assert!(cell(AeadAlgorithm::Aes128Gcm).is_approved());
+                assert!(matches!(
+                    cell(AeadAlgorithm::Chacha20Poly1305),
+                    Approval::NotApproved { .. }
+                ));
+            }
+            crate::ModuleLine::AwsLcFips4 => {
+                assert!(matches!(
+                    cell(AeadAlgorithm::Aes256Gcm),
+                    Approval::AlgorithmTested { .. }
+                ));
+                assert_eq!(cell(AeadAlgorithm::Chacha20Poly1305), Approval::Unverified);
+            }
+            other => panic!("{other:?}: no expected approval"),
+        }
+    }
+
+    const NON_TLS: [Family; 4] = [Family::Mac, Family::Kdf, Family::KeyAgreement, Family::Aead];
     const TLS: [Family; 5] = [
         Family::Version,
         Family::CipherSuite,
@@ -1026,6 +1165,7 @@ mod admitted_tests {
             macs: vec![],
             kdfs: vec![],
             key_agreements: vec![],
+            aeads: vec![],
             ..admit(Profile::Unrestricted, Options::default())
         };
         assert_eq!(
