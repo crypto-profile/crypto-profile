@@ -1,5 +1,5 @@
 //! The algorithms the crate names: signature keys, TLS signature schemes, key-exchange groups,
-//! cipher suites, hashes, TLS versions, MACs, KDFs and key agreements.
+//! cipher suites, hashes, TLS versions, MACs, KDFs, key agreements and AEADs.
 use std::fmt;
 use std::str::FromStr;
 
@@ -684,6 +684,82 @@ impl fmt::Display for KeyAgreementAlgorithm {
     }
 }
 
+/// An authenticated-encryption algorithm outside TLS (RFC 5116), with a 96-bit nonce and a 128-bit
+/// tag. TLS record protection is [`CipherSuite`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum AeadAlgorithm {
+    /// AES-128 in Galois/Counter Mode (FIPS 197, SP 800-38D).
+    Aes128Gcm,
+    /// AES-256 in Galois/Counter Mode (FIPS 197, SP 800-38D).
+    Aes256Gcm,
+    /// ChaCha20-Poly1305 (RFC 8439).
+    Chacha20Poly1305,
+}
+
+impl AeadAlgorithm {
+    /// Every AEAD algorithm.
+    pub const ALL: &'static [AeadAlgorithm] = &[
+        AeadAlgorithm::Aes128Gcm,
+        AeadAlgorithm::Aes256Gcm,
+        AeadAlgorithm::Chacha20Poly1305,
+    ];
+
+    /// The position of `self` in [`Self::ALL`].
+    #[cfg(test)]
+    pub(crate) const fn ordinal(self) -> usize {
+        match self {
+            AeadAlgorithm::Aes128Gcm => 0,
+            AeadAlgorithm::Aes256Gcm => 1,
+            AeadAlgorithm::Chacha20Poly1305 => 2,
+        }
+    }
+
+    /// The algorithm's stable configuration name.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            AeadAlgorithm::Aes128Gcm => "aes-128-gcm",
+            AeadAlgorithm::Aes256Gcm => "aes-256-gcm",
+            AeadAlgorithm::Chacha20Poly1305 => "chacha20-poly1305",
+        }
+    }
+
+    /// The key length in bytes.
+    pub const fn key_len(self) -> usize {
+        match self {
+            AeadAlgorithm::Aes128Gcm => 16,
+            AeadAlgorithm::Aes256Gcm | AeadAlgorithm::Chacha20Poly1305 => 32,
+        }
+    }
+
+    /// The longest plaintext one seal takes, in bytes. AES-GCM: 2^36 − 32, SP 800-38D §5.2.1.1
+    /// (p. 8), len(P) ≤ 2^39 − 256 bits. ChaCha20-Poly1305: RFC 8439 §2.8 gives 274,877,906,880
+    /// and the module refuses that length, so the bound is one byte below it.
+    pub const fn max_plaintext_len(self) -> u64 {
+        match self {
+            AeadAlgorithm::Aes128Gcm | AeadAlgorithm::Aes256Gcm => (1 << 36) - 32,
+            AeadAlgorithm::Chacha20Poly1305 => 274_877_906_879,
+        }
+    }
+}
+
+impl FromStr for AeadAlgorithm {
+    type Err = ParseAlgorithmError;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        AeadAlgorithm::ALL
+            .iter()
+            .copied()
+            .find(|a| a.as_str() == s)
+            .ok_or_else(|| ParseAlgorithmError(s.to_string()))
+    }
+}
+
+impl fmt::Display for AeadAlgorithm {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// A TLS protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
@@ -738,6 +814,8 @@ pub enum Algorithm {
     Kdf(KdfAlgorithm),
     /// A key-agreement algorithm outside TLS.
     KeyAgreement(KeyAgreementAlgorithm),
+    /// An AEAD algorithm outside TLS.
+    Aead(AeadAlgorithm),
 }
 
 impl Algorithm {
@@ -805,6 +883,13 @@ impl Algorithm {
                 .iter()
                 .copied()
                 .map(Algorithm::KeyAgreement)
+                .collect::<Vec<_>>(),
+        );
+        v.extend(
+            AeadAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Aead)
                 .collect::<Vec<_>>(),
         );
         v
@@ -1040,14 +1125,15 @@ mod tests {
             + TlsVersion::ALL.len()
             + MacAlgorithm::ALL.len()
             + KdfAlgorithm::ALL.len()
-            + KeyAgreementAlgorithm::ALL.len();
+            + KeyAgreementAlgorithm::ALL.len()
+            + AeadAlgorithm::ALL.len();
         assert_eq!(all.len(), expected);
-        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3 + 6 + 4);
+        assert_eq!(expected, 9 + 11 + 7 + 9 + 3 + 2 + 3 + 6 + 4 + 3);
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
         assert_eq!(
-            all[all.len() - 13..all.len() - 10],
+            all[all.len() - 16..all.len() - 13],
             MacAlgorithm::ALL
                 .iter()
                 .copied()
@@ -1055,7 +1141,7 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            all[all.len() - 10..all.len() - 4],
+            all[all.len() - 13..all.len() - 7],
             KdfAlgorithm::ALL
                 .iter()
                 .copied()
@@ -1063,12 +1149,93 @@ mod tests {
                 .collect::<Vec<_>>()
         );
         assert_eq!(
-            all[all.len() - 4..],
+            all[all.len() - 7..all.len() - 3],
             KeyAgreementAlgorithm::ALL
                 .iter()
                 .copied()
                 .map(Algorithm::KeyAgreement)
                 .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            all[all.len() - 3..],
+            AeadAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(Algorithm::Aead)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn aead_algorithm_all_lists_every_variant_in_ordinal_order() {
+        assert_eq!(
+            AeadAlgorithm::ALL,
+            [
+                AeadAlgorithm::Aes128Gcm,
+                AeadAlgorithm::Aes256Gcm,
+                AeadAlgorithm::Chacha20Poly1305,
+            ]
+        );
+        assert_eq!(
+            AeadAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(AeadAlgorithm::ordinal)
+                .collect::<Vec<_>>(),
+            std::array::from_fn::<usize, 3, _>(|i| i)
+        );
+    }
+
+    #[test]
+    fn aead_names_are_stable_and_round_trip() {
+        assert_eq!(
+            AeadAlgorithm::ALL
+                .iter()
+                .copied()
+                .map(AeadAlgorithm::as_str)
+                .collect::<Vec<_>>(),
+            ["aes-128-gcm", "aes-256-gcm", "chacha20-poly1305"]
+        );
+        for &a in AeadAlgorithm::ALL {
+            assert_eq!(a.as_str().parse::<AeadAlgorithm>(), Ok(a));
+            assert_eq!(a.to_string(), a.as_str());
+        }
+        for bad in [
+            "",
+            "aes256gcm",
+            "AES-256-GCM",
+            "aes-256-gcm ",
+            "aes-192-gcm",
+            "chacha20",
+        ] {
+            assert_eq!(
+                bad.parse::<AeadAlgorithm>(),
+                Err(ParseAlgorithmError(bad.to_string())),
+                "{bad:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn each_aead_knows_its_key_and_plaintext_limits() {
+        assert_eq!(
+            AeadAlgorithm::ALL
+                .iter()
+                .map(|a| (a.key_len(), a.max_plaintext_len()))
+                .collect::<Vec<_>>(),
+            [
+                (16, 68_719_476_704),
+                (32, 68_719_476_704),
+                (32, 274_877_906_879)
+            ]
+        );
+        assert_eq!(
+            AeadAlgorithm::Aes256Gcm.max_plaintext_len(),
+            ((1 << 39) - 256) / 8
+        );
+        assert_eq!(
+            AeadAlgorithm::Chacha20Poly1305.max_plaintext_len(),
+            64 * ((1 << 32) - 1) - 1
         );
     }
 

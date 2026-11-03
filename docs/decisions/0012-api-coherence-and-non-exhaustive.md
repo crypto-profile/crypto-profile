@@ -24,7 +24,7 @@ By 0.9.0 every public enum and options struct was exhaustive (decision 0001 §4)
 
 | Type | Why it may grow |
 |---|---|
-| `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `MacAlgorithm`, `KdfAlgorithm`, `KeyAgreementAlgorithm`, `TlsVersion` | New algorithms: ML-KEM in more profiles, AEAD (#44), hashing (#45), signatures outside TLS (#46) |
+| `SignatureAlgorithm`, `TlsSignatureScheme`, `CipherSuite`, `KxGroup`, `HashAlgorithm`, `MacAlgorithm`, `KdfAlgorithm`, `KeyAgreementAlgorithm`, `TlsVersion` | New algorithms: ML-KEM in more profiles, AEAD (#44), hashing (#45), signatures outside TLS (#46). *(Note 2026-11-03: `AeadAlgorithm` has joined, `#[non_exhaustive]`; [decision 0013](0013-aead.md).)* |
 | `Algorithm` | A new family |
 | `Profile`, `GoverningText` | A new profile, or a profile governed by a new kind of text |
 | `Options`, `ProfileSpec`, `Selection`, `AdmittedSelection` | A new option, or a new family's list |

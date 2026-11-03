@@ -1,7 +1,7 @@
 //! A sealed box: an ephemeral P-384 ECDH to the recipient's static key, HKDF-SHA384
 //! keyed by a caller-chosen domain, and AES-256-GCM over the plaintext with the
 //! caller's AAD. Wire format: version, ephemeral point, nonce, ciphertext, tag. Every operation
-//! refuses unless the profile admits ECDH on P-384 and HKDF-SHA384.
+//! refuses unless the profile admits ECDH on P-384, HKDF-SHA384 and AES-256-GCM.
 mod keys;
 
 pub use crypto_profile::sealbox_wire::{
@@ -9,19 +9,21 @@ pub use crypto_profile::sealbox_wire::{
 };
 pub use keys::{PEM_LEN, PrivateKey, PublicKey, SPKI_LEN};
 
-use crate::aead::{Aes256GcmKey, KEY_LEN};
+use crate::aead;
 use crate::ecdh::EphemeralKey;
 use crate::fips::assert_fips_module;
 use crate::kdf::Spec;
 use crate::{Admitted, CryptoError};
 use crypto_profile::sealbox_wire::{parse_blob, sealed_len};
-use crypto_profile::{KdfAlgorithm, KeyAgreementAlgorithm};
+use crypto_profile::{AeadAlgorithm, KdfAlgorithm, KeyAgreementAlgorithm};
 use std::fmt;
 use zeroize::Zeroizing;
 
 const KDF_SUITE: &[u8] = b" p384 hkdf-sha384 aes-256-gcm";
 const AGREEMENT: KeyAgreementAlgorithm = KeyAgreementAlgorithm::EcdhP384;
 const KDF: KdfAlgorithm = KdfAlgorithm::HkdfSha384;
+const AEAD: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
+const KEY_LEN: usize = AEAD.key_len();
 
 /// The wire bytes of one sealed box.
 pub struct SealedBlob(Vec<u8>);
@@ -46,7 +48,8 @@ impl fmt::Debug for SealedBlob {
 
 fn admit(a: &Admitted) -> Result<(), CryptoError> {
     a.admit_key_agreement(AGREEMENT)?;
-    a.admit_kdf(KDF)
+    a.admit_kdf(KDF)?;
+    a.admit_aead(AEAD)
 }
 
 fn kdf_info(domain: &[u8], ephemeral: &[u8], recipient: &PublicKey) -> Vec<u8> {
@@ -68,9 +71,8 @@ fn kdf_spec<'a>(domain: &'a [u8], info: &'a [u8]) -> Spec<'a> {
     }
 }
 
-fn aead_key(okm: &[u8]) -> Result<Aes256GcmKey, CryptoError> {
-    let key: &[u8; KEY_LEN] = okm.try_into().map_err(|_| CryptoError::Primitive)?;
-    Aes256GcmKey::new(key)
+fn aead_key(a: &Admitted, okm: &[u8]) -> Result<aead::Key, CryptoError> {
+    aead::Key::new(a, AEAD, okm)
 }
 
 fn check_domain(domain: &[u8]) -> Result<(), CryptoError> {
@@ -89,7 +91,7 @@ fn check_plaintext(plaintext: &[u8]) -> Result<(), CryptoError> {
 
 /// Seals a non-empty `plaintext` to `recipient` under a non-empty `domain`, authenticating `aad`.
 /// Refuses, in this order: outside FIPS mode (`CryptoError::NotFips`); a profile that does not
-/// admit ECDH on P-384 and HKDF-SHA384 (`CryptoError::NotInProfile`); an empty `domain`
+/// admit ECDH on P-384, HKDF-SHA384 and AES-256-GCM (`CryptoError::NotInProfile`); an empty `domain`
 /// (`CryptoError::SealDomainEmpty`); an empty `plaintext`.
 pub fn seal(
     a: &Admitted,
@@ -107,7 +109,7 @@ pub fn seal(
         .map_err(|_| CryptoError::Primitive)?;
     let info = kdf_info(domain, &point, recipient);
     let okm = ephemeral.agree(recipient.point(), &kdf_spec(domain, &info), KEY_LEN)?;
-    let sealer = aead_key(okm.as_bytes())?;
+    let sealer = aead_key(a, okm.as_bytes())?;
     let mut out = Zeroizing::new(Vec::with_capacity(sealed_len(plaintext.len())));
     out.push(VERSION);
     out.extend_from_slice(&point);
@@ -121,7 +123,7 @@ pub fn seal(
 }
 
 /// Opens a blob sealed to `recipient` under `domain` and `aad`. Refuses outside FIPS mode, then a
-/// profile that does not admit ECDH on P-384 and HKDF-SHA384, then an empty `domain`
+/// profile that does not admit ECDH on P-384, HKDF-SHA384 and AES-256-GCM, then an empty `domain`
 /// (`CryptoError::SealDomainEmpty`), before reading the blob.
 pub fn open(
     a: &Admitted,
@@ -142,7 +144,7 @@ pub fn open(
             CryptoError::KeyAgreementPeerKey { .. } => CryptoError::SealEphemeralKey,
             other => other,
         })?;
-    let opener = aead_key(okm.as_bytes())?;
+    let opener = aead_key(a, okm.as_bytes())?;
     let mut buf = Zeroizing::new(Vec::with_capacity(parts.sealed.len()));
     buf.extend_from_slice(parts.sealed);
     let opened = opener.open_in_place(&parts.nonce, aad, &mut buf[..]);
@@ -185,33 +187,33 @@ mod tests {
         unhex(kat::BLOB_HEX)[1..1 + EPHEMERAL_KEY_LEN].to_vec()
     }
 
-    fn derive_key(shared: &[u8], ephemeral: &[u8], recipient: &PublicKey) -> Aes256GcmKey {
+    fn derive_key(shared: &[u8], ephemeral: &[u8], recipient: &PublicKey) -> aead::Key {
         let info = kdf_info(DOMAIN, ephemeral, recipient);
         let okm = crate::kdf::derive(&fips(), shared, &kdf_spec(DOMAIN, &info), KEY_LEN).unwrap();
-        aead_key(okm.as_bytes()).unwrap()
+        aead_key(&fips(), okm.as_bytes()).unwrap()
     }
 
-    fn seal_with(key: &Aes256GcmKey) -> ([u8; NONCE_LEN], Vec<u8>) {
+    fn seal_with(key: &aead::Key) -> ([u8; NONCE_LEN], Vec<u8>) {
         let mut buf = KAT_PLAINTEXT.to_vec();
         let (nonce, tag) = key.seal_in_place(&kat_aad(), &mut buf).unwrap();
         buf.extend_from_slice(&tag);
         (nonce, buf)
     }
 
-    fn open_with(key: &Aes256GcmKey, nonce: [u8; NONCE_LEN], sealed: &[u8]) -> Option<Vec<u8>> {
+    fn open_with(key: &aead::Key, nonce: [u8; NONCE_LEN], sealed: &[u8]) -> Option<Vec<u8>> {
         let mut buf = sealed.to_vec();
         let n = key.open_in_place(&nonce, &kat_aad(), &mut buf).ok()?.len();
         buf.truncate(n);
         Some(buf)
     }
 
-    fn agreed_key(private: &PrivateKey, ephemeral: &[u8], recipient: &PublicKey) -> Aes256GcmKey {
+    fn agreed_key(private: &PrivateKey, ephemeral: &[u8], recipient: &PublicKey) -> aead::Key {
         let info = kdf_info(DOMAIN, ephemeral, recipient);
         let okm = private
             .agreement_key()
             .agree(ephemeral, &kdf_spec(DOMAIN, &info), KEY_LEN)
             .unwrap();
-        aead_key(okm.as_bytes()).unwrap()
+        aead_key(&fips(), okm.as_bytes()).unwrap()
     }
 
     #[test]
@@ -236,13 +238,20 @@ mod tests {
     }
 
     #[test]
-    fn only_a_32_byte_okm_makes_an_aead_key() {
-        assert!(aead_key(&[7; KEY_LEN]).is_ok());
+    fn only_a_32_byte_okm_makes_an_aes_256_gcm_key() {
+        assert_eq!(KEY_LEN, 32);
+        assert_eq!(
+            aead_key(&fips(), &[7; KEY_LEN]).map(|k| k.algorithm()),
+            Ok(AEAD)
+        );
         for len in [KEY_LEN - 1, KEY_LEN + 1] {
-            assert!(matches!(
-                aead_key(&vec![7; len]),
-                Err(CryptoError::Primitive)
-            ));
+            assert_eq!(
+                aead_key(&fips(), &vec![7; len]).err(),
+                Some(CryptoError::AeadKeyLength {
+                    algorithm: AEAD,
+                    bytes: len
+                })
+            );
         }
     }
 
@@ -275,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_without_p384_ecdh_and_hkdf_sha384_is_refused_before_any_input_rule() {
+    fn a_profile_without_p384_ecdh_hkdf_sha384_and_aes_256_gcm_is_refused_before_any_input_rule() {
         let key = PrivateKey::generate(&fips()).unwrap();
         let blob = seal(&fips(), key.recipient(), DOMAIN, b"aad", b"secret").unwrap();
         for p in [Profile::Bsi, Profile::Cnsa2] {
@@ -304,6 +313,26 @@ mod tests {
             Some(refused)
         );
         assert_eq!(open(&no_kdf, &key, b"", b"", b"").err(), Some(refused));
+        let no_aead = fips().without(crate::Algorithm::Aead(AEAD));
+        assert!(no_aead.key_agreements().contains(&AGREEMENT) && no_aead.kdfs().contains(&KDF));
+        let refused = CryptoError::NotInProfile {
+            profile: Profile::Fips1403,
+            algorithm: crate::Algorithm::Aead(AEAD),
+        };
+        assert_eq!(
+            seal(&no_aead, key.recipient(), b"", b"", b"").err(),
+            Some(refused)
+        );
+        assert_eq!(open(&no_aead, &key, b"", b"", b"").err(), Some(refused));
+        assert_eq!(
+            open(&no_aead, &key, DOMAIN, b"aad", blob.as_bytes()).err(),
+            Some(refused)
+        );
+        assert_eq!(PrivateKey::generate(&no_aead).err(), Some(refused));
+        assert_eq!(
+            PrivateKey::from_pkcs8_der(&no_aead, &unhex(kat::PRIVATE_KEY_PKCS8_HEX)).err(),
+            Some(refused)
+        );
         for p in [
             Profile::Unrestricted,
             Profile::Preferred,

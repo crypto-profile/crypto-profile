@@ -3,8 +3,8 @@
 //! with the option) specify the refusal `resolve` gives; their lists are never compared with a
 //! resolved profile.
 use crate::{
-    Algorithm, CryptoError, Family, KdfAlgorithm, KeyAgreementAlgorithm, MacAlgorithm, Module,
-    ModuleLine, Options, Profile, SignatureAlgorithm, TlsSignatureScheme,
+    AeadAlgorithm, Algorithm, CryptoError, Family, KdfAlgorithm, KeyAgreementAlgorithm,
+    MacAlgorithm, Module, ModuleLine, Options, Profile, SignatureAlgorithm, TlsSignatureScheme,
 };
 
 /// One profile's lists, with or without the option.
@@ -377,6 +377,22 @@ pub const KEY_AGREEMENT_GOLDEN: &[(Profile, &[KeyAgreementAlgorithm])] = &{
     ]
 };
 
+/// Each profile's AEADs, in preference order. `cnsa1_unclassified_nss` changes none of them, and
+/// every cell is available on every module line.
+#[doc(hidden)]
+pub const AEAD_GOLDEN: &[(Profile, &[AeadAlgorithm])] = &{
+    use AeadAlgorithm::{Aes128Gcm as A128, Aes256Gcm as A256, Chacha20Poly1305 as C20};
+    [
+        (Profile::Unrestricted, &[A256, A128, C20]),
+        (Profile::Preferred, &[A256, A128]),
+        (Profile::Cnsa2, &[A256]),
+        (Profile::Cnsa1, &[A256]),
+        (Profile::Bsi, &[A256, A128]),
+        (Profile::Fips1403, &[A256, A128]),
+        (Profile::Fips1402, &[A256, A128]),
+    ]
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -459,6 +475,27 @@ mod tests {
                     };
                     let s = crate::profile::select_admitted(p, o, m);
                     assert_eq!(s.key_agreements, want, "{m:?} {p} {unclassified}");
+                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn select_admitted_agrees_with_the_aead_golden_rows_on_every_module() {
+        assert_eq!(AEAD_GOLDEN.len(), Profile::ALL.len());
+        for (i, p) in Profile::ALL.iter().copied().enumerate() {
+            assert_eq!(AEAD_GOLDEN[i].0, p);
+        }
+        for m in [M3S, M3D, M4S, M4D] {
+            for &(p, want) in AEAD_GOLDEN {
+                for unclassified in [false, true] {
+                    let o = Options {
+                        cnsa1_unclassified_nss: unclassified,
+                        ..Options::default()
+                    };
+                    let s = crate::profile::select_admitted(p, o, m);
+                    assert_eq!(s.aeads, want, "{m:?} {p} {unclassified}");
                     assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
                 }
             }

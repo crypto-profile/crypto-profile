@@ -90,6 +90,8 @@ The test infrastructure (`crypto-profile/src/backend_body/test_support.rs` and t
 
 A file-level exclusion, or a pattern that matches more than one mutant, is refused in review.
 
+**Constructors named `new` are not mutated.** cargo-mutants 27.1.0 skips every method named `new`, in an `impl` or as a trait default, body and all (`src/visit.rs`, `visit_impl_item_fn` and `visit_trait_item_fn`: "Don't look inside constructors"); its documentation does not list the rule. So a check written inside `new` is never mutation-tested. Put a constructor's decision logic (admission, lengths, refusals) in a named helper that `new` calls, as `hmac::check` and `aead::check` do, and confirm with `cargo mutants --list` that the helper's mutants appear. A `new` that only assembles fields needs nothing.
+
 ## 4. The test oracles stay independent
 
 A test that checks a mapping against the mapping itself proves nothing. The suite keeps its expected values apart from the code under test:
@@ -141,8 +143,8 @@ The suite checks the backend against the known answers, walks every capability c
 - `fips::assert_fips_client_config` and `fips::assert_fips_server_config`;
 - `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`, with `KeyPair` implementing `rcgen::SigningKey`;
 - `digest::digest`;
-- `aead::KEY_LEN`, `aead::NONCE_LEN` and `aead::Aes256GcmKey`, with `new` and `open_in_place`;
-- `admit`, `Admitted::macs`, `Admitted::kdfs` and `Admitted::key_agreements`, `hmac::Key`, `kdf::derive` and `kdf::Spec` (`Hkdf`, `OneStep`, `Dhkem`), and `ecdh::EphemeralKey` with `generate`, `algorithm`, `public_key` and `agree`, and `ecdh::StaticKey` with `from_pkcs8_der`, `from_scalar`, `algorithm`, `public_key` and `agree`;
+- `aead::NONCE_LEN`, `aead::TAG_LEN` and `aead::Key`, with `new`, `algorithm`, `seal_in_place` and `open_in_place`, and `test_support::aead_set_invocations` under the `test-support` feature;
+- `admit`, `Admitted::macs`, `Admitted::kdfs`, `Admitted::key_agreements`, `Admitted::aeads` and `Admitted::admit_aead`, `hmac::Key`, `kdf::derive` and `kdf::Spec` (`Hkdf`, `OneStep`, `Dhkem`), and `ecdh::EphemeralKey` with `generate`, `algorithm`, `public_key` and `agree`, and `ecdh::StaticKey` with `from_pkcs8_der`, `from_scalar`, `algorithm`, `public_key` and `agree`;
 - `test_support::ecdh_shared_secret`, under the `test-support` feature;
 - `sealbox::PrivateKey::generate`, `sealbox::PrivateKey::from_pkcs8_der`, `sealbox::PrivateKey::recipient`, `sealbox::seal` and `sealbox::open`.
 

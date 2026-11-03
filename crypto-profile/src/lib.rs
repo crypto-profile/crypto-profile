@@ -11,8 +11,8 @@ pub use peer_certificate::{
 };
 
 pub use algorithm::{
-    Algorithm, CipherSuite, HashAlgorithm, KdfAlgorithm, KeyAgreementAlgorithm, KxGroup,
-    MacAlgorithm, ParseAlgorithmError, SignatureAlgorithm, TlsSignatureScheme, TlsVersion,
+    AeadAlgorithm, Algorithm, CipherSuite, HashAlgorithm, KdfAlgorithm, KeyAgreementAlgorithm,
+    KxGroup, MacAlgorithm, ParseAlgorithmError, SignatureAlgorithm, TlsSignatureScheme, TlsVersion,
 };
 pub use error::{CryptoError, CsrError, Family, PeerVerifierIdentity, TlsError};
 
@@ -61,7 +61,9 @@ mod options_are_built_from_their_default {}
 ///     match a {
 ///         Algorithm::Signature(_) | Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
 ///         Algorithm::Cipher(_) | Algorithm::Hash(_) | Algorithm::Protocol(_) => Some(false),
-///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) => Some(true),
+///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) | Algorithm::Aead(_) => {
+///             Some(true)
+///         }
 ///         _ => None,
 ///     }
 /// }
@@ -74,7 +76,9 @@ mod options_are_built_from_their_default {}
 ///     match a {
 ///         Algorithm::Signature(_) | Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
 ///         Algorithm::Cipher(_) | Algorithm::Hash(_) | Algorithm::Protocol(_) => Some(false),
-///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) => Some(true),
+///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) | Algorithm::Aead(_) => {
+///             Some(true)
+///         }
 ///     }
 /// }
 /// assert_eq!(outside_tls(Algorithm::Mac(MacAlgorithm::HmacSha256)), Some(true));

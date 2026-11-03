@@ -557,7 +557,8 @@ macro_rules! __conformance_key_agreement_tests {
             for &p in Profile::ALL {
                 let a = admit(p, Options::default());
                 let admits = a.key_agreements().contains(&E::EcdhP384)
-                    && a.kdfs().contains(&KdfAlgorithm::HkdfSha384);
+                    && a.kdfs().contains(&KdfAlgorithm::HkdfSha384)
+                    && a.aeads().contains(&AeadAlgorithm::Aes256Gcm);
                 assert_eq!(admits, !matches!(p, Profile::Bsi | Profile::Cnsa2), "{p}");
                 let sealed = sealbox::seal(&a, key.recipient(), b"domain", b"aad", b"secret");
                 let opened = sealbox::open(&a, &key, b"domain", b"aad", blob.as_bytes());
