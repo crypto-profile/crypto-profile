@@ -1,7 +1,7 @@
 //! A sealed box: an ephemeral P-384 ECDH to the recipient's static key, HKDF-SHA384
 //! keyed by a caller-chosen domain, and AES-256-GCM over the plaintext with the
 //! caller's AAD. Wire format: version, ephemeral point, nonce, ciphertext, tag. Every operation
-//! refuses unless the profile admits ECDH on P-384 and HKDF-SHA384.
+//! refuses unless the profile admits ECDH on P-384, HKDF-SHA384 and AES-256-GCM.
 mod keys;
 
 pub use crypto_profile::sealbox_wire::{
@@ -48,7 +48,8 @@ impl fmt::Debug for SealedBlob {
 
 fn admit(a: &Admitted) -> Result<(), CryptoError> {
     a.admit_key_agreement(AGREEMENT)?;
-    a.admit_kdf(KDF)
+    a.admit_kdf(KDF)?;
+    a.admit_aead(AEAD)
 }
 
 fn kdf_info(domain: &[u8], ephemeral: &[u8], recipient: &PublicKey) -> Vec<u8> {
@@ -90,7 +91,7 @@ fn check_plaintext(plaintext: &[u8]) -> Result<(), CryptoError> {
 
 /// Seals a non-empty `plaintext` to `recipient` under a non-empty `domain`, authenticating `aad`.
 /// Refuses, in this order: outside FIPS mode (`CryptoError::NotFips`); a profile that does not
-/// admit ECDH on P-384 and HKDF-SHA384 (`CryptoError::NotInProfile`); an empty `domain`
+/// admit ECDH on P-384, HKDF-SHA384 and AES-256-GCM (`CryptoError::NotInProfile`); an empty `domain`
 /// (`CryptoError::SealDomainEmpty`); an empty `plaintext`.
 pub fn seal(
     a: &Admitted,
@@ -122,7 +123,7 @@ pub fn seal(
 }
 
 /// Opens a blob sealed to `recipient` under `domain` and `aad`. Refuses outside FIPS mode, then a
-/// profile that does not admit ECDH on P-384 and HKDF-SHA384, then an empty `domain`
+/// profile that does not admit ECDH on P-384, HKDF-SHA384 and AES-256-GCM, then an empty `domain`
 /// (`CryptoError::SealDomainEmpty`), before reading the blob.
 pub fn open(
     a: &Admitted,
@@ -283,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn a_profile_without_p384_ecdh_and_hkdf_sha384_is_refused_before_any_input_rule() {
+    fn a_profile_without_p384_ecdh_hkdf_sha384_and_aes_256_gcm_is_refused_before_any_input_rule() {
         let key = PrivateKey::generate(&fips()).unwrap();
         let blob = seal(&fips(), key.recipient(), DOMAIN, b"aad", b"secret").unwrap();
         for p in [Profile::Bsi, Profile::Cnsa2] {
@@ -312,6 +313,26 @@ mod tests {
             Some(refused)
         );
         assert_eq!(open(&no_kdf, &key, b"", b"", b"").err(), Some(refused));
+        let no_aead = fips().without(crate::Algorithm::Aead(AEAD));
+        assert!(no_aead.key_agreements().contains(&AGREEMENT) && no_aead.kdfs().contains(&KDF));
+        let refused = CryptoError::NotInProfile {
+            profile: Profile::Fips1403,
+            algorithm: crate::Algorithm::Aead(AEAD),
+        };
+        assert_eq!(
+            seal(&no_aead, key.recipient(), b"", b"", b"").err(),
+            Some(refused)
+        );
+        assert_eq!(open(&no_aead, &key, b"", b"", b"").err(), Some(refused));
+        assert_eq!(
+            open(&no_aead, &key, DOMAIN, b"aad", blob.as_bytes()).err(),
+            Some(refused)
+        );
+        assert_eq!(PrivateKey::generate(&no_aead).err(), Some(refused));
+        assert_eq!(
+            PrivateKey::from_pkcs8_der(&no_aead, &unhex(kat::PRIVATE_KEY_PKCS8_HEX)).err(),
+            Some(refused)
+        );
         for p in [
             Profile::Unrestricted,
             Profile::Preferred,
