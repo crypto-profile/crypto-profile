@@ -1296,10 +1296,7 @@ mod admitted_tests {
             (crate::ModuleLine::AwsLcFips3, crate::Linkage::Static | crate::Linkage::Dynamic) => {
                 assert!(matches!(approval, Approval::NotApproved { .. }))
             }
-            (crate::ModuleLine::AwsLcFips4, crate::Linkage::Static) => {
-                assert_eq!(approval, Approval::Unverified)
-            }
-            (crate::ModuleLine::AwsLcFips4, crate::Linkage::Dynamic) => {
+            (crate::ModuleLine::AwsLcFips4, crate::Linkage::Static | crate::Linkage::Dynamic) => {
                 assert!(matches!(approval, Approval::AlgorithmTested { .. }))
             }
             other => panic!("{other:?}: no expected approval"),

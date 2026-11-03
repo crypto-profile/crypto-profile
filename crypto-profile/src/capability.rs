@@ -303,73 +303,50 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
 const fn four_x(l: Linkage, a: Algorithm) -> Capability {
     Capability {
         available: true,
-        approval: match l {
-            Linkage::Static => four_x_static(a),
-            Linkage::Dynamic => four_x_dynamic(a),
+        approval: four_x_cell(l, a),
+    }
+}
+
+const fn tested_on(l: Linkage, dynamic: &'static str, static_build: &'static str) -> Approval {
+    Approval::AlgorithmTested {
+        cavp: match l {
+            Linkage::Dynamic => dynamic,
+            Linkage::Static => static_build,
         },
     }
 }
 
-/// The 4.x static build: AES-GCM on its CAVP certificate A7887; everything else `Unverified`
-/// (decision 0004 §4).
-const fn four_x_static(a: Algorithm) -> Approval {
-    match a {
-        Algorithm::KeyAgreement(k) => match k {
-            KeyAgreementAlgorithm::X25519 => X25519_NOT_APPROVED,
-            KeyAgreementAlgorithm::EcdhP256
-            | KeyAgreementAlgorithm::EcdhP384
-            | KeyAgreementAlgorithm::EcdhP521 => Approval::Unverified,
-        },
-        Algorithm::Aead(d) => match d {
-            AeadAlgorithm::Aes128Gcm => tested(
-                "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
-            ),
-            AeadAlgorithm::Aes256Gcm => tested(
-                "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
-            ),
-            AeadAlgorithm::Chacha20Poly1305 => Approval::Unverified,
-        },
-        Algorithm::Kx(k) => match k {
-            KxGroup::X25519 => X25519_NOT_APPROVED,
-            KxGroup::MlKem1024
-            | KxGroup::Secp384r1MlKem1024
-            | KxGroup::X25519MlKem768
-            | KxGroup::Secp256r1MlKem768
-            | KxGroup::Secp384r1
-            | KxGroup::Secp256r1 => Approval::Unverified,
-        },
-        Algorithm::Signature(_)
-        | Algorithm::Scheme(_)
-        | Algorithm::Cipher(_)
-        | Algorithm::Hash(_)
-        | Algorithm::Protocol(_)
-        | Algorithm::Mac(_)
-        | Algorithm::Kdf(_) => Approval::Unverified,
-    }
-}
-
-const fn tested(cavp: &'static str) -> Approval {
-    Approval::AlgorithmTested { cavp }
-}
-
-/// Each `AlgorithmTested` cell cites the lowest-numbered AWS-LC FIPS 4.0.0 CAVP certificate
-/// (A7839-A7876, dynamic build) that alone shows every operation the cell needs, with the
-/// parameters the citation names (decision 0004).
-const fn four_x_dynamic(a: Algorithm) -> Approval {
+/// Each `AlgorithmTested` cell cites the lowest-numbered AWS-LC FIPS 4.0.0 CAVP certificate of its
+/// linkage (A7839-A7876 dynamic build, A7886-A7923 static build) that alone shows every operation
+/// the cell needs, with the parameters the citation names (decision 0004). The two builds'
+/// certificates show the same capabilities, so every cell has the same verdict on both.
+const fn four_x_cell(l: Linkage, a: Algorithm) -> Approval {
     match a {
         Algorithm::Signature(s) => match s {
-            SignatureAlgorithm::MlDsa87 => {
-                tested("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)")
-            }
-            SignatureAlgorithm::Ed25519 => tested("A7855 (EDDSA KeyGen, SigGen, SigVer: ED-25519)"),
-            SignatureAlgorithm::Rsa2048Sha384 => tested(
+            SignatureAlgorithm::MlDsa87 => tested_on(
+                l,
+                "A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)",
+                "A7902 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)",
+            ),
+            SignatureAlgorithm::Ed25519 => tested_on(
+                l,
+                "A7855 (EDDSA KeyGen, SigGen, SigVer: ED-25519)",
+                "A7902 (EDDSA KeyGen, SigGen, SigVer: ED-25519)",
+            ),
+            SignatureAlgorithm::Rsa2048Sha384 => tested_on(
+                l,
                 "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 2048, SHA2-384)",
+                "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 2048, SHA2-384)",
             ),
-            SignatureAlgorithm::Rsa3072Sha384 => tested(
+            SignatureAlgorithm::Rsa3072Sha384 => tested_on(
+                l,
                 "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 3072, SHA2-384)",
+                "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 3072, SHA2-384)",
             ),
-            SignatureAlgorithm::Rsa4096Sha384 => tested(
+            SignatureAlgorithm::Rsa4096Sha384 => tested_on(
+                l,
                 "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
+                "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
             ),
             SignatureAlgorithm::EcdsaP256Sha256
             | SignatureAlgorithm::EcdsaP384Sha384
@@ -377,43 +354,77 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             | SignatureAlgorithm::EcdsaP521Sha512 => Approval::Unverified,
         },
         Algorithm::Scheme(t) => match t {
-            TlsSignatureScheme::EcdsaNistp256Sha256 => {
-                tested("A7856 (ECDSA SigVer (FIPS186-5): P-256, SHA2-256)")
-            }
-            TlsSignatureScheme::EcdsaNistp384Sha384 => {
-                tested("A7856 (ECDSA SigVer (FIPS186-5): P-384, SHA2-384)")
-            }
-            TlsSignatureScheme::EcdsaNistp521Sha512 => {
-                tested("A7856 (ECDSA SigVer (FIPS186-5): P-521, SHA2-512)")
-            }
-            TlsSignatureScheme::Ed25519 => tested("A7855 (EDDSA SigVer: ED-25519)"),
-            TlsSignatureScheme::RsaPssSha256 => {
-                tested("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-256)")
-            }
-            TlsSignatureScheme::RsaPssSha384 => {
-                tested("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-384)")
-            }
-            TlsSignatureScheme::RsaPssSha512 => {
-                tested("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-512)")
-            }
-            TlsSignatureScheme::RsaPkcs1Sha256 => {
-                tested("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-256)")
-            }
-            TlsSignatureScheme::RsaPkcs1Sha384 => {
-                tested("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-384)")
-            }
-            TlsSignatureScheme::RsaPkcs1Sha512 => {
-                tested("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-512)")
-            }
-            TlsSignatureScheme::MlDsa87 => tested("A7855 (ML-DSA SigVer: ML-DSA-87)"),
+            TlsSignatureScheme::EcdsaNistp256Sha256 => tested_on(
+                l,
+                "A7856 (ECDSA SigVer (FIPS186-5): P-256, SHA2-256)",
+                "A7903 (ECDSA SigVer (FIPS186-5): P-256, SHA2-256)",
+            ),
+            TlsSignatureScheme::EcdsaNistp384Sha384 => tested_on(
+                l,
+                "A7856 (ECDSA SigVer (FIPS186-5): P-384, SHA2-384)",
+                "A7903 (ECDSA SigVer (FIPS186-5): P-384, SHA2-384)",
+            ),
+            TlsSignatureScheme::EcdsaNistp521Sha512 => tested_on(
+                l,
+                "A7856 (ECDSA SigVer (FIPS186-5): P-521, SHA2-512)",
+                "A7903 (ECDSA SigVer (FIPS186-5): P-521, SHA2-512)",
+            ),
+            TlsSignatureScheme::Ed25519 => tested_on(
+                l,
+                "A7855 (EDDSA SigVer: ED-25519)",
+                "A7902 (EDDSA SigVer: ED-25519)",
+            ),
+            TlsSignatureScheme::RsaPssSha256 => tested_on(
+                l,
+                "A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-256)",
+                "A7903 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-256)",
+            ),
+            TlsSignatureScheme::RsaPssSha384 => tested_on(
+                l,
+                "A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-384)",
+                "A7903 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-384)",
+            ),
+            TlsSignatureScheme::RsaPssSha512 => tested_on(
+                l,
+                "A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-512)",
+                "A7903 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-512)",
+            ),
+            TlsSignatureScheme::RsaPkcs1Sha256 => tested_on(
+                l,
+                "A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-256)",
+                "A7903 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-256)",
+            ),
+            TlsSignatureScheme::RsaPkcs1Sha384 => tested_on(
+                l,
+                "A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-384)",
+                "A7903 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-384)",
+            ),
+            TlsSignatureScheme::RsaPkcs1Sha512 => tested_on(
+                l,
+                "A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-512)",
+                "A7903 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-512)",
+            ),
+            TlsSignatureScheme::MlDsa87 => tested_on(
+                l,
+                "A7855 (ML-DSA SigVer: ML-DSA-87)",
+                "A7902 (ML-DSA SigVer: ML-DSA-87)",
+            ),
         },
         Algorithm::Kx(k) => match k {
-            KxGroup::MlKem1024 => tested("A7855 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)"),
-            KxGroup::Secp384r1 => tested(
-                "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+            KxGroup::MlKem1024 => tested_on(
+                l,
+                "A7855 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)",
+                "A7902 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)",
             ),
-            KxGroup::Secp256r1 => tested(
+            KxGroup::Secp384r1 => tested_on(
+                l,
+                "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+                "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+            ),
+            KxGroup::Secp256r1 => tested_on(
+                l,
                 "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
+                "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
             ),
             KxGroup::X25519 => X25519_NOT_APPROVED,
             KxGroup::X25519MlKem768 | KxGroup::Secp256r1MlKem768 | KxGroup::Secp384r1MlKem1024 => {
@@ -432,56 +443,90 @@ const fn four_x_dynamic(a: Algorithm) -> Approval {
             | CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256 => Approval::Unverified,
         },
         Algorithm::Hash(h) => match h {
-            HashAlgorithm::Sha256 => tested("A7855 (SHA2-256)"),
-            HashAlgorithm::Sha384 => tested("A7855 (SHA2-384)"),
-            HashAlgorithm::Sha512 => tested("A7855 (SHA2-512)"),
+            HashAlgorithm::Sha256 => tested_on(l, "A7855 (SHA2-256)", "A7902 (SHA2-256)"),
+            HashAlgorithm::Sha384 => tested_on(l, "A7855 (SHA2-384)", "A7902 (SHA2-384)"),
+            HashAlgorithm::Sha512 => tested_on(l, "A7855 (SHA2-512)", "A7902 (SHA2-512)"),
         },
         Algorithm::Protocol(v) => match v {
             TlsVersion::Tls12 | TlsVersion::Tls13 => Approval::Unverified,
         },
         Algorithm::Mac(m) => match m {
-            MacAlgorithm::HmacSha256 => tested("A7855 (HMAC-SHA2-256: MAC 256, key 112-524288)"),
-            MacAlgorithm::HmacSha384 => tested("A7855 (HMAC-SHA2-384: MAC 384, key 112-524288)"),
-            MacAlgorithm::HmacSha512 => tested("A7855 (HMAC-SHA2-512: MAC 512, key 112-524288)"),
+            MacAlgorithm::HmacSha256 => tested_on(
+                l,
+                "A7855 (HMAC-SHA2-256: MAC 256, key 112-524288)",
+                "A7902 (HMAC-SHA2-256: MAC 256, key 112-524288)",
+            ),
+            MacAlgorithm::HmacSha384 => tested_on(
+                l,
+                "A7855 (HMAC-SHA2-384: MAC 384, key 112-524288)",
+                "A7902 (HMAC-SHA2-384: MAC 384, key 112-524288)",
+            ),
+            MacAlgorithm::HmacSha512 => tested_on(
+                l,
+                "A7855 (HMAC-SHA2-512: MAC 512, key 112-524288)",
+                "A7902 (HMAC-SHA2-512: MAC 512, key 112-524288)",
+            ),
         },
         Algorithm::Kdf(k) => match k {
-            KdfAlgorithm::HkdfSha256 => tested(
+            KdfAlgorithm::HkdfSha256 => tested_on(
+                l,
                 "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
+                "A7902 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
             ),
-            KdfAlgorithm::HkdfSha384 => tested(
+            KdfAlgorithm::HkdfSha384 => tested_on(
+                l,
                 "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
+                "A7902 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
             ),
-            KdfAlgorithm::HkdfSha512 => tested(
+            KdfAlgorithm::HkdfSha512 => tested_on(
+                l,
                 "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
+                "A7902 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
             ),
-            KdfAlgorithm::OneStepSha256 => tested(
+            KdfAlgorithm::OneStepSha256 => tested_on(
+                l,
                 "A7856 (KDA OneStep SP800-56Cr2: SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                "A7903 (KDA OneStep SP800-56Cr2: SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
             ),
-            KdfAlgorithm::OneStepSha384 => tested(
+            KdfAlgorithm::OneStepSha384 => tested_on(
+                l,
                 "A7856 (KDA OneStep SP800-56Cr2: SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                "A7903 (KDA OneStep SP800-56Cr2: SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
             ),
-            KdfAlgorithm::OneStepSha512 => tested(
+            KdfAlgorithm::OneStepSha512 => tested_on(
+                l,
                 "A7856 (KDA OneStep SP800-56Cr2: SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                "A7903 (KDA OneStep SP800-56Cr2: SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
             ),
         },
         Algorithm::KeyAgreement(k) => match k {
-            KeyAgreementAlgorithm::EcdhP256 => tested(
+            KeyAgreementAlgorithm::EcdhP256 => tested_on(
+                l,
                 "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
+                "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
             ),
-            KeyAgreementAlgorithm::EcdhP384 => tested(
+            KeyAgreementAlgorithm::EcdhP384 => tested_on(
+                l,
                 "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+                "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
             ),
-            KeyAgreementAlgorithm::EcdhP521 => tested(
+            KeyAgreementAlgorithm::EcdhP521 => tested_on(
+                l,
                 "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-521; ECDSA KeyGen (FIPS186-5): P-521)",
+                "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-521; ECDSA KeyGen (FIPS186-5): P-521)",
             ),
             KeyAgreementAlgorithm::X25519 => X25519_NOT_APPROVED,
         },
         Algorithm::Aead(d) => match d {
-            AeadAlgorithm::Aes128Gcm => tested(
+            AeadAlgorithm::Aes128Gcm => tested_on(
+                l,
                 "A7840 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
+                "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
             ),
-            AeadAlgorithm::Aes256Gcm => tested(
+            AeadAlgorithm::Aes256Gcm => tested_on(
+                l,
                 "A7840 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
+                "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
             ),
             AeadAlgorithm::Chacha20Poly1305 => Approval::Unverified,
         },
@@ -569,43 +614,21 @@ mod tests {
                         assert!(source.contains(want), "{m:?} {a:?} cites {source}");
                     }
                     Approval::AlgorithmTested { cavp } => {
+                        let range = match (m.line, m.linkage) {
+                            (ModuleLine::AwsLcFips4, Linkage::Dynamic) => 7839..=7876,
+                            (ModuleLine::AwsLcFips4, Linkage::Static) => 7886..=7923,
+                            (ModuleLine::AwsLcFips3, _) => panic!("{m:?} {a:?} cites {cavp}"),
+                        };
+                        let number: u32 = cavp[1..5].parse().unwrap();
                         assert!(
-                            m == M4D || (m == M4S && matches!(a, Algorithm::Aead(_))),
-                            "{m:?} {a:?}"
+                            cavp.starts_with('A') && range.contains(&number),
+                            "{m:?} {a:?} cites {cavp}"
                         );
-                        assert!(cavp.starts_with("A78"), "{a:?} cites {cavp}");
-                        assert_eq!(cavp.matches("A78").count(), 1, "{a:?} cites {cavp}");
+                        assert_eq!(cavp.matches("A7").count(), 1, "{a:?} cites {cavp}");
                     }
                     Approval::Unverified => {}
                 }
             }
-        }
-    }
-
-    #[test]
-    fn four_x_static_is_unverified_but_for_x25519_and_aes_gcm() {
-        for a in Algorithm::all() {
-            let approval = if a == X25519 || a == KX_X25519 {
-                X25519_NOT_APPROVED
-            } else if a == Algorithm::Aead(AeadAlgorithm::Aes128Gcm) {
-                Approval::AlgorithmTested {
-                    cavp: "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
-                }
-            } else if a == Algorithm::Aead(AeadAlgorithm::Aes256Gcm) {
-                Approval::AlgorithmTested {
-                    cavp: "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
-                }
-            } else {
-                Approval::Unverified
-            };
-            assert_eq!(
-                capability(M4S, a),
-                Capability {
-                    available: true,
-                    approval
-                },
-                "{a:?}"
-            );
         }
     }
 
@@ -698,8 +721,7 @@ mod tests {
         }
     }
 
-    #[test]
-    fn four_x_dynamic_cells_are_pinned_to_their_cavp_certificates() {
+    fn four_x_citations() -> [(Algorithm, Option<(&'static str, &'static str)>); 57] {
         use Algorithm as A;
         use CipherSuite as C;
         use HashAlgorithm as H;
@@ -707,10 +729,13 @@ mod tests {
         use SignatureAlgorithm as S;
         use TlsSignatureScheme as T;
         use TlsVersion as V;
-        let expected: [(Algorithm, Option<&'static str>); 57] = [
+        [
             (
                 A::Signature(S::MlDsa87),
-                Some("A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)"),
+                Some((
+                    "A7855 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)",
+                    "A7902 (ML-DSA KeyGen, SigGen, SigVer: ML-DSA-87)",
+                )),
             ),
             (A::Signature(S::EcdsaP256Sha256), None),
             (A::Signature(S::EcdsaP384Sha384), None),
@@ -718,88 +743,132 @@ mod tests {
             (A::Signature(S::EcdsaP521Sha512), None),
             (
                 A::Signature(S::Ed25519),
-                Some("A7855 (EDDSA KeyGen, SigGen, SigVer: ED-25519)"),
+                Some((
+                    "A7855 (EDDSA KeyGen, SigGen, SigVer: ED-25519)",
+                    "A7902 (EDDSA KeyGen, SigGen, SigVer: ED-25519)",
+                )),
             ),
             (
                 A::Signature(S::Rsa2048Sha384),
-                Some(
+                Some((
                     "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 2048, SHA2-384)",
-                ),
+                    "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 2048, SHA2-384)",
+                )),
             ),
             (
                 A::Signature(S::Rsa3072Sha384),
-                Some(
+                Some((
                     "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 3072, SHA2-384)",
-                ),
+                    "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 3072, SHA2-384)",
+                )),
             ),
             (
                 A::Signature(S::Rsa4096Sha384),
-                Some(
+                Some((
                     "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
-                ),
+                    "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
+                )),
             ),
             (
                 A::Scheme(T::EcdsaNistp256Sha256),
-                Some("A7856 (ECDSA SigVer (FIPS186-5): P-256, SHA2-256)"),
+                Some((
+                    "A7856 (ECDSA SigVer (FIPS186-5): P-256, SHA2-256)",
+                    "A7903 (ECDSA SigVer (FIPS186-5): P-256, SHA2-256)",
+                )),
             ),
             (
                 A::Scheme(T::EcdsaNistp384Sha384),
-                Some("A7856 (ECDSA SigVer (FIPS186-5): P-384, SHA2-384)"),
+                Some((
+                    "A7856 (ECDSA SigVer (FIPS186-5): P-384, SHA2-384)",
+                    "A7903 (ECDSA SigVer (FIPS186-5): P-384, SHA2-384)",
+                )),
             ),
             (
                 A::Scheme(T::EcdsaNistp521Sha512),
-                Some("A7856 (ECDSA SigVer (FIPS186-5): P-521, SHA2-512)"),
+                Some((
+                    "A7856 (ECDSA SigVer (FIPS186-5): P-521, SHA2-512)",
+                    "A7903 (ECDSA SigVer (FIPS186-5): P-521, SHA2-512)",
+                )),
             ),
             (
                 A::Scheme(T::Ed25519),
-                Some("A7855 (EDDSA SigVer: ED-25519)"),
+                Some((
+                    "A7855 (EDDSA SigVer: ED-25519)",
+                    "A7902 (EDDSA SigVer: ED-25519)",
+                )),
             ),
             (
                 A::Scheme(T::RsaPssSha256),
-                Some("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-256)"),
+                Some((
+                    "A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-256)",
+                    "A7903 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-256)",
+                )),
             ),
             (
                 A::Scheme(T::RsaPssSha384),
-                Some("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-384)"),
+                Some((
+                    "A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-384)",
+                    "A7903 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-384)",
+                )),
             ),
             (
                 A::Scheme(T::RsaPssSha512),
-                Some("A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-512)"),
+                Some((
+                    "A7856 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-512)",
+                    "A7903 (RSA SigVer (FIPS186-5): pss, 2048, 3072, 4096, SHA2-512)",
+                )),
             ),
             (
                 A::Scheme(T::RsaPkcs1Sha256),
-                Some("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-256)"),
+                Some((
+                    "A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-256)",
+                    "A7903 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-256)",
+                )),
             ),
             (
                 A::Scheme(T::RsaPkcs1Sha384),
-                Some("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-384)"),
+                Some((
+                    "A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-384)",
+                    "A7903 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-384)",
+                )),
             ),
             (
                 A::Scheme(T::RsaPkcs1Sha512),
-                Some("A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-512)"),
+                Some((
+                    "A7856 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-512)",
+                    "A7903 (RSA SigVer (FIPS186-5): pkcs1v1.5, 2048, 3072, 4096, SHA2-512)",
+                )),
             ),
             (
                 A::Scheme(T::MlDsa87),
-                Some("A7855 (ML-DSA SigVer: ML-DSA-87)"),
+                Some((
+                    "A7855 (ML-DSA SigVer: ML-DSA-87)",
+                    "A7902 (ML-DSA SigVer: ML-DSA-87)",
+                )),
             ),
             (
                 A::Kx(K::MlKem1024),
-                Some("A7855 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)"),
+                Some((
+                    "A7855 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)",
+                    "A7902 (ML-KEM KeyGen, EncapDecap: ML-KEM-1024)",
+                )),
             ),
             (A::Kx(K::Secp384r1MlKem1024), None),
             (A::Kx(K::X25519MlKem768), None),
             (A::Kx(K::Secp256r1MlKem768), None),
             (
                 A::Kx(K::Secp384r1),
-                Some(
+                Some((
                     "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
-                ),
+                    "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+                )),
             ),
             (
                 A::Kx(K::Secp256r1),
-                Some(
+                Some((
                     "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
-                ),
+                    "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
+                )),
             ),
             (A::Kx(K::X25519), None),
             (A::Cipher(C::Tls13Aes256GcmSha384), None),
@@ -811,92 +880,125 @@ mod tests {
             (A::Cipher(C::Tls12EcdheRsaAes256GcmSha384), None),
             (A::Cipher(C::Tls12EcdheRsaAes128GcmSha256), None),
             (A::Cipher(C::Tls12EcdheRsaChacha20Poly1305Sha256), None),
-            (A::Hash(H::Sha256), Some("A7855 (SHA2-256)")),
-            (A::Hash(H::Sha384), Some("A7855 (SHA2-384)")),
-            (A::Hash(H::Sha512), Some("A7855 (SHA2-512)")),
+            (
+                A::Hash(H::Sha256),
+                Some(("A7855 (SHA2-256)", "A7902 (SHA2-256)")),
+            ),
+            (
+                A::Hash(H::Sha384),
+                Some(("A7855 (SHA2-384)", "A7902 (SHA2-384)")),
+            ),
+            (
+                A::Hash(H::Sha512),
+                Some(("A7855 (SHA2-512)", "A7902 (SHA2-512)")),
+            ),
             (A::Protocol(V::Tls12), None),
             (A::Protocol(V::Tls13), None),
             (
                 A::Mac(MacAlgorithm::HmacSha256),
-                Some("A7855 (HMAC-SHA2-256: MAC 256, key 112-524288)"),
+                Some((
+                    "A7855 (HMAC-SHA2-256: MAC 256, key 112-524288)",
+                    "A7902 (HMAC-SHA2-256: MAC 256, key 112-524288)",
+                )),
             ),
             (
                 A::Mac(MacAlgorithm::HmacSha384),
-                Some("A7855 (HMAC-SHA2-384: MAC 384, key 112-524288)"),
+                Some((
+                    "A7855 (HMAC-SHA2-384: MAC 384, key 112-524288)",
+                    "A7902 (HMAC-SHA2-384: MAC 384, key 112-524288)",
+                )),
             ),
             (
                 A::Mac(MacAlgorithm::HmacSha512),
-                Some("A7855 (HMAC-SHA2-512: MAC 512, key 112-524288)"),
+                Some((
+                    "A7855 (HMAC-SHA2-512: MAC 512, key 112-524288)",
+                    "A7902 (HMAC-SHA2-512: MAC 512, key 112-524288)",
+                )),
             ),
             (
                 A::Kdf(KdfAlgorithm::HkdfSha256),
-                Some(
+                Some((
                     "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
-                ),
+                    "A7902 (KDA HKDF Sp800-56Cr1: HMAC SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
+                )),
             ),
             (
                 A::Kdf(KdfAlgorithm::HkdfSha384),
-                Some(
+                Some((
                     "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
-                ),
+                    "A7902 (KDA HKDF Sp800-56Cr1: HMAC SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
+                )),
             ),
             (
                 A::Kdf(KdfAlgorithm::HkdfSha512),
-                Some(
+                Some((
                     "A7855 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
-                ),
+                    "A7902 (KDA HKDF Sp800-56Cr1: HMAC SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo||l)",
+                )),
             ),
             (
                 A::Kdf(KdfAlgorithm::OneStepSha256),
-                Some(
+                Some((
                     "A7856 (KDA OneStep SP800-56Cr2: SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
-                ),
+                    "A7903 (KDA OneStep SP800-56Cr2: SHA2-256, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                )),
             ),
             (
                 A::Kdf(KdfAlgorithm::OneStepSha384),
-                Some(
+                Some((
                     "A7856 (KDA OneStep SP800-56Cr2: SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
-                ),
+                    "A7903 (KDA OneStep SP800-56Cr2: SHA2-384, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                )),
             ),
             (
                 A::Kdf(KdfAlgorithm::OneStepSha512),
-                Some(
+                Some((
                     "A7856 (KDA OneStep SP800-56Cr2: SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
-                ),
+                    "A7903 (KDA OneStep SP800-56Cr2: SHA2-512, shared secret 224-2048, derived key 2048, fixed info uPartyInfo||vPartyInfo)",
+                )),
             ),
             (
                 A::KeyAgreement(KeyAgreementAlgorithm::EcdhP256),
-                Some(
+                Some((
                     "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
-                ),
+                    "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-256; ECDSA KeyGen (FIPS186-5): P-256)",
+                )),
             ),
             (
                 A::KeyAgreement(KeyAgreementAlgorithm::EcdhP384),
-                Some(
+                Some((
                     "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
-                ),
+                    "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-384; ECDSA KeyGen (FIPS186-5): P-384)",
+                )),
             ),
             (
                 A::KeyAgreement(KeyAgreementAlgorithm::EcdhP521),
-                Some(
+                Some((
                     "A7864 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-521; ECDSA KeyGen (FIPS186-5): P-521)",
-                ),
+                    "A7919 (KAS-ECC-SSC Sp800-56Ar3: ephemeralUnified, initiator and responder, P-521; ECDSA KeyGen (FIPS186-5): P-521)",
+                )),
             ),
             (X25519, None),
             (
                 A::Aead(AeadAlgorithm::Aes128Gcm),
-                Some(
+                Some((
                     "A7840 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
-                ),
+                    "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 128, IV 96, tag 128)",
+                )),
             ),
             (
                 A::Aead(AeadAlgorithm::Aes256Gcm),
-                Some(
+                Some((
                     "A7840 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
-                ),
+                    "A7887 (AES-GCM: Encrypt, IV Generation Internal, 8.2.2; Decrypt, IV Generation External; key 256, IV 96, tag 128)",
+                )),
             ),
             (A::Aead(AeadAlgorithm::Chacha20Poly1305), None),
-        ];
+        ]
+    }
+
+    fn four_x_cells_are_pinned(m: Module) {
+        let expected = four_x_citations();
         assert_eq!(expected.len(), Algorithm::all().len());
         assert!(
             Algorithm::all()
@@ -905,20 +1007,52 @@ mod tests {
         );
         assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 36);
         for (a, cavp) in expected {
-            let approval = match cavp {
-                Some(cavp) => Approval::AlgorithmTested { cavp },
-                None if a == X25519 || a == KX_X25519 => X25519_NOT_APPROVED,
-                None => Approval::Unverified,
+            let approval = match (cavp, m.linkage) {
+                (Some((cavp, _)), Linkage::Dynamic) | (Some((_, cavp)), Linkage::Static) => {
+                    Approval::AlgorithmTested { cavp }
+                }
+                (None, _) if a == X25519 || a == KX_X25519 => X25519_NOT_APPROVED,
+                (None, _) => Approval::Unverified,
             };
             assert_eq!(
-                capability(M4D, a),
+                capability(m, a),
                 Capability {
                     available: true,
                     approval
                 },
-                "{a:?}"
+                "{m:?} {a:?}"
             );
             assert!(!approval.is_approved(), "{a:?}");
+        }
+    }
+
+    #[test]
+    fn four_x_dynamic_cells_are_pinned_to_their_cavp_certificates() {
+        four_x_cells_are_pinned(M4D);
+    }
+
+    #[test]
+    fn four_x_static_cells_are_pinned_to_their_cavp_certificates() {
+        four_x_cells_are_pinned(M4S);
+    }
+
+    #[test]
+    fn each_static_certificate_is_the_dynamic_ones_counterpart() {
+        let pairs = [
+            ("A7855", "A7902"),
+            ("A7856", "A7903"),
+            ("A7873", "A7912"),
+            ("A7864", "A7919"),
+            ("A7840", "A7887"),
+        ];
+        for (a, cavp) in four_x_citations() {
+            if let Some((dynamic, static_build)) = cavp {
+                assert!(
+                    pairs.contains(&(&dynamic[..5], &static_build[..5])),
+                    "{a:?}: {dynamic} / {static_build}"
+                );
+                assert_eq!(dynamic[5..], static_build[5..], "{a:?}");
+            }
         }
     }
 
