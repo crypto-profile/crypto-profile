@@ -158,8 +158,8 @@ impl FromStr for Profile {
 }
 
 /// Options applied on top of any profile. The default changes nothing; `cnsa1_unclassified_nss`
-/// widens `cnsa1`'s MACs, HKDFs and hashes, and the others narrow. Outside this crate, build it from
-/// `Options::default()` and set the fields you need.
+/// widens `cnsa1`'s MACs, HKDFs and hashes, and the others narrow. Outside this crate, build it
+/// from `Options::default()` and set the fields you need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub struct Options {
@@ -446,8 +446,8 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
 ///   ¶8a and fn. 1 (p. 5): RFC 9151 §4 (AES-256 in GCM) and RFC 9206.
 /// - Hashes: SHA-384, SHA-512, in the MAC and KDF order. Annex B ¶1 table (p. B-1), "Use SHA-384 or
 ///   SHA-512 to protect up to TOP SECRET"; Annex B governs over RFC 9206 §4's SHA-384 only, which
-///   fn. 1 (p. 5) says "will need to be updated for CNSA 2.0". SHA3 excluded: SHA3-384 or SHA3-512 "allowed for
-///   internal hardware functionality (e.g. boot-up integrity checks) only" (p. B-2).
+///   fn. 1 (p. 5) says "will need to be updated for CNSA 2.0". SHA3 excluded: SHA3-384 or SHA3-512
+///   "allowed for internal hardware functionality (e.g. boot-up integrity checks) only" (p. B-2).
 pub const CNSA2: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384],

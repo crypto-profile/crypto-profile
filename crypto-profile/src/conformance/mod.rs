@@ -4,6 +4,7 @@ use crate::{Algorithm, CryptoError, Module, SignatureAlgorithm, TlsSignatureSche
 mod aead_tests;
 #[doc(hidden)]
 pub mod golden;
+mod hash_tests;
 mod key_agreement_tests;
 mod peer_certificate_tests;
 mod peer_identity_tests;
@@ -656,6 +657,14 @@ pub mod vectors {
     pub const SHA384_SHORT: &str = include_str!("vectors/SHA384ShortMsg.rsp");
     /// NIST CAVP SHA-512 short messages.
     pub const SHA512_SHORT: &str = include_str!("vectors/SHA512ShortMsg.rsp");
+    /// NIST CAVP SHA3-256 short messages.
+    pub const SHA3_256_SHORT: &str = include_str!("vectors/SHA3_256ShortMsg.rsp");
+    /// NIST CAVP SHA3-384 short messages.
+    pub const SHA3_384_SHORT: &str = include_str!("vectors/SHA3_384ShortMsg.rsp");
+    /// NIST CAVP SHA3-512 short messages.
+    pub const SHA3_512_SHORT: &str = include_str!("vectors/SHA3_512ShortMsg.rsp");
+    /// NIST's FIPS 180-4 and FIPS 202 example values (Examples with Intermediate Values).
+    pub const NIST_HASH_EXAMPLES: &str = include_str!("vectors/nist_hash_examples.json");
 
     /// RFC 7518 Appendix C: ECDH-ES on P-256 with the Concat KDF (SHA-256), for A128GCM.
     pub mod rfc7518 {
@@ -827,7 +836,7 @@ macro_rules! conformance_tests {
         use $b::test_support::handshake;
         use $b::tls::Policy;
         use $b::*;
-        use $crate::conformance::{__cavp_short, __wycheproof_sig_cases, vectors};
+        use $crate::conformance::{__wycheproof_sig_cases, vectors};
 
         fn policy(
             v: &[TlsVersion],
@@ -921,26 +930,6 @@ macro_rules! conformance_tests {
                 &[KxGroup::Secp384r1],
                 &$crate::conformance::__peer_schemes(MODULE),
             )
-        }
-
-        #[test]
-        fn conformance_sha2_cavp_short_messages() {
-            for (h, file) in [
-                (HashAlgorithm::Sha256, vectors::SHA256_SHORT),
-                (HashAlgorithm::Sha384, vectors::SHA384_SHORT),
-                (HashAlgorithm::Sha512, vectors::SHA512_SHORT),
-            ] {
-                let cases = __cavp_short(file);
-                let want = match h {
-                    HashAlgorithm::Sha256 => 65,
-                    HashAlgorithm::Sha384 | HashAlgorithm::Sha512 => 129,
-                    _ => panic!("{h:?}: no CAVP file"),
-                };
-                assert_eq!(cases.len(), want, "{h:?}");
-                for (m, d) in cases {
-                    assert_eq!(digest::digest(h, &m), Ok(d), "{h:?}");
-                }
-            }
         }
 
         #[test]
@@ -1203,6 +1192,16 @@ macro_rules! conformance_tests {
                             })
                         };
                         assert_eq!(a.admit_hash(h), want, "{p} {o} {h:?}");
+                        assert_eq!(
+                            digest::digest(&a, h, b"").map(|d| d.len()),
+                            want.map(|()| h.output_len()),
+                            "{p} {o} {h:?}"
+                        );
+                        assert_eq!(
+                            digest::Hasher::new(&a, h).map(|s| s.algorithm()),
+                            want.map(|()| h),
+                            "{p} {o} {h:?}"
+                        );
                     }
                 }
             }
@@ -1528,7 +1527,12 @@ macro_rules! conformance_tests {
                     },
                     Algorithm::Hash(h) => {
                         assert!(cap.available, "{a:?}");
-                        assert_eq!(digest::digest(h, b"").map(|d| d.len()), Ok(h.output_len()));
+                        let unrestricted = admit(Profile::Unrestricted, Options::default());
+                        assert_eq!(
+                            digest::digest(&unrestricted, h, b"").map(|d| d.len()),
+                            Ok(h.output_len()),
+                            "{h:?}"
+                        );
                     }
                     Algorithm::Mac(m) => {
                         assert!(cap.available, "{m:?}");
@@ -1795,6 +1799,10 @@ macro_rules! conformance_tests {
 
         mod conformance_aead {
             $crate::__conformance_aead_tests!($b);
+        }
+
+        mod conformance_hash {
+            $crate::__conformance_hash_tests!($b);
         }
     };
 }

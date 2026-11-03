@@ -88,6 +88,24 @@ mod ephemeral_keys_agree_once {}
 #[allow(dead_code)]
 mod aead_keys_are_not_clone {}
 
+/// A `digest::Hasher` is not `Clone`, so a partial hash cannot be forked:
+///
+/// ```
+/// use crypto_profile_awslc3::{HashAlgorithm, Options, Profile, admit, digest};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let hasher = digest::Hasher::new(&a, HashAlgorithm::Sha384).unwrap();
+/// assert_eq!(hasher.algorithm(), HashAlgorithm::Sha384);
+/// ```
+///
+/// ```compile_fail,E0599
+/// use crypto_profile_awslc3::{HashAlgorithm, Options, Profile, admit, digest};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let hasher = digest::Hasher::new(&a, HashAlgorithm::Sha384).unwrap();
+/// let copy = hasher.clone();
+/// ```
+#[allow(dead_code)]
+mod hashers_are_not_clone {}
+
 crypto_profile::provider!(crate::provider_arms);
 mod provider_arms;
 
