@@ -19,7 +19,7 @@ pub enum Family {
     KxGroup,
     /// Signature schemes.
     SignatureScheme,
-    /// Key algorithms.
+    /// Key algorithms, for TLS certificate keys.
     KeyAlgorithm,
     /// Message authentication codes, outside TLS.
     Mac,
@@ -31,6 +31,8 @@ pub enum Family {
     Aead,
     /// Hashing, outside TLS.
     Hash,
+    /// Signatures, outside TLS.
+    Signature,
 }
 
 /// Why a certificate signing request could not be produced.
@@ -203,6 +205,12 @@ pub enum CryptoError {
         /// The family left empty.
         category: Family,
     },
+    /// A signature algorithm that is not a TLS certificate key algorithm, refused where a TLS key
+    /// or a certificate request is made: an RSA-PSS variant.
+    NotTlsKey {
+        /// The refused algorithm.
+        algorithm: SignatureAlgorithm,
+    },
     /// A key algorithm the profile does not admit.
     KeyNotInProfile {
         /// The profile.
@@ -354,6 +362,9 @@ impl fmt::Display for CryptoError {
                     "the {profile} profile, with {options}, names no {category:?}"
                 )
             }
+            CryptoError::NotTlsKey { algorithm } => {
+                write!(f, "{algorithm} is not a TLS certificate key algorithm")
+            }
             CryptoError::KeyNotInProfile { profile, algorithm } => {
                 write!(f, "the {profile} profile does not admit {algorithm} keys")
             }
@@ -464,10 +475,11 @@ mod tests {
                 Family::Kdf,
                 Family::KeyAgreement,
                 Family::Aead,
-                Family::Hash
+                Family::Hash,
+                Family::Signature
             ]
             .map(|f| format!("{f:?}")),
-            ["Mac", "Kdf", "KeyAgreement", "Aead", "Hash"]
+            ["Mac", "Kdf", "KeyAgreement", "Aead", "Hash", "Signature"]
         );
         assert_eq!(
             CryptoError::PolicyVersionUnusable {
@@ -499,7 +511,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 18] = [
+        let table: [(CryptoError, &str); 19] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -522,6 +534,12 @@ mod tests {
                     algorithm: SignatureAlgorithm::Rsa3072Sha384,
                 },
                 "the bsi profile does not admit rsa3072-sha384 keys",
+            ),
+            (
+                CryptoError::NotTlsKey {
+                    algorithm: SignatureAlgorithm::Rsa3072Sha384Pss,
+                },
+                "rsa3072-sha384-pss is not a TLS certificate key algorithm",
             ),
             (
                 CryptoError::NotApproved {

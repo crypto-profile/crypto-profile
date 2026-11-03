@@ -1481,6 +1481,36 @@ macro_rules! conformance_tests {
         }
 
         #[test]
+        fn conformance_signature_admission_matrix() {
+            for &(p, off, on) in $crate::conformance::golden::SIGNATURE_GOLDEN {
+                for (unclassified, golden) in [(false, off), (true, on)] {
+                    let mut o = Options::default();
+                    o.cnsa1_unclassified_nss = unclassified;
+                    let a = admit(p, o);
+                    let available = |s: SignatureAlgorithm| {
+                        capability(MODULE, Algorithm::Signature(s)).available
+                    };
+                    let admitted: Vec<SignatureAlgorithm> =
+                        golden.iter().copied().filter(|s| available(*s)).collect();
+                    assert_eq!(a.signatures(), admitted, "{p} {o}");
+                    for &s in SignatureAlgorithm::ALL {
+                        let want = if admitted.contains(&s) {
+                            Ok(())
+                        } else if golden.contains(&s) {
+                            Err(CryptoError::Unavailable(Algorithm::Signature(s)))
+                        } else {
+                            Err(CryptoError::NotInProfile {
+                                profile: p,
+                                algorithm: Algorithm::Signature(s),
+                            })
+                        };
+                        assert_eq!(a.admit_signature(s), want, "{p} {o} {s}");
+                    }
+                }
+            }
+        }
+
+        #[test]
         fn conformance_rfc8032_ed25519() {
             let v: $crate::conformance::__serde_json::Value =
                 $crate::conformance::__serde_json::from_str(vectors::ED25519_RFC8032).unwrap();

@@ -158,21 +158,23 @@ impl FromStr for Profile {
 }
 
 /// Options applied on top of any profile. The default changes nothing; `cnsa1_unclassified_nss`
-/// widens `cnsa1`'s MACs, HKDFs and hashes, and the others narrow. Outside this crate, build it
-/// from `Options::default()` and set the fields you need.
+/// widens `cnsa1`'s MACs, HKDFs, hashes and signatures, and the others narrow. Outside this crate,
+/// build it from `Options::default()` and set the fields you need.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub struct Options {
     /// Keep only post-quantum key exchange (pure ML-KEM and hybrid groups), and so remove TLS 1.2,
-    /// which has none. Signatures are not narrowed.
+    /// which has none. Key algorithms and signatures are not narrowed.
     pub pq_key_exchange_required: bool,
     /// Require peer leaf keys and certification paths to match the profile. Off by default.
     pub peer_certificates_match_profile: bool,
     /// Admit HMAC-SHA256, HKDF-SHA256 and SHA-256 hashing under `cnsa1`, as CNSSP 15 (20 October
     /// 2016) Annex B ¶2b (p. B-2) allows SHA-256 in the near term for UNCLASSIFIED NSS data and
-    /// community-of-interest separation only. Ignored by every other profile, and by every family
-    /// but message authentication, HKDF and hashing. It admits no one-step KDF, and does not widen
-    /// `cnsa1`'s key agreement beyond P-384 or its AEADs beyond AES-256-GCM. Off by default.
+    /// community-of-interest separation only, and 2048-bit RSA signatures with SHA-384 (PSS and
+    /// PKCS#1 v1.5), as ¶2b allows RSA "at the 2048 bit level". Ignored by every other profile, and
+    /// by every family but message authentication, HKDF, hashing and signatures outside TLS. It
+    /// admits no one-step KDF and no curve but P-384, for key agreement or ECDSA, and does not
+    /// widen `cnsa1`'s AEADs beyond AES-256-GCM or its TLS key algorithms. Off by default.
     pub cnsa1_unclassified_nss: bool,
 }
 
@@ -212,7 +214,7 @@ pub struct ProfileSpec {
     pub kx_groups: &'static [K],
     /// Handshake signature schemes accepted from the peer.
     pub signature_schemes: &'static [T],
-    /// Key algorithms the profile admits for keys generated or used under it.
+    /// TLS certificate key algorithms, for `resolve` and `Resolved::admit_key`.
     pub key_algorithms: &'static [S],
     /// Message authentication codes, for `hmac`; admitted through `admit`, not `resolve`.
     pub macs: &'static [MacAlgorithm],
@@ -224,6 +226,8 @@ pub struct ProfileSpec {
     pub aeads: &'static [AeadAlgorithm],
     /// Hash functions outside TLS, for `digest`; admitted through `admit`, not `resolve`.
     pub hashes: &'static [HashAlgorithm],
+    /// Signature algorithms outside TLS, for `signature`; admitted through `admit`, not `resolve`.
+    pub signatures: &'static [S],
 }
 
 impl Profile {
@@ -251,6 +255,9 @@ impl Profile {
 /// - AEADs: AES-256-GCM, AES-128-GCM and ChaCha20-Poly1305: every AEAD the backends implement.
 /// - Hashes: SHA-512, SHA-384, SHA-256, SHA3-512, SHA3-384 and SHA3-256: every hash the backends
 ///   implement.
+/// - Signatures: ML-DSA-87; ECDSA on P-384, on P-521 with SHA-512 and with SHA-384, and on P-256;
+///   Ed25519; RSA 4096, 3072 and 2048 with PSS, then with PKCS#1 v1.5: every signature algorithm
+///   the backends implement.
 pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -329,6 +336,20 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
         HashAlgorithm::Sha3_384,
         HashAlgorithm::Sha3_256,
     ],
+    signatures: &[
+        S::MlDsa87,
+        S::EcdsaP384Sha384,
+        S::EcdsaP521Sha512,
+        S::EcdsaP521Sha384,
+        S::EcdsaP256Sha256,
+        S::Ed25519,
+        S::Rsa4096Sha384Pss,
+        S::Rsa3072Sha384Pss,
+        S::Rsa2048Sha384Pss,
+        S::Rsa4096Sha384,
+        S::Rsa3072Sha384,
+        S::Rsa2048Sha384,
+    ],
 };
 
 /// `preferred`: the crate's recommendation. Not a government profile; see `docs/profiles.md`.
@@ -372,6 +393,12 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 ///   least 256 bits, "preferably SHA-384 or SHA-512". SHA-256 "will not be approved beyond 2030"
 ///   (p. 11). SHA-3 excluded: "approved exclusively for use within ML-DSA and ML-KEM" (p. 6),
 ///   "restricted to use within internal steps of ML-DSA and ML-KEM" (p. 11).
+/// - Signatures: ML-DSA-87, "preferably ML-DSA-87", ISM-1991 (p. 9); ECDSA on P-384, P-521 and
+///   P-256, ISM-1763 (p. 8); RSA 4096 and 3072 with PSS, then with PKCS#1 v1.5, ISM-1765 (p. 10),
+///   which names no padding. Ed25519 excluded: ISM pp. 5-6. RSA 2048 excluded: ISM-1765 (p. 10).
+///   ECDSA P-521 with SHA-384 excluded: FIPS 186-5 §6.1.1 (p. 21), a hash weaker than the curve
+///   "shall not be used" (decision 0015). ECDSA and RSA "will not be approved beyond 2030" (pp. 8
+///   and 10).
 pub const PREFERRED: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384, C::Tls13Aes128GcmSha256],
@@ -425,6 +452,16 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
         HashAlgorithm::Sha384,
         HashAlgorithm::Sha256,
     ],
+    signatures: &[
+        S::MlDsa87,
+        S::EcdsaP384Sha384,
+        S::EcdsaP521Sha512,
+        S::EcdsaP256Sha256,
+        S::Rsa4096Sha384Pss,
+        S::Rsa3072Sha384Pss,
+        S::Rsa4096Sha384,
+        S::Rsa3072Sha384,
+    ],
 };
 
 /// `cnsa2`: the CNSA 2.0 algorithm set of CNSSP 15 (December 2024), Annex B, pp. B-1 to B-2, on
@@ -448,6 +485,7 @@ pub const PREFERRED: ProfileSpec = ProfileSpec {
 ///   SHA-512 to protect up to TOP SECRET"; Annex B governs over RFC 9206 §4's SHA-384 only, which
 ///   fn. 1 (p. 5) says "will need to be updated for CNSA 2.0". SHA3 excluded: SHA3-384 or SHA3-512
 ///   "allowed for internal hardware functionality (e.g. boot-up integrity checks) only" (p. B-2).
+/// - Signatures: ML-DSA-87, Annex B ¶1 table (p. B-1), "ML-DSA-87 to protect up to TOP SECRET".
 pub const CNSA2: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13],
     cipher_suites: &[C::Tls13Aes256GcmSha384],
@@ -459,6 +497,7 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
     key_agreements: &[],
     aeads: &[AeadAlgorithm::Aes256Gcm],
     hashes: &[HashAlgorithm::Sha384, HashAlgorithm::Sha512],
+    signatures: &[S::MlDsa87],
 };
 
 /// `cnsa1`: the CNSA 1.0 algorithm set of CNSSP 15 (20 October 2016), Annex B (p. B-1), in the
@@ -488,6 +527,11 @@ pub const CNSA2: ProfileSpec = ProfileSpec {
 /// - Hashes: SHA-384. Annex B ¶1 table (p. B-1), "Use SHA-384 to protect up to TOP SECRET".
 ///   `Options::cnsa1_unclassified_nss` adds SHA-256 under ¶2b (p. B-2), "SHA-256 in the near
 ///   term". SHA-512 and SHA3 excluded: the edition names neither (decision 0008).
+/// - Signatures: ECDSA P-384 with SHA-384, then RSA 4096 and 3072 with PSS, then with PKCS#1 v1.5.
+///   Annex B ¶1 table (p. B-1): ECDSA "Use Curve P-384", RSA "Minimum 3072 bit-modulus", both
+///   under FIPS 186-4, whose §5.5 (p. 24) approves both paddings. `Options::cnsa1_unclassified_nss`
+///   adds RSA 2048 with PSS and with PKCS#1 v1.5 under ¶2b (p. B-2), "RSA … at the 2048 bit level";
+///   not ECDSA P-256: ¶2b requires NSA consultation for curves other than P-384.
 pub const CNSA1: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -503,6 +547,13 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
     key_agreements: &[KeyAgreementAlgorithm::EcdhP384],
     aeads: &[AeadAlgorithm::Aes256Gcm],
     hashes: &[HashAlgorithm::Sha384],
+    signatures: &[
+        S::EcdsaP384Sha384,
+        S::Rsa4096Sha384Pss,
+        S::Rsa3072Sha384Pss,
+        S::Rsa4096Sha384,
+        S::Rsa3072Sha384,
+    ],
 };
 
 /// `bsi`: BSI TR-02102-2 (TLS) and TR-02102-1, version 2026-01.
@@ -527,6 +578,12 @@ pub const CNSA1: ProfileSpec = ProfileSpec {
 ///   recommended".
 /// - Hashes: SHA-512, SHA-384, SHA-256, SHA3-512, SHA3-384, SHA3-256. TR-02102-1 Table 4.1
 ///   (p. 47), "Recommended hash functions".
+/// - Signatures: RSA 4096 and 3072 with PSS. TR-02102-1 Table 5.4 (p. 52), EMSA-PSS; §5.3.1
+///   (p. 52), a modulus of "at least 3000 bits". PKCS#1 v1.5 excluded: §1.5 (p. 22), "not
+///   recommended to use this format in new systems, neither for encryption nor for signature
+///   generation". ECDSA excluded: Table B.3 (p. 75) recommends only Brainpool curves, which no
+///   backend implements. ML-DSA excluded: §5.3.4 (p. 54), only "in combination with a classic
+///   signature scheme", which the crate does not offer. Ed25519 excluded: not in Table 5.3 (p. 51).
 pub const BSI: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -567,6 +624,7 @@ pub const BSI: ProfileSpec = ProfileSpec {
         HashAlgorithm::Sha3_384,
         HashAlgorithm::Sha3_256,
     ],
+    signatures: &[S::Rsa4096Sha384Pss, S::Rsa3072Sha384Pss],
 };
 
 /// `fips1403`: NIST SP 800-140C r2 and SP 800-140D r2 with the CMVP lists (updated August 21,
@@ -608,6 +666,12 @@ pub const BSI: ProfileSpec = ProfileSpec {
 ///   §6.2.4.1 (FIPS 180-4) and §6.2.4.2 (FIPS 202), through SP 800-140C r2 §6.2 (p. 2); SP
 ///   800-131A r2 Table 8 (pp. 18-19); IG C.C Resolution 1 (p. 138), SHA-3 "as the standalone
 ///   functions".
+/// - Signatures: ML-DSA-87; ECDSA on P-384, on P-521 with SHA-512, and on P-256; Ed25519; RSA 4096,
+///   3072 and 2048 with PSS, then with PKCS#1 v1.5. CMVP SP 800-140C list §6.2.3.1 (FIPS 186-5,
+///   FIPS 204), through SP 800-140C r2 §6.2 (p. 2); FIPS 186-5 §5.1 (p. 16) and §5.4 (p. 18),
+///   both paddings; SP 800-131A r2 Table 2 (p. 9). ECDSA P-521 with SHA-384 excluded: FIPS 186-5
+///   §6.1.1 (p. 21), "A hash function that provides a lower security strength than is associated
+///   with the bit length of n shall not be used".
 pub const FIPS1403: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -677,6 +741,19 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
         HashAlgorithm::Sha3_384,
         HashAlgorithm::Sha3_256,
     ],
+    signatures: &[
+        S::MlDsa87,
+        S::EcdsaP384Sha384,
+        S::EcdsaP521Sha512,
+        S::EcdsaP256Sha256,
+        S::Ed25519,
+        S::Rsa4096Sha384Pss,
+        S::Rsa3072Sha384Pss,
+        S::Rsa2048Sha384Pss,
+        S::Rsa4096Sha384,
+        S::Rsa3072Sha384,
+        S::Rsa2048Sha384,
+    ],
 };
 
 /// `fips1402`: FIPS 140-2 Annex A and Annex D (2021-10-12 editions), FIPS 186-4, SP 800-131A r2
@@ -703,6 +780,10 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
 ///   IG A.5. ChaCha20-Poly1305 excluded: Annex A.
 /// - Hashes: SHA-512, SHA-384, SHA-256, SHA3-512, SHA3-384, SHA3-256. Annex A (p. 2), FIPS 180-4
 ///   and FIPS 202; FIPS 140-2 IG A.11 Resolution 1 (p. 216), SHA-3 "as the standalone functions".
+/// - Signatures: ECDSA on P-384, on P-521 with SHA-512 and with SHA-384, and on P-256; RSA 4096,
+///   3072 and 2048 with PSS, then with PKCS#1 v1.5. Annex A (p. 2), FIPS 186-4: §5.5 (p. 24), both
+///   paddings; §6.4 (p. 30), a hash weaker than the curve "ordinarily should not be used"; RSA
+///   4096, FIPS 140-2 IG A.14 (p. 221). Ed25519 and ML-DSA excluded: Annex A.
 pub const FIPS1402: ProfileSpec = ProfileSpec {
     versions: &[V::Tls13, V::Tls12],
     cipher_suites: &[
@@ -760,6 +841,18 @@ pub const FIPS1402: ProfileSpec = ProfileSpec {
         HashAlgorithm::Sha3_512,
         HashAlgorithm::Sha3_384,
         HashAlgorithm::Sha3_256,
+    ],
+    signatures: &[
+        S::EcdsaP384Sha384,
+        S::EcdsaP521Sha512,
+        S::EcdsaP521Sha384,
+        S::EcdsaP256Sha256,
+        S::Rsa4096Sha384Pss,
+        S::Rsa3072Sha384Pss,
+        S::Rsa2048Sha384Pss,
+        S::Rsa4096Sha384,
+        S::Rsa3072Sha384,
+        S::Rsa2048Sha384,
     ],
 };
 
@@ -879,6 +972,8 @@ pub struct AdmittedSelection {
     pub aeads: Vec<AeadAlgorithm>,
     /// Hash functions.
     pub hashes: Vec<HashAlgorithm>,
+    /// Signature algorithms.
+    pub signatures: Vec<S>,
     /// Entries unavailable on the module line, in family and preference order.
     pub excluded: Vec<Algorithm>,
 }
@@ -900,10 +995,12 @@ fn select_admitted_with(
     let mut macs = spec.macs.to_vec();
     let mut kdfs = spec.kdfs.to_vec();
     let mut hashes = spec.hashes.to_vec();
+    let mut signatures = spec.signatures.to_vec();
     if options.cnsa1_unclassified_nss {
         macs.extend_from_slice(unclassified_nss_macs(profile));
         kdfs.extend_from_slice(unclassified_nss_kdfs(profile));
         hashes.extend_from_slice(unclassified_nss_hashes(profile));
+        signatures.extend_from_slice(unclassified_nss_signatures(profile));
     }
     let mut key_agreements = spec.key_agreements.to_vec();
     let mut aeads = spec.aeads.to_vec();
@@ -918,12 +1015,19 @@ fn select_admitted_with(
     );
     retain_available(&mut aeads, Algorithm::Aead, &available, &mut excluded);
     retain_available(&mut hashes, Algorithm::Hash, &available, &mut excluded);
+    retain_available(
+        &mut signatures,
+        Algorithm::Signature,
+        &available,
+        &mut excluded,
+    );
     AdmittedSelection {
         macs,
         kdfs,
         key_agreements,
         aeads,
         hashes,
+        signatures,
         excluded,
     }
 }
@@ -970,6 +1074,18 @@ const fn unclassified_nss_kdfs(p: Profile) -> &'static [KdfAlgorithm] {
 const fn unclassified_nss_hashes(p: Profile) -> &'static [HashAlgorithm] {
     match p {
         Profile::Cnsa1 => &[HashAlgorithm::Sha256],
+        Profile::Unrestricted
+        | Profile::Preferred
+        | Profile::Cnsa2
+        | Profile::Bsi
+        | Profile::Fips1403
+        | Profile::Fips1402 => &[],
+    }
+}
+
+const fn unclassified_nss_signatures(p: Profile) -> &'static [S] {
+    match p {
+        Profile::Cnsa1 => &[S::Rsa2048Sha384Pss, S::Rsa2048Sha384],
         Profile::Unrestricted
         | Profile::Preferred
         | Profile::Cnsa2
@@ -1076,6 +1192,7 @@ mod tests {
             no_duplicates(s.key_agreements);
             no_duplicates(s.aeads);
             no_duplicates(s.hashes);
+            no_duplicates(s.signatures);
             assert!(!s.versions.is_empty() && !s.kx_groups.is_empty(), "{p}");
             assert!(
                 !s.signature_schemes.is_empty() && !s.key_algorithms.is_empty(),
@@ -1111,6 +1228,58 @@ mod tests {
         ] {
             assert!(!s.hashes.contains(&h), "{h:?}");
         }
+        for a in [
+            SignatureAlgorithm::Ed25519,
+            SignatureAlgorithm::EcdsaP521Sha384,
+            SignatureAlgorithm::Rsa2048Sha384,
+            SignatureAlgorithm::Rsa2048Sha384Pss,
+        ] {
+            assert!(!s.signatures.contains(&a), "{a}");
+        }
+    }
+
+    #[test]
+    fn no_tls_key_list_holds_an_rsa_pss_variant() {
+        for &p in Profile::ALL {
+            for &k in p.spec().key_algorithms {
+                assert!(k.tls_scheme().is_some(), "{p} {k}");
+            }
+        }
+        for a in [
+            S::Rsa2048Sha384Pss,
+            S::Rsa3072Sha384Pss,
+            S::Rsa4096Sha384Pss,
+        ] {
+            assert_eq!(a.tls_scheme(), None, "{a}");
+            assert!(Profile::Unrestricted.spec().signatures.contains(&a), "{a}");
+        }
+    }
+
+    #[test]
+    fn p521_with_sha384_signs_outside_tls_only_where_fips_186_5_does_not_govern() {
+        for &p in Profile::ALL {
+            let outside = p.spec().signatures.contains(&S::EcdsaP521Sha384);
+            let want = match p {
+                Profile::Unrestricted | Profile::Fips1402 => true,
+                Profile::Preferred
+                | Profile::Cnsa2
+                | Profile::Cnsa1
+                | Profile::Bsi
+                | Profile::Fips1403 => false,
+            };
+            assert_eq!(outside, want, "{p}");
+        }
+        for p in [Profile::Preferred, Profile::Fips1403] {
+            assert!(p.spec().key_algorithms.contains(&S::EcdsaP521Sha384), "{p}");
+        }
+    }
+
+    #[test]
+    fn bsi_signs_with_rsa_pss_only() {
+        assert_eq!(
+            Profile::Bsi.spec().signatures,
+            &[S::Rsa4096Sha384Pss, S::Rsa3072Sha384Pss]
+        );
     }
 
     #[test]
@@ -1213,6 +1382,7 @@ mod tests {
             key_agreements: &[],
             aeads: &[],
             hashes: &[],
+            signatures: &[],
         };
         let empty = |category| {
             Err(CryptoError::EmptyProfile {
@@ -1609,6 +1779,7 @@ mod tests {
             kdfs: &[],
             aeads: &[],
             hashes: &[],
+            signatures: &[],
             ..BSI
         };
         assert_eq!(
@@ -1619,6 +1790,7 @@ mod tests {
                 key_agreements: vec![],
                 aeads: vec![],
                 hashes: vec![],
+                signatures: vec![],
                 excluded: vec![],
             }
         );
@@ -1639,6 +1811,8 @@ mod tests {
             Algorithm::Aead(D::Aes128Gcm),
             Algorithm::Hash(H::Sha384),
             Algorithm::Hash(H::Sha3_512),
+            Algorithm::Signature(S::MlDsa87),
+            Algorithm::Signature(S::Rsa3072Sha384Pss),
         ];
         assert_eq!(
             select_admitted_with(Profile::Fips1403, &FIPS1403, Options::default(), |a| {
@@ -1655,6 +1829,17 @@ mod tests {
                 key_agreements: vec![E::EcdhP384, E::EcdhP256],
                 aeads: vec![D::Aes256Gcm],
                 hashes: vec![H::Sha512, H::Sha256, H::Sha3_384, H::Sha3_256],
+                signatures: vec![
+                    S::EcdsaP384Sha384,
+                    S::EcdsaP521Sha512,
+                    S::EcdsaP256Sha256,
+                    S::Ed25519,
+                    S::Rsa4096Sha384Pss,
+                    S::Rsa2048Sha384Pss,
+                    S::Rsa4096Sha384,
+                    S::Rsa3072Sha384,
+                    S::Rsa2048Sha384,
+                ],
                 excluded: lacking.to_vec(),
             }
         );
@@ -1736,6 +1921,33 @@ mod tests {
             }
             assert_eq!(select_admitted(p, on, M4S).hashes, want, "{p}");
             assert_eq!(select_admitted(p, on, M3S).hashes, want, "{p}");
+        }
+    }
+
+    #[test]
+    fn the_unclassified_nss_option_adds_rsa_2048_signatures_to_cnsa1_only() {
+        let on = Options {
+            cnsa1_unclassified_nss: true,
+            ..Options::default()
+        };
+        for &p in Profile::ALL {
+            for m in [M3S, M4S] {
+                let mut want = select_admitted(p, Options::default(), m).signatures;
+                if p == Profile::Cnsa1 {
+                    assert_eq!(
+                        want,
+                        [
+                            S::EcdsaP384Sha384,
+                            S::Rsa4096Sha384Pss,
+                            S::Rsa3072Sha384Pss,
+                            S::Rsa4096Sha384,
+                            S::Rsa3072Sha384,
+                        ]
+                    );
+                    want.extend([S::Rsa2048Sha384Pss, S::Rsa2048Sha384]);
+                }
+                assert_eq!(select_admitted(p, on, m).signatures, want, "{p} {m:?}");
+            }
         }
     }
 

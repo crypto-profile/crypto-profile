@@ -2899,7 +2899,7 @@ mod tests {
                 | S::EcdsaP384Sha384
                 | S::EcdsaP521Sha384
                 | S::EcdsaP521Sha512
-                | S::Ed25519 => key.tls_scheme(),
+                | S::Ed25519 => key.tls_scheme().unwrap(),
                 _ => panic!("{key}: no expected scheme"),
             };
             assert_eq!(
@@ -2919,6 +2919,13 @@ mod tests {
     #[test]
     fn every_key_algorithm_authenticates_a_tls13_server() {
         for &a in S::ALL {
+            if a.tls_scheme().is_none() {
+                assert_eq!(
+                    handshake(&one13(K::Secp384r1), &one13(K::Secp384r1), a).err(),
+                    Some(CryptoError::NotTlsKey { algorithm: a }.to_string())
+                );
+                continue;
+            }
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
                     crate::signature::KeyPair::generate(a).err(),
@@ -2935,7 +2942,7 @@ mod tests {
                 | S::EcdsaP384Sha384
                 | S::EcdsaP521Sha384
                 | S::EcdsaP521Sha512
-                | S::Ed25519 => a.tls_scheme(),
+                | S::Ed25519 => a.tls_scheme().unwrap(),
                 _ => panic!("{a}: no expected scheme"),
             };
             assert_eq!(n.scheme, full_offer, "{a}");
@@ -2948,7 +2955,7 @@ mod tests {
         let cases = S::ALL
             .iter()
             .copied()
-            .map(|a| (a, a.tls_scheme()))
+            .filter_map(|a| a.tls_scheme().map(|t| (a, t)))
             .chain(rsa.into_iter().map(|t| (S::Rsa2048Sha384, t)));
         for (a, t) in cases {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {

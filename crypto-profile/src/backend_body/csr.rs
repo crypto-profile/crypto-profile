@@ -47,11 +47,15 @@ pub struct CsrParams {
     pub key_usage: Vec<KeyUsage>,
 }
 
-/// A new key of algorithm `a` and a PEM PKCS#10 request for it, signed by that key.
+/// A new key of algorithm `a` and a PEM PKCS#10 request for it, signed by that key. Refuses, in
+/// this order, an algorithm that is not a TLS certificate key algorithm, an RSA-PSS variant
+/// (`CryptoError::NotTlsKey`); one the module line lacks (`CryptoError::Unavailable`); then the
+/// request's names and parameters.
 pub fn generate_csr(
     a: SignatureAlgorithm,
     p: &CsrParams,
 ) -> Result<(KeyPair, String), CryptoError> {
+    let key = KeyPair::generate_tls_key(a)?;
     let name = |_| CryptoError::Csr(CsrError::InvalidName);
     let signing = |_| CryptoError::Csr(CsrError::Signing);
     let mut params = rcgen::CertificateParams::new(Vec::<String>::new())
@@ -97,7 +101,6 @@ pub fn generate_csr(
             KeyUsage::KeyAgreement => rcgen::KeyUsagePurpose::KeyAgreement,
         })
         .collect();
-    let key = KeyPair::generate(a)?;
     let csr = params
         .serialize_request(&key)
         .map_err(signing)?
@@ -129,6 +132,14 @@ mod tests {
             ..Default::default()
         };
         for &a in S::ALL {
+            if a.tls_scheme().is_none() {
+                assert_eq!(
+                    generate_csr(a, &params).err(),
+                    Some(CryptoError::NotTlsKey { algorithm: a })
+                );
+                assert!(super::super::backend::csr_oracle(a).is_err());
+                continue;
+            }
             if !crate::capability(crate::MODULE, crate::Algorithm::Signature(a)).available {
                 assert_eq!(
                     generate_csr(a, &params).err(),
@@ -275,6 +286,20 @@ mod tests {
             })
             .sum();
         assert_eq!(sans, 1);
+    }
+
+    #[test]
+    fn an_rsa_pss_key_is_refused_before_the_request_is_built() {
+        let params = CsrParams {
+            dns_names: vec!["é.example".into()],
+            ..Default::default()
+        };
+        assert_eq!(
+            generate_csr(S::Rsa4096Sha384Pss, &params).err(),
+            Some(CryptoError::NotTlsKey {
+                algorithm: S::Rsa4096Sha384Pss
+            })
+        );
     }
 
     #[test]

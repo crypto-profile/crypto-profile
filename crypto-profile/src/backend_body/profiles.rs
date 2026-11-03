@@ -49,8 +49,8 @@ pub fn resolve(profile: Profile, options: Options) -> Result<Resolved, CryptoErr
 }
 
 impl Resolved {
-    /// Refuses a key algorithm the profile does not admit. Call it where a key is generated or a
-    /// certificate request is made; `signature::KeyPair::generate` does not.
+    /// Refuses a TLS certificate key algorithm the profile does not admit. Call it where a TLS key is
+    /// generated or a certificate request is made; `csr::generate_csr` does not.
     pub fn admit_key(&self, a: SignatureAlgorithm) -> Result<(), CryptoError> {
         if self.keys.contains(&a) {
             Ok(())
@@ -153,7 +153,7 @@ pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
 
 /// A profile's non-TLS families on this backend's module, under `options`. Independent of
 /// `resolve`: a profile whose TLS lists are empty on this module still admits its MACs, KDFs, key
-/// agreement, AEADs and hashes.
+/// agreement, AEADs, hashes and signatures.
 /// Built only by [`admit`], and read-only, so a constructor that takes it checks the profile's
 /// own admission.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -165,6 +165,7 @@ pub struct Admitted {
     key_agreements: Vec<KeyAgreementAlgorithm>,
     aeads: Vec<AeadAlgorithm>,
     hashes: Vec<HashAlgorithm>,
+    signatures: Vec<SignatureAlgorithm>,
     excluded: Vec<Algorithm>,
 }
 
@@ -180,6 +181,7 @@ pub fn admit(profile: Profile, options: Options) -> Admitted {
         key_agreements: s.key_agreements,
         aeads: s.aeads,
         hashes: s.hashes,
+        signatures: s.signatures,
         excluded: s.excluded,
     }
 }
@@ -220,6 +222,11 @@ impl Admitted {
         &self.hashes
     }
 
+    /// The signature algorithms the profile admits outside TLS, in preference order.
+    pub fn signatures(&self) -> &[SignatureAlgorithm] {
+        &self.signatures
+    }
+
     /// Entries unavailable on the module line, in family and preference order.
     pub fn excluded(&self) -> &[Algorithm] {
         &self.excluded
@@ -255,6 +262,12 @@ impl Admitted {
         self.admit_one(self.hashes.contains(&h), Algorithm::Hash(h))
     }
 
+    /// Refuses a signature algorithm the profile does not admit outside TLS, and one the module
+    /// line lacks with `CryptoError::Unavailable`.
+    pub fn admit_signature(&self, s: SignatureAlgorithm) -> Result<(), CryptoError> {
+        self.admit_one(self.signatures.contains(&s), Algorithm::Signature(s))
+    }
+
     fn cells(&self, family: Family) -> Result<Vec<Algorithm>, CryptoError> {
         match family {
             Family::Mac => Ok(self.macs.iter().map(|m| Algorithm::Mac(*m)).collect()),
@@ -266,6 +279,11 @@ impl Admitted {
                 .collect()),
             Family::Aead => Ok(self.aeads.iter().map(|d| Algorithm::Aead(*d)).collect()),
             Family::Hash => Ok(self.hashes.iter().map(|h| Algorithm::Hash(*h)).collect()),
+            Family::Signature => Ok(self
+                .signatures
+                .iter()
+                .map(|s| Algorithm::Signature(*s))
+                .collect()),
             _ => Err(CryptoError::FamilyNotAdmitted(family)),
         }
     }
@@ -279,6 +297,8 @@ impl Admitted {
             .retain(|k| Algorithm::KeyAgreement(*k) != algorithm);
         self.aeads.retain(|d| Algorithm::Aead(*d) != algorithm);
         self.hashes.retain(|h| Algorithm::Hash(*h) != algorithm);
+        self.signatures
+            .retain(|s| Algorithm::Signature(*s) != algorithm);
         self
     }
 
@@ -320,6 +340,7 @@ fn admitted_approved_given(
         Family::KeyAgreement,
         Family::Aead,
         Family::Hash,
+        Family::Signature,
     ] {
         if !families.contains(&f) {
             continue;
@@ -344,9 +365,10 @@ fn admitted_approved_given(
 /// `Family::Kdf`, with `CryptoError::KdfInfoMayBeEmpty` if `a`'s profile admits KDFs and an empty
 /// `info`, which the module does not approve (`unrestricted`); then unless every algorithm `a`
 /// admits in each named family is `Approved` for the running module, walking `Family::Mac`,
-/// `Family::Kdf`, `Family::KeyAgreement`, `Family::Aead`, then `Family::Hash`, and failing on the
-/// first that is not. Asserting nothing approves nothing: an empty `families`, or a named family
-/// `a` admits nothing in, is not a refusal. Independent of `assert_module_approves`.
+/// `Family::Kdf`, `Family::KeyAgreement`, `Family::Aead`, `Family::Hash`, then
+/// `Family::Signature`, and failing on the first that is not. Asserting nothing approves
+/// nothing: an empty `families`, or a named family `a` admits nothing in, is not a refusal.
+/// Independent of `assert_module_approves`.
 pub fn assert_admitted_approved(a: &Admitted, families: &[Family]) -> Result<(), CryptoError> {
     admitted_approved_given(aws_lc_rs::try_fips_mode().is_ok(), a, families, |x| {
         crypto_profile::capability(crate::MODULE, x).approval
@@ -436,7 +458,17 @@ mod tests {
     fn admit_key_admits_exactly_the_profile_keys() {
         for &p in Profile::ALL {
             let admitted: &[S] = match p {
-                Profile::Unrestricted | Profile::Fips1403 => S::ALL,
+                Profile::Unrestricted | Profile::Fips1403 => &[
+                    S::MlDsa87,
+                    S::EcdsaP256Sha256,
+                    S::EcdsaP384Sha384,
+                    S::EcdsaP521Sha384,
+                    S::EcdsaP521Sha512,
+                    S::Ed25519,
+                    S::Rsa2048Sha384,
+                    S::Rsa3072Sha384,
+                    S::Rsa4096Sha384,
+                ],
                 Profile::Preferred => &[
                     S::MlDsa87,
                     S::EcdsaP256Sha256,
@@ -571,6 +603,33 @@ mod tests {
     }
 
     #[test]
+    fn every_resolved_profile_is_first_refused_at_tls_1_3() {
+        let tls13 = Err(CryptoError::NotApproved {
+            algorithm: Algorithm::Protocol(V::Tls13),
+            approval: Approval::Unverified,
+        });
+        let mut ed25519 = 0;
+        for r in every_resolved() {
+            assert_eq!(
+                r.tls.versions.first(),
+                Some(&V::Tls13),
+                "{} {}",
+                r.profile,
+                r.options
+            );
+            assert_eq!(
+                assert_module_approves(&r),
+                tls13,
+                "{} {}",
+                r.profile,
+                r.options
+            );
+            ed25519 += usize::from(r.tls.signature_schemes.contains(&T::Ed25519));
+        }
+        assert_eq!(ed25519, 4);
+    }
+
+    #[test]
     fn three_x_approval_requires_only_table_five_cells() {
         if crate::MODULE.line == crate::ModuleLine::AwsLcFips4 {
             return;
@@ -602,6 +661,32 @@ mod tests {
             assert!(!resolved.keys.is_empty());
             assert!(!resolved.tls.signature_schemes.is_empty());
             assert_eq!(resolved.excluded, excluded);
+            if crate::MODULE.linkage == crate::Linkage::Static && profile == Profile::Fips1403 {
+                let scheme = Algorithm::Scheme(T::Ed25519);
+                let key = Algorithm::Signature(S::Ed25519);
+                for a in [scheme, key] {
+                    assert!(
+                        matches!(module_cell(a), Approval::NotApproved { .. }),
+                        "{a:?}"
+                    );
+                }
+                assert_eq!(
+                    assert_module_approves(&resolved),
+                    Err(CryptoError::NotApproved {
+                        algorithm: scheme,
+                        approval: module_cell(scheme),
+                    })
+                );
+                resolved.tls.signature_schemes.retain(|t| *t != T::Ed25519);
+                assert_eq!(
+                    assert_module_approves(&resolved),
+                    Err(CryptoError::NotApproved {
+                        algorithm: key,
+                        approval: module_cell(key),
+                    })
+                );
+                resolved.keys.retain(|k| *k != S::Ed25519);
+            }
             for algorithm in walk(&resolved) {
                 assert!(
                     matches!(crate::fips::approval(algorithm), Approval::Approved { .. }),
@@ -834,7 +919,21 @@ mod admitted_tests {
                     a.hashes(),
                     crypto_profile::select_admitted(p, o, crate::MODULE).hashes
                 );
-                assert_eq!(a.excluded(), []);
+                assert_eq!(
+                    a.signatures(),
+                    crypto_profile::select_admitted(p, o, crate::MODULE).signatures
+                );
+                let ml_dsa = Algorithm::Signature(SignatureAlgorithm::MlDsa87);
+                let excluded: &[Algorithm] = match crate::MODULE.line {
+                    crate::ModuleLine::AwsLcFips3
+                        if p.spec().signatures.contains(&SignatureAlgorithm::MlDsa87) =>
+                    {
+                        &[ml_dsa]
+                    }
+                    crate::ModuleLine::AwsLcFips3 | crate::ModuleLine::AwsLcFips4 => &[],
+                    other => panic!("{other:?}: no expected exclusions"),
+                };
+                assert_eq!(a.excluded(), excluded, "{p} {o}");
             }
         }
         assert_eq!(
@@ -860,6 +959,20 @@ mod admitted_tests {
         assert_eq!(
             admit(Profile::Cnsa1, on()).hashes(),
             [HashAlgorithm::Sha384, HashAlgorithm::Sha256]
+        );
+        assert_eq!(
+            admit(Profile::Bsi, Options::default()).signatures(),
+            [
+                SignatureAlgorithm::Rsa4096Sha384Pss,
+                SignatureAlgorithm::Rsa3072Sha384Pss
+            ]
+        );
+        assert_eq!(
+            admit(Profile::Cnsa1, on()).signatures()[5..],
+            [
+                SignatureAlgorithm::Rsa2048Sha384Pss,
+                SignatureAlgorithm::Rsa2048Sha384
+            ]
         );
         assert_eq!(admit(Profile::Cnsa1, on()).options(), on());
     }
@@ -895,7 +1008,7 @@ mod admitted_tests {
     fn a_mac_the_module_lacks_is_unavailable() {
         let mut a = admit(Profile::Fips1403, Options::default());
         a.macs.retain(|m| *m != M::HmacSha384);
-        a.excluded.push(Algorithm::Mac(M::HmacSha384));
+        a.excluded = vec![Algorithm::Mac(M::HmacSha384)];
         assert_eq!(
             a.admit_mac(M::HmacSha384),
             Err(CryptoError::Unavailable(Algorithm::Mac(M::HmacSha384)))
@@ -1112,7 +1225,7 @@ mod admitted_tests {
     }
 
     #[test]
-    fn the_hash_family_is_walked_last() {
+    fn the_hash_family_is_walked_after_aead() {
         let a = admit(Profile::Fips1403, Options::default());
         let gcm = Algorithm::Aead(AeadAlgorithm::Aes256Gcm);
         let sha = Algorithm::Hash(HashAlgorithm::Sha512);
@@ -1237,12 +1350,218 @@ mod admitted_tests {
         );
     }
 
-    const NON_TLS: [Family; 5] = [
+    #[test]
+    fn admit_signature_admits_exactly_the_profile_signatures() {
+        for &p in Profile::ALL {
+            for o in [Options::default(), on()] {
+                let a = admit(p, o);
+                for &s in SignatureAlgorithm::ALL {
+                    let want = if a.signatures.contains(&s) {
+                        Ok(())
+                    } else if a.excluded.contains(&Algorithm::Signature(s)) {
+                        Err(CryptoError::Unavailable(Algorithm::Signature(s)))
+                    } else {
+                        Err(CryptoError::NotInProfile {
+                            profile: p,
+                            algorithm: Algorithm::Signature(s),
+                        })
+                    };
+                    assert_eq!(a.admit_signature(s), want, "{p} {o} {s}");
+                }
+            }
+        }
+        assert_eq!(
+            admit(Profile::Cnsa1, Options::default())
+                .admit_signature(SignatureAlgorithm::Rsa2048Sha384Pss),
+            Err(CryptoError::NotInProfile {
+                profile: Profile::Cnsa1,
+                algorithm: Algorithm::Signature(SignatureAlgorithm::Rsa2048Sha384Pss),
+            })
+        );
+        assert_eq!(
+            admit(Profile::Cnsa1, on()).admit_signature(SignatureAlgorithm::Rsa2048Sha384Pss),
+            Ok(())
+        );
+        assert_eq!(
+            admit(Profile::Bsi, on()).admit_signature(SignatureAlgorithm::Rsa4096Sha384),
+            Err(CryptoError::NotInProfile {
+                profile: Profile::Bsi,
+                algorithm: Algorithm::Signature(SignatureAlgorithm::Rsa4096Sha384),
+            })
+        );
+    }
+
+    #[test]
+    fn a_signature_the_module_lacks_is_unavailable() {
+        let ml_dsa = Algorithm::Signature(SignatureAlgorithm::MlDsa87);
+        let mut a = admit(Profile::Fips1403, Options::default());
+        a.signatures.retain(|s| *s != SignatureAlgorithm::MlDsa87);
+        a.excluded = vec![ml_dsa];
+        assert_eq!(
+            a.admit_signature(SignatureAlgorithm::MlDsa87),
+            Err(CryptoError::Unavailable(ml_dsa))
+        );
+        assert_eq!(a.admit_signature(SignatureAlgorithm::Ed25519), Ok(()));
+        let cnsa2 = admit(Profile::Cnsa2, Options::default());
+        assert_eq!(
+            cnsa2.admit_signature(SignatureAlgorithm::MlDsa87),
+            if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                Err(CryptoError::Unavailable(ml_dsa))
+            } else {
+                Ok(())
+            }
+        );
+        let without = admit(Profile::Bsi, Options::default())
+            .without(Algorithm::Signature(SignatureAlgorithm::Rsa4096Sha384Pss));
+        assert_eq!(without.signatures(), [SignatureAlgorithm::Rsa3072Sha384Pss]);
+    }
+
+    #[test]
+    fn the_signature_family_is_walked_last() {
+        let a = admit(Profile::Fips1403, Options::default());
+        let sha = Algorithm::Hash(HashAlgorithm::Sha512);
+        let p384 = Algorithm::Signature(SignatureAlgorithm::EcdsaP384Sha384);
+        let neither = |x: Algorithm| {
+            if x == sha || x == p384 {
+                Approval::Unverified
+            } else {
+                approved(x)
+            }
+        };
+        for families in [
+            [Family::Signature, Family::Hash],
+            [Family::Hash, Family::Signature],
+        ] {
+            assert_eq!(
+                admitted_approved_given(true, &a, &families, neither),
+                Err(CryptoError::NotApproved {
+                    algorithm: sha,
+                    approval: Approval::Unverified,
+                }),
+                "{families:?}"
+            );
+        }
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Signature], neither),
+            Err(CryptoError::NotApproved {
+                algorithm: p384,
+                approval: Approval::Unverified,
+            })
+        );
+        assert_eq!(
+            admitted_approved_given(true, &a, &[Family::Signature], all_but(sha)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn the_signature_walk_visits_exactly_the_admitted_signatures() {
+        use SignatureAlgorithm as S;
+        for (p, o, want) in [
+            (
+                Profile::Bsi,
+                Options::default(),
+                &[S::Rsa4096Sha384Pss, S::Rsa3072Sha384Pss][..],
+            ),
+            (
+                Profile::Cnsa1,
+                Options::default(),
+                &[
+                    S::EcdsaP384Sha384,
+                    S::Rsa4096Sha384Pss,
+                    S::Rsa3072Sha384Pss,
+                    S::Rsa4096Sha384,
+                    S::Rsa3072Sha384,
+                ],
+            ),
+            (
+                Profile::Cnsa1,
+                on(),
+                &[
+                    S::EcdsaP384Sha384,
+                    S::Rsa4096Sha384Pss,
+                    S::Rsa3072Sha384Pss,
+                    S::Rsa4096Sha384,
+                    S::Rsa3072Sha384,
+                    S::Rsa2048Sha384Pss,
+                    S::Rsa2048Sha384,
+                ],
+            ),
+        ] {
+            let seen = std::cell::RefCell::new(Vec::new());
+            let record = |x: Algorithm| {
+                seen.borrow_mut().push(x);
+                approved(x)
+            };
+            assert_eq!(
+                admitted_approved_given(true, &admit(p, o), &[Family::Signature], record),
+                Ok(()),
+                "{p} {o}"
+            );
+            let want: Vec<Algorithm> = want.iter().map(|s| Algorithm::Signature(*s)).collect();
+            assert_eq!(seen.into_inner(), want, "{p} {o}");
+        }
+    }
+
+    #[test]
+    fn admitted_signature_approval_follows_this_modules_cells() {
+        let cell = |s| crypto_profile::capability(crate::MODULE, Algorithm::Signature(s)).approval;
+        for &p in Profile::ALL {
+            for o in [Options::default(), on()] {
+                let a = admit(p, o);
+                let want = match a.signatures.iter().find(|s| !cell(**s).is_approved()) {
+                    Some(&s) => Err(CryptoError::NotApproved {
+                        algorithm: Algorithm::Signature(s),
+                        approval: cell(s),
+                    }),
+                    None => Ok(()),
+                };
+                assert_eq!(
+                    assert_admitted_approved(&a, &[Family::Signature]),
+                    want,
+                    "{p} {o}"
+                );
+            }
+        }
+        let unrestricted = admit(Profile::Unrestricted, Options::default());
+        let first = match (crate::MODULE.line, crate::MODULE.linkage) {
+            (crate::ModuleLine::AwsLcFips3, crate::Linkage::Static) => {
+                Some(SignatureAlgorithm::Ed25519)
+            }
+            (crate::ModuleLine::AwsLcFips3, crate::Linkage::Dynamic) => None,
+            (crate::ModuleLine::AwsLcFips4, _) => Some(SignatureAlgorithm::MlDsa87),
+            other => panic!("{other:?}: no expected approval"),
+        };
+        assert_eq!(
+            assert_admitted_approved(&unrestricted, &[Family::Signature]),
+            first.map_or(Ok(()), |s| Err(CryptoError::NotApproved {
+                algorithm: Algorithm::Signature(s),
+                approval: cell(s),
+            }))
+        );
+        assert_eq!(
+            assert_admitted_approved(
+                &admit(Profile::Bsi, Options::default()),
+                &[Family::Signature]
+            ),
+            if crate::MODULE.line == crate::ModuleLine::AwsLcFips3 {
+                Ok(())
+            } else {
+                Err(CryptoError::NotApproved {
+                    algorithm: Algorithm::Signature(SignatureAlgorithm::Rsa4096Sha384Pss),
+                    approval: cell(SignatureAlgorithm::Rsa4096Sha384Pss),
+                })
+            }
+        );
+    }
+
+    const NON_TLS: [Family; 6] = [
         Family::Mac,
         Family::Kdf,
         Family::KeyAgreement,
         Family::Aead,
         Family::Hash,
+        Family::Signature,
     ];
     const TLS: [Family; 5] = [
         Family::Version,
@@ -1379,6 +1698,7 @@ mod admitted_tests {
             key_agreements: vec![],
             aeads: vec![],
             hashes: vec![],
+            signatures: vec![],
             ..admit(Profile::Unrestricted, Options::default())
         };
         assert_eq!(

@@ -25,6 +25,15 @@ pub enum SignatureAlgorithm {
     Rsa3072Sha384,
     /// A 4096-bit RSA key; its CSR is signed RSASSA-PKCS1-v1_5 with SHA-384.
     Rsa4096Sha384,
+    /// A 2048-bit RSA key that signs RSASSA-PSS with SHA-384, MGF1 with SHA-384 and a 48-byte
+    /// salt (RFC 8017 §8.1). Outside TLS only: no TLS key list or certificate request takes it.
+    Rsa2048Sha384Pss,
+    /// A 3072-bit RSA key that signs RSASSA-PSS with SHA-384, MGF1 with SHA-384 and a 48-byte
+    /// salt (RFC 8017 §8.1). Outside TLS only: no TLS key list or certificate request takes it.
+    Rsa3072Sha384Pss,
+    /// A 4096-bit RSA key that signs RSASSA-PSS with SHA-384, MGF1 with SHA-384 and a 48-byte
+    /// salt (RFC 8017 §8.1). Outside TLS only: no TLS key list or certificate request takes it.
+    Rsa4096Sha384Pss,
 }
 
 impl SignatureAlgorithm {
@@ -39,6 +48,9 @@ impl SignatureAlgorithm {
         SignatureAlgorithm::Rsa2048Sha384,
         SignatureAlgorithm::Rsa3072Sha384,
         SignatureAlgorithm::Rsa4096Sha384,
+        SignatureAlgorithm::Rsa2048Sha384Pss,
+        SignatureAlgorithm::Rsa3072Sha384Pss,
+        SignatureAlgorithm::Rsa4096Sha384Pss,
     ];
 
     /// The position of `self` in [`Self::ALL`].
@@ -54,6 +66,9 @@ impl SignatureAlgorithm {
             SignatureAlgorithm::Rsa2048Sha384 => 6,
             SignatureAlgorithm::Rsa3072Sha384 => 7,
             SignatureAlgorithm::Rsa4096Sha384 => 8,
+            SignatureAlgorithm::Rsa2048Sha384Pss => 9,
+            SignatureAlgorithm::Rsa3072Sha384Pss => 10,
+            SignatureAlgorithm::Rsa4096Sha384Pss => 11,
         }
     }
 
@@ -69,11 +84,16 @@ impl SignatureAlgorithm {
             SignatureAlgorithm::Rsa2048Sha384 => "rsa2048-sha384",
             SignatureAlgorithm::Rsa3072Sha384 => "rsa3072-sha384",
             SignatureAlgorithm::Rsa4096Sha384 => "rsa4096-sha384",
+            SignatureAlgorithm::Rsa2048Sha384Pss => "rsa2048-sha384-pss",
+            SignatureAlgorithm::Rsa3072Sha384Pss => "rsa3072-sha384-pss",
+            SignatureAlgorithm::Rsa4096Sha384Pss => "rsa4096-sha384-pss",
         }
     }
 
     /// The X.509 signature-algorithm OID a CSR or certificate signed by this key carries
     /// (RFC 5758, RFC 8410, RFC 4055, and draft-ietf-lamps-dilithium-certificates for ML-DSA).
+    /// For an RSA-PSS variant it is `id-RSASSA-PSS` (RFC 4055 §3.1), whose parameters name the
+    /// hash, MGF1 hash and salt length.
     pub const fn signature_oid(self) -> &'static str {
         match self {
             SignatureAlgorithm::MlDsa87 => "2.16.840.1.101.3.4.3.19",
@@ -86,11 +106,15 @@ impl SignatureAlgorithm {
             SignatureAlgorithm::Rsa2048Sha384
             | SignatureAlgorithm::Rsa3072Sha384
             | SignatureAlgorithm::Rsa4096Sha384 => "1.2.840.113549.1.1.12",
+            SignatureAlgorithm::Rsa2048Sha384Pss
+            | SignatureAlgorithm::Rsa3072Sha384Pss
+            | SignatureAlgorithm::Rsa4096Sha384Pss => "1.2.840.113549.1.1.10",
         }
     }
 
     /// The TLS signature scheme this crate pairs with a key of this algorithm: the scheme the key
-    /// signs a handshake with when the peer offers this scheme alone.
+    /// signs a handshake with when the peer offers this scheme alone. `None` for an algorithm that
+    /// is not a TLS key algorithm: the RSA-PSS variants, which sign outside TLS only.
     ///
     /// An ECDSA, Ed25519 or ML-DSA key has no other scheme. An RSA key's scheme comes from the
     /// peer's offer, whatever the key's CSR was signed with: rustls signs with the first of RSA-PSS
@@ -99,18 +123,21 @@ impl SignatureAlgorithm {
     /// 0.23.46 uses), and TLS 1.3 admits only the RSA-PSS ones (`src/enums.rs:554-579`). So an RSA
     /// key signs with RSA-PSS with SHA-384 only when the peer offers it and does not offer RSA-PSS
     /// with SHA-512.
-    pub const fn tls_scheme(self) -> TlsSignatureScheme {
+    pub const fn tls_scheme(self) -> Option<TlsSignatureScheme> {
         match self {
-            SignatureAlgorithm::MlDsa87 => TlsSignatureScheme::MlDsa87,
-            SignatureAlgorithm::EcdsaP256Sha256 => TlsSignatureScheme::EcdsaNistp256Sha256,
-            SignatureAlgorithm::EcdsaP384Sha384 => TlsSignatureScheme::EcdsaNistp384Sha384,
+            SignatureAlgorithm::MlDsa87 => Some(TlsSignatureScheme::MlDsa87),
+            SignatureAlgorithm::EcdsaP256Sha256 => Some(TlsSignatureScheme::EcdsaNistp256Sha256),
+            SignatureAlgorithm::EcdsaP384Sha384 => Some(TlsSignatureScheme::EcdsaNistp384Sha384),
             SignatureAlgorithm::EcdsaP521Sha384 | SignatureAlgorithm::EcdsaP521Sha512 => {
-                TlsSignatureScheme::EcdsaNistp521Sha512
+                Some(TlsSignatureScheme::EcdsaNistp521Sha512)
             }
-            SignatureAlgorithm::Ed25519 => TlsSignatureScheme::Ed25519,
+            SignatureAlgorithm::Ed25519 => Some(TlsSignatureScheme::Ed25519),
             SignatureAlgorithm::Rsa2048Sha384
             | SignatureAlgorithm::Rsa3072Sha384
-            | SignatureAlgorithm::Rsa4096Sha384 => TlsSignatureScheme::RsaPssSha384,
+            | SignatureAlgorithm::Rsa4096Sha384 => Some(TlsSignatureScheme::RsaPssSha384),
+            SignatureAlgorithm::Rsa2048Sha384Pss
+            | SignatureAlgorithm::Rsa3072Sha384Pss
+            | SignatureAlgorithm::Rsa4096Sha384Pss => None,
         }
     }
 }
@@ -1026,6 +1053,9 @@ mod tests {
                 "rsa2048-sha384",
                 "rsa3072-sha384",
                 "rsa4096-sha384",
+                "rsa2048-sha384-pss",
+                "rsa3072-sha384-pss",
+                "rsa4096-sha384-pss",
             ]
         );
         for &a in SignatureAlgorithm::ALL {
@@ -1043,6 +1073,10 @@ mod tests {
             "ml-dsa-65",
             "rsa-2048",
             "ecdsa-p256-sha384",
+            "rsa3072-pss",
+            "rsa3072-sha256-pss",
+            "RSA3072-SHA384-PSS",
+            "rsa3072-sha384-pss ",
         ] {
             assert_eq!(
                 bad.parse::<SignatureAlgorithm>(),
@@ -1057,15 +1091,18 @@ mod tests {
         use SignatureAlgorithm as S;
         use TlsSignatureScheme as T;
         let table = [
-            (S::MlDsa87, T::MlDsa87),
-            (S::EcdsaP256Sha256, T::EcdsaNistp256Sha256),
-            (S::EcdsaP384Sha384, T::EcdsaNistp384Sha384),
-            (S::EcdsaP521Sha384, T::EcdsaNistp521Sha512),
-            (S::EcdsaP521Sha512, T::EcdsaNistp521Sha512),
-            (S::Ed25519, T::Ed25519),
-            (S::Rsa2048Sha384, T::RsaPssSha384),
-            (S::Rsa3072Sha384, T::RsaPssSha384),
-            (S::Rsa4096Sha384, T::RsaPssSha384),
+            (S::MlDsa87, Some(T::MlDsa87)),
+            (S::EcdsaP256Sha256, Some(T::EcdsaNistp256Sha256)),
+            (S::EcdsaP384Sha384, Some(T::EcdsaNistp384Sha384)),
+            (S::EcdsaP521Sha384, Some(T::EcdsaNistp521Sha512)),
+            (S::EcdsaP521Sha512, Some(T::EcdsaNistp521Sha512)),
+            (S::Ed25519, Some(T::Ed25519)),
+            (S::Rsa2048Sha384, Some(T::RsaPssSha384)),
+            (S::Rsa3072Sha384, Some(T::RsaPssSha384)),
+            (S::Rsa4096Sha384, Some(T::RsaPssSha384)),
+            (S::Rsa2048Sha384Pss, None),
+            (S::Rsa3072Sha384Pss, None),
+            (S::Rsa4096Sha384Pss, None),
         ];
         assert_eq!(table.len(), SignatureAlgorithm::ALL.len());
         for (s, t) in table {
@@ -1139,6 +1176,9 @@ mod tests {
                 "1.2.840.113549.1.1.12",
                 "1.2.840.113549.1.1.12",
                 "1.2.840.113549.1.1.12",
+                "1.2.840.113549.1.1.10",
+                "1.2.840.113549.1.1.10",
+                "1.2.840.113549.1.1.10",
             ]
         );
     }
@@ -1197,7 +1237,7 @@ mod tests {
             + KeyAgreementAlgorithm::ALL.len()
             + AeadAlgorithm::ALL.len();
         assert_eq!(all.len(), expected);
-        assert_eq!(expected, 9 + 11 + 7 + 9 + 6 + 2 + 3 + 6 + 4 + 3);
+        assert_eq!(expected, 12 + 11 + 7 + 9 + 6 + 2 + 3 + 6 + 4 + 3);
         for (i, a) in all.iter().enumerate() {
             assert!(!all[i + 1..].contains(a), "{a:?} twice");
         }
@@ -1450,12 +1490,20 @@ mod tests {
     #[test]
     fn signature_algorithm_all_lists_every_variant_in_ordinal_order() {
         assert_eq!(
+            SignatureAlgorithm::ALL[9..],
+            [
+                SignatureAlgorithm::Rsa2048Sha384Pss,
+                SignatureAlgorithm::Rsa3072Sha384Pss,
+                SignatureAlgorithm::Rsa4096Sha384Pss,
+            ]
+        );
+        assert_eq!(
             SignatureAlgorithm::ALL
                 .iter()
                 .copied()
                 .map(SignatureAlgorithm::ordinal)
                 .collect::<Vec<_>>(),
-            std::array::from_fn::<usize, 9, _>(|i| i)
+            std::array::from_fn::<usize, 12, _>(|i| i)
         );
     }
 

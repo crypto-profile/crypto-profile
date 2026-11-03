@@ -42,6 +42,7 @@ enum Kind {
         size: KeySize,
         bits: u32,
         public_len: usize,
+        pss: bool,
     },
     MlDsa87,
 }
@@ -78,16 +79,37 @@ fn kind(a: S) -> Result<Kind, CryptoError> {
             size: KeySize::Rsa2048,
             bits: 2048,
             public_len: 270,
+            pss: false,
+        },
+        S::Rsa2048Sha384Pss => Kind::Rsa {
+            size: KeySize::Rsa2048,
+            bits: 2048,
+            public_len: 270,
+            pss: true,
         },
         S::Rsa3072Sha384 => Kind::Rsa {
             size: KeySize::Rsa3072,
             bits: 3072,
             public_len: 398,
+            pss: false,
+        },
+        S::Rsa3072Sha384Pss => Kind::Rsa {
+            size: KeySize::Rsa3072,
+            bits: 3072,
+            public_len: 398,
+            pss: true,
         },
         S::Rsa4096Sha384 => Kind::Rsa {
             size: KeySize::Rsa4096,
             bits: 4096,
             public_len: 526,
+            pss: false,
+        },
+        S::Rsa4096Sha384Pss => Kind::Rsa {
+            size: KeySize::Rsa4096,
+            bits: 4096,
+            public_len: 526,
+            pss: true,
         },
         _ => return Err(CryptoError::Unavailable(Algorithm::Signature(a))),
     })
@@ -101,7 +123,12 @@ pub(crate) fn rcgen_alg(a: S) -> Result<&'static rcgen::SignatureAlgorithm, Cryp
         S::EcdsaP521Sha384 => &rcgen::PKCS_ECDSA_P521_SHA384,
         S::EcdsaP521Sha512 => &rcgen::PKCS_ECDSA_P521_SHA512,
         S::Ed25519 => &rcgen::PKCS_ED25519,
-        S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => &rcgen::PKCS_RSA_SHA384,
+        S::Rsa2048Sha384
+        | S::Rsa3072Sha384
+        | S::Rsa4096Sha384
+        | S::Rsa2048Sha384Pss
+        | S::Rsa3072Sha384Pss
+        | S::Rsa4096Sha384Pss => &rcgen::PKCS_RSA_SHA384,
         _ => return Err(CryptoError::Unavailable(Algorithm::Signature(a))),
     })
 }
@@ -112,6 +139,8 @@ pub(crate) fn rcgen_alg(a: S) -> Result<&'static rcgen::SignatureAlgorithm, Cryp
 /// [`verify`] check the exact bit length and the exponent. Strictly a shape check: it does not
 /// consult availability, so an algorithm this backend does not implement can still match (check
 /// `capability(..).available` separately); false only for a variant the backend cannot classify.
+/// An `rsaEncryption` key matches both RSA paddings of its size, so the SPKI alone does not tell
+/// `Rsa3072Sha384` from `Rsa3072Sha384Pss`.
 pub fn matches_spki(
     a: S,
     alg_oid: &str,
@@ -183,6 +212,13 @@ impl KeyPair {
         KeyPair::load(a, pkcs8)
     }
 
+    /// A new TLS certificate key of algorithm `a`, for `csr` and the TLS tests: refuses an
+    /// algorithm that is not a TLS key algorithm, then one the module line lacks.
+    pub(crate) fn generate_tls_key(a: S) -> Result<KeyPair, CryptoError> {
+        tls_key(a)?;
+        KeyPair::generate(a)
+    }
+
     /// Loads a PKCS#8 key, refusing one that is not of algorithm `a`, including an RSA key whose
     /// modulus is not exactly `a`'s bit length or whose public exponent is not 65537.
     pub fn from_pkcs8_der(a: S, der: &[u8]) -> Result<KeyPair, CryptoError> {
@@ -237,7 +273,8 @@ impl KeyPair {
         &self.public
     }
 
-    /// Signs `msg`. RSA keys sign RSASSA-PKCS1-v1_5 with SHA-384.
+    /// Signs `msg`. RSA keys sign RSASSA-PKCS1-v1_5 with SHA-384, or, for an RSA-PSS variant,
+    /// RSASSA-PSS with SHA-384, MGF1 with SHA-384 and a 48-byte salt.
     pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
         let rng = SystemRandom::new();
         let key = |_| CryptoError::PrivateKey;
@@ -252,10 +289,10 @@ impl KeyPair {
                 .sign(msg)
                 .as_ref()
                 .to_vec()),
-            Kind::Rsa { .. } => {
+            Kind::Rsa { pss, .. } => {
                 let k = sig::RsaKeyPair::from_pkcs8(&self.pkcs8).map_err(key)?;
                 let mut out = vec![0u8; k.public_modulus_len()];
-                k.sign(&sig::RSA_PKCS1_SHA384, &rng, msg, &mut out)
+                k.sign(rsa_encoding(pss), &rng, msg, &mut out)
                     .map_err(fail)?;
                 Ok(out)
             }
@@ -274,9 +311,28 @@ impl rcgen::PublicKeyData for KeyPair {
     }
 }
 
+// rcgen labels what it signs with `PublicKeyData::algorithm`, which has no RSA-PSS descriptor.
 impl rcgen::SigningKey for KeyPair {
     fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
+        if self.alg.tls_scheme().is_none() {
+            return Err(rcgen::Error::UnsupportedSignatureAlgorithm);
+        }
         KeyPair::sign(self, msg).map_err(|_| rcgen::Error::RingUnspecified)
+    }
+}
+
+fn rsa_encoding(pss: bool) -> &'static dyn sig::RsaEncoding {
+    if pss {
+        &sig::RSA_PSS_SHA384
+    } else {
+        &sig::RSA_PKCS1_SHA384
+    }
+}
+
+fn tls_key(a: S) -> Result<(), CryptoError> {
+    match a.tls_scheme() {
+        Some(_) => ensure(Algorithm::Signature(a)),
+        None => Err(CryptoError::NotTlsKey { algorithm: a }),
     }
 }
 
@@ -288,17 +344,21 @@ fn rsa_public_key_is(public_key: &[u8], bits: u32) -> bool {
 
 /// Verifies `signature` over `msg` under the raw public key `public_key` of algorithm `a`,
 /// refusing an RSA key whose modulus is not exactly `a`'s bit length or whose public exponent
-/// is not 65537.
+/// is not 65537. An RSA-PSS variant accepts only a 48-byte salt.
 pub fn verify(a: S, public_key: &[u8], msg: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
     ensure(Algorithm::Signature(a))?;
     let v: &dyn sig::VerificationAlgorithm = match kind(a)? {
         Kind::Ecdsa { verifying, .. } => verifying,
         Kind::Ed25519 => &sig::ED25519,
-        Kind::Rsa { bits, .. } => {
+        Kind::Rsa { bits, pss, .. } => {
             if !rsa_public_key_is(public_key, bits) {
                 return Err(CryptoError::Verify);
             }
-            &sig::RSA_PKCS1_2048_8192_SHA384
+            if pss {
+                &sig::RSA_PSS_2048_8192_SHA384
+            } else {
+                &sig::RSA_PKCS1_2048_8192_SHA384
+            }
         }
         Kind::MlDsa87 => MlDsa::verifier()?,
     };
@@ -431,6 +491,15 @@ mod tests {
                 rcgen_alg(a).unwrap(),
                 "{a}"
             );
+            if a.tls_scheme().is_none() {
+                assert_eq!(
+                    rcgen::SigningKey::sign(&k, b"m"),
+                    Err(rcgen::Error::UnsupportedSignatureAlgorithm),
+                    "{a}"
+                );
+                assert_eq!(rcgen_alg(a).unwrap(), &rcgen::PKCS_RSA_SHA384, "{a}");
+                continue;
+            }
             let sig = rcgen::SigningKey::sign(&k, b"m").unwrap();
             assert_eq!(verify(a, k.public_key(), b"m", &sig), Ok(()), "{a}");
         }
@@ -449,6 +518,24 @@ mod tests {
             (S::Rsa2048Sha384, ID_RSA_ENCRYPTION, SpkiParams::Null, 270),
             (S::Rsa3072Sha384, ID_RSA_ENCRYPTION, SpkiParams::Null, 398),
             (S::Rsa4096Sha384, ID_RSA_ENCRYPTION, SpkiParams::Null, 526),
+            (
+                S::Rsa2048Sha384Pss,
+                ID_RSA_ENCRYPTION,
+                SpkiParams::Null,
+                270,
+            ),
+            (
+                S::Rsa3072Sha384Pss,
+                ID_RSA_ENCRYPTION,
+                SpkiParams::Null,
+                398,
+            ),
+            (
+                S::Rsa4096Sha384Pss,
+                ID_RSA_ENCRYPTION,
+                SpkiParams::Null,
+                526,
+            ),
         ];
         assert_eq!(cases.len(), S::ALL.len());
         for (a, oid, params, len) in &cases {
@@ -841,6 +928,59 @@ mod tests {
                 "{bits}"
             );
         }
+    }
+
+    #[test]
+    fn an_rsa_pss_key_signs_pss_and_a_pkcs1_key_does_not() {
+        for (pkcs1, pss) in [
+            (S::Rsa2048Sha384, S::Rsa2048Sha384Pss),
+            (S::Rsa3072Sha384, S::Rsa3072Sha384Pss),
+        ] {
+            let k = KeyPair::generate(pss).unwrap();
+            let signature = k.sign(b"m").unwrap();
+            assert_eq!(verify(pss, k.public_key(), b"m", &signature), Ok(()));
+            assert_eq!(
+                verify(pkcs1, k.public_key(), b"m", &signature),
+                Err(CryptoError::Verify)
+            );
+            let v15 = KeyPair::from_pkcs8_der(pkcs1, k.to_pkcs8_der()).unwrap();
+            let signature = v15.sign(b"m").unwrap();
+            assert_eq!(verify(pkcs1, k.public_key(), b"m", &signature), Ok(()));
+            assert_eq!(
+                verify(pss, k.public_key(), b"m", &signature),
+                Err(CryptoError::Verify)
+            );
+        }
+    }
+
+    #[test]
+    fn only_a_tls_key_algorithm_makes_a_tls_key() {
+        for &a in S::ALL {
+            let want = match a.tls_scheme() {
+                None => Err(CryptoError::NotTlsKey { algorithm: a }),
+                Some(_) if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available => {
+                    Err(CryptoError::Unavailable(Algorithm::Signature(a)))
+                }
+                Some(_) => Ok(()),
+            };
+            assert_eq!(tls_key(a), want, "{a}");
+        }
+        for a in [
+            S::Rsa2048Sha384Pss,
+            S::Rsa3072Sha384Pss,
+            S::Rsa4096Sha384Pss,
+        ] {
+            assert_eq!(
+                KeyPair::generate_tls_key(a).err(),
+                Some(CryptoError::NotTlsKey { algorithm: a })
+            );
+        }
+        assert_eq!(
+            KeyPair::generate_tls_key(S::EcdsaP384Sha384)
+                .unwrap()
+                .algorithm(),
+            S::EcdsaP384Sha384
+        );
     }
 
     #[test]
