@@ -1,5 +1,6 @@
 //! Signature keys: generation, signing, verification, and the SubjectPublicKeyInfo shape check.
 use super::backend::MlDsa;
+use super::pkcs8;
 use crate::{Algorithm, CryptoError, SignatureAlgorithm as S, ensure};
 use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
 use aws_lc_rs::rand::SystemRandom;
@@ -35,6 +36,7 @@ enum Kind {
         signing: &'static sig::EcdsaSigningAlgorithm,
         verifying: &'static sig::EcdsaVerificationAlgorithm,
         curve: &'static str,
+        key: &'static pkcs8::EcCurve,
         public_len: usize,
     },
     Ed25519,
@@ -54,24 +56,28 @@ fn kind(a: S) -> Result<Kind, CryptoError> {
             signing: &sig::ECDSA_P256_SHA256_ASN1_SIGNING,
             verifying: &sig::ECDSA_P256_SHA256_ASN1,
             curve: SECP256R1,
+            key: &pkcs8::P256,
             public_len: 65,
         },
         S::EcdsaP384Sha384 => Kind::Ecdsa {
             signing: &sig::ECDSA_P384_SHA384_ASN1_SIGNING,
             verifying: &sig::ECDSA_P384_SHA384_ASN1,
             curve: SECP384R1,
+            key: &pkcs8::P384,
             public_len: 97,
         },
         S::EcdsaP521Sha384 => Kind::Ecdsa {
             signing: &sig::ECDSA_P521_SHA384_ASN1_SIGNING,
             verifying: &sig::ECDSA_P521_SHA384_ASN1,
             curve: SECP521R1,
+            key: &pkcs8::P521,
             public_len: 133,
         },
         S::EcdsaP521Sha512 => Kind::Ecdsa {
             signing: &sig::ECDSA_P521_SHA512_ASN1_SIGNING,
             verifying: &sig::ECDSA_P521_SHA512_ASN1,
             curve: SECP521R1,
+            key: &pkcs8::P521,
             public_len: 133,
         },
         S::Ed25519 => Kind::Ed25519,
@@ -219,16 +225,33 @@ impl KeyPair {
         KeyPair::generate(a)
     }
 
-    /// Loads a PKCS#8 key, refusing one that is not of algorithm `a`, including an RSA key whose
-    /// modulus is not exactly `a`'s bit length or whose public exponent is not 65537.
+    /// Loads a DER RFC 5958 §2 OneAsymmetricKey of algorithm `a`, refusing every structure its RFCs
+    /// do not define (`CryptoError::SignaturePrivateKey`), before the module parses it:
+    ///
+    /// - ECDSA: version v1, `id-ecPublicKey` with `a`'s namedCurve (RFC 5480 §2.1.1), privateKey an
+    ///   RFC 5915 §3 `ECPrivateKey` with a scalar of the curve's length, optional parameters naming
+    ///   the same curve and an optional uncompressed publicKey;
+    /// - Ed25519: `id-Ed25519` without parameters, privateKey the 32-byte `CurvePrivateKey` (RFC
+    ///   8410 §3, §7), version v1, or v2 with the 32-byte publicKey;
+    /// - RSA: version v1, `rsaEncryption` with NULL parameters, privateKey a two-prime RFC 8017
+    ///   A.1.2 `RSAPrivateKey` of nine positive, minimal INTEGERs, the modulus exactly `a`'s bit
+    ///   length and the public exponent 65537;
+    /// - ML-DSA-87: `id-ml-dsa-87` without parameters, privateKey the seed or both the seed and the
+    ///   expanded key (RFC 9881 §6), version v1, or v2 with the 2,592-byte publicKey.
+    ///
+    /// Each takes optional `[0]` attributes in X.690 §11.6 order, and nothing after the key. A
+    /// publicKey the key carries must be its own.
     pub fn from_pkcs8_der(a: S, der: &[u8]) -> Result<KeyPair, CryptoError> {
         ensure(Algorithm::Signature(a))?;
-        KeyPair::load(a, Zeroizing::new(der.to_vec()))
+        let carried = checked_private_key(a, der)?;
+        let key = KeyPair::load(a, Zeroizing::new(der.to_vec()))?;
+        matches_carried(a, carried, &key.public)?;
+        Ok(key)
     }
 
     fn load(a: S, pkcs8: Zeroizing<Vec<u8>>) -> Result<KeyPair, CryptoError> {
         let der = pkcs8.as_slice();
-        let bad = |_| CryptoError::PrivateKey;
+        let bad = |_| CryptoError::SignaturePrivateKey { algorithm: a };
         let public = match kind(a)? {
             Kind::Ecdsa { signing, .. } => sig::EcdsaKeyPair::from_pkcs8(signing, der)
                 .map_err(bad)?
@@ -240,14 +263,11 @@ impl KeyPair {
                 .public_key()
                 .as_ref()
                 .to_vec(),
-            Kind::Rsa { bits, .. } => {
-                let k = sig::RsaKeyPair::from_pkcs8(der).map_err(bad)?;
-                let public = k.public_key().as_ref();
-                if !rsa_public_key_is(public, bits) {
-                    return Err(CryptoError::PrivateKey);
-                }
-                public.to_vec()
-            }
+            Kind::Rsa { .. } => sig::RsaKeyPair::from_pkcs8(der)
+                .map_err(bad)?
+                .public_key()
+                .as_ref()
+                .to_vec(),
             Kind::MlDsa87 => MlDsa::public_key(der)?,
         };
         Ok(KeyPair {
@@ -326,6 +346,26 @@ fn rsa_encoding(pss: bool) -> &'static dyn sig::RsaEncoding {
         &sig::RSA_PSS_SHA384
     } else {
         &sig::RSA_PKCS1_SHA384
+    }
+}
+
+/// The publicKey `der` carries, if any, once its structure is `a`'s (`KeyPair::from_pkcs8_der`).
+fn checked_private_key(a: S, der: &[u8]) -> Result<Option<&[u8]>, CryptoError> {
+    let checked = match kind(a)? {
+        Kind::Ecdsa { key, .. } => pkcs8::ec(key, der, false),
+        Kind::Ed25519 => pkcs8::ed25519(der),
+        Kind::Rsa { bits, .. } => pkcs8::rsa(der, bits as usize).then_some(None),
+        Kind::MlDsa87 => pkcs8::ml_dsa_87(der),
+    };
+    checked.ok_or(CryptoError::SignaturePrivateKey { algorithm: a })
+}
+
+// RFC 5915 §3, RFC 8410 §7, RFC 9881 §6: a carried publicKey that is not the key's own marks a
+// corrupt key.
+fn matches_carried(a: S, carried: Option<&[u8]>, public: &[u8]) -> Result<(), CryptoError> {
+    match carried {
+        Some(key) if key != public => Err(CryptoError::SignaturePrivateKey { algorithm: a }),
+        _ => Ok(()),
     }
 }
 
@@ -442,16 +482,28 @@ mod tests {
         let p384 = KeyPair::generate(S::EcdsaP384Sha384).unwrap();
         assert_eq!(
             KeyPair::from_pkcs8_der(S::Ed25519, p384.to_pkcs8_der()).err(),
-            Some(CryptoError::PrivateKey)
+            Some(CryptoError::SignaturePrivateKey {
+                algorithm: S::Ed25519
+            })
         );
         assert_eq!(
             KeyPair::from_pkcs8_der(S::EcdsaP384Sha384, b"not a key").err(),
-            Some(CryptoError::PrivateKey)
+            Some(CryptoError::SignaturePrivateKey {
+                algorithm: S::EcdsaP384Sha384
+            })
         );
+        for other in [S::EcdsaP256Sha256, S::EcdsaP521Sha512] {
+            assert_eq!(
+                KeyPair::from_pkcs8_der(other, p384.to_pkcs8_der()).err(),
+                Some(CryptoError::SignaturePrivateKey { algorithm: other })
+            );
+        }
         let rsa2048 = KeyPair::generate(S::Rsa2048Sha384).unwrap();
         assert_eq!(
             KeyPair::from_pkcs8_der(S::Rsa3072Sha384, rsa2048.to_pkcs8_der()).err(),
-            Some(CryptoError::PrivateKey)
+            Some(CryptoError::SignaturePrivateKey {
+                algorithm: S::Rsa3072Sha384
+            })
         );
     }
 
@@ -632,7 +684,9 @@ mod tests {
             assert_eq!(k.public_modulus_len(), 256);
             assert_eq!(
                 KeyPair::from_pkcs8_der(S::Rsa2048Sha384, &der(h)).err(),
-                Some(CryptoError::PrivateKey)
+                Some(CryptoError::SignaturePrivateKey {
+                    algorithm: S::Rsa2048Sha384
+                })
             );
         }
     }
@@ -897,7 +951,7 @@ mod tests {
             );
             assert_eq!(
                 KeyPair::from_pkcs8_der(a, &der(h)).err(),
-                Some(CryptoError::PrivateKey),
+                Some(CryptoError::SignaturePrivateKey { algorithm: a }),
                 "{bits}"
             );
         }
@@ -981,6 +1035,248 @@ mod tests {
                 .algorithm(),
             S::EcdsaP384Sha384
         );
+    }
+
+    fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+        let n = u16::try_from(value.len()).unwrap();
+        let [hi, lo] = n.to_be_bytes();
+        let len = match n {
+            0..=0x7f => vec![lo],
+            0x80..=0xff => vec![0x81, lo],
+            _ => vec![0x82, hi, lo],
+        };
+        [&[tag][..], &len, value].concat()
+    }
+
+    fn fields(der: &[u8]) -> Vec<Vec<u8>> {
+        let (_, mut rest, _) = pkcs8::split_tlv(der).unwrap();
+        let mut out = Vec::new();
+        while let Some((tag, value, next)) = pkcs8::split_tlv(rest).filter(|_| out.len() < 16) {
+            out.push(tlv(tag, value));
+            rest = next;
+        }
+        out
+    }
+
+    fn sequence(fields: &[Vec<u8>]) -> Vec<u8> {
+        tlv(0x30, &fields.concat())
+    }
+
+    fn attribute(last: u8) -> Vec<u8> {
+        sequence(&[
+            tlv(
+                0x06,
+                &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, last],
+            ),
+            tlv(0x31, &[]),
+        ])
+    }
+
+    // `openssl ecparam -name prime256v1 -param_enc explicit -genkey` then `pkcs8 -topk8` 3.5.8: a
+    // P-256 key whose privateKeyAlgorithm carries specifiedCurve parameters.
+    const P256_EXPLICIT: &str = concat!(
+        "308201790201003082010306072a8648ce3d02013081f7020101302c06072a8648ce3d0101022100ffffffff00000001",
+        "000000000000000000000000ffffffffffffffffffffffff305b0420ffffffff00000001000000000000000000000000",
+        "fffffffffffffffffffffffc04205ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b0315",
+        "00c49d360886e704936a6678e1139d26b7819f7e900441046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0",
+        "f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5022100ffffffff00",
+        "000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551020101046d306b0201010420617d0b135c946088a2",
+        "661b42bba5782d40778604ff3c432e40ead3783c8af66ea144034200040099d65941cdf0ae4cb4800777f6082b191aa0",
+        "42d5cf60dcc568fa5554b4acbc0b7582198a01f11bb4433551f8f8de23bfc73137d57a0be9f5c6edaf9eedf155",
+    );
+
+    // `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -pkeyopt rsa_keygen_primes:3`
+    // then `pkcs8 -topk8` 3.5.8: a three-prime RSAPrivateKey, version 1.
+    const RSA_THREE_PRIMES: &str = concat!(
+        "308204f4020100300d06092a864886f70d0101010500048204de308204da0201010282010100a5d99d7f00407eaa2bc2",
+        "6cc2eb41855f182ada9401f2b49e0e7a9b28ca0a38e50483edebd4acfc4ac23af22455a09c062732519f3a518db12afb",
+        "c8b1b4ef2b76a4dfef78a3c4ff627c0714ecd9a725cfa41f760bf39b9be4634bb840f0bd7de8eab1dfe6e47802aa79ee",
+        "9da4876acbf2364610031e67e04d93bab45b88120db193d9884fc2cc62eb6372211dce733ea9dfdb105f7e716d162f93",
+        "db42ed0777c877aad9b260d28c037336f77d7cb2493e94a06a8131d6a796ec48463ce9e5f4a2c866dd0a9bca327d12fa",
+        "e358c28ef73de04e85683541c70af6d29cc01c6a99288abe8520505776b6a0ab01a9d80534707e00e354fdfb414804df",
+        "f018c585199b0203010001028201010094a2fe9ae6afe6953e58a63edeb6bf0025d9aa4181a972244157b29d10cdae85",
+        "d9d11f36ff48f5674ec1a367daf1f1433677cb5d07d83543b60127b1d435915f688e65c15a0ce0d0f3d528f4c8701bdc",
+        "06fc47409882523c386ee63b6ff5f42eaed2fdc1f6699170e563e10e6a1f51c95f3637c9bafe073110e792182e2982af",
+        "3490062208b2dc3bf05499e6750ab0e47deb7541cc37018b1cb6fd63f42a6f0ebf404a3a5eb305455ee1d138b9c74559",
+        "8dae48774aed702223882c914f3527f6ca324b1edfcc7d7d04efc801af336ab97a9d13e2baa77682589b04c503a46c07",
+        "b1e59f42957420785c8ae70c2b17d2a3003c89d0219b95337650664a8346fd41025606ee2379bdc33b8c3afec348931a",
+        "1509c21795fcc4f0b451924269c51e70ec69e18face041b823f7c8be9ccdfbd404996a1e5f364c1870c73bf2adeb9b40",
+        "adc38989e8ea666ebf1756fe7aacd0f2aa12204455fcf607025606eb6fa14c74f6e461aec524e5b3f2395824243d9e99",
+        "1999b77ec0b66e6da0b8eda9405b4913dde7018e17623ea281f06879d1a3df71ba122094786da09da7acf805c948a4c8",
+        "c2de58fb4ce312c75524b34ae466d0a5025604cde159ebeb03c4dac0f1afc60a36bb6509e4b82dee8f925cca1d78c0f9",
+        "976a6f2ba2b473daab54829d61268a85180b223d9bd3903d01319ca5475c256c59094cb785f7b8badd4dd8c8e1521c27",
+        "9d2ea39fbbdc78d1025605a53e4d2e10db81d7047d09ae72d2b3e06a943ac5d3892475a5ef5aa7dbbf5e41606e064c27",
+        "ee4a536577448b6f906df0ff3a7fe58466d7f546ccbe3c6583f0c5e60aa3bef5a0af418fbdda216f09d3488858b25d95",
+        "02560436175ca40195f67bfcad439daade4c34b5bb601136948a3e44b5d21b51022e71eb254dfba2ea00acfd041e5136",
+        "9d3c188eb0a45370628f6ad9c3fdb565deaab29c841e9fc006c4b6b7bdcd3375c1f666fdbb6f54943082010c30820108",
+        "025603755d85dd4bbf38aa2937751a3c788bccf04f1dd3d298607103e777be5d1e1e8afeb2089edf7fb1b2a0384ccf32",
+        "2663c11b879ff21d70680022e68bf3c6dfaa2b6b2c9adfc843272dcbca17cafa2c26699e779cc10902560174a4a8733c",
+        "2e7feb1eedf89bd257ea7f97a5b52832bb6fdc21888b1dd49398c767ec0734d75d27adc741eb124a495e3329232c6efb",
+        "751450fa5f8f084bec57f36e6897c718c32afa5b8bf3f7bad45a569a1c3e1e0102560132972e87c19397cdda2841e181",
+        "2086b4dee4eee3ea78b1cd7a95afe00a44f4ec63903dd0cb9d06a81bbd2ce4e3339b04099c24569cca75487bebd52a52",
+        "fcdf20a00bd8988b89082d35c64d6c49ccf8fbc22cbd526e",
+    );
+
+    fn assert_refused(a: S, why: &str, der: &[u8]) {
+        let refused = Some(CryptoError::SignaturePrivateKey { algorithm: a });
+        assert_eq!(
+            checked_private_key(a, der).err(),
+            refused,
+            "validator: {a} {why}"
+        );
+        assert_eq!(
+            KeyPair::from_pkcs8_der(a, der).err(),
+            refused,
+            "import: {a} {why}"
+        );
+    }
+
+    fn with_field(der: &[u8], at: usize, field: Vec<u8>) -> Vec<u8> {
+        let mut f = fields(der);
+        f[at] = field;
+        sequence(&f)
+    }
+
+    #[test]
+    fn a_private_key_the_rfcs_do_not_define_is_refused() {
+        for a in [
+            S::EcdsaP256Sha256,
+            S::EcdsaP384Sha384,
+            S::EcdsaP521Sha512,
+            S::Ed25519,
+            S::Rsa2048Sha384,
+            S::Rsa3072Sha384Pss,
+        ] {
+            let der = KeyPair::generate(a).unwrap().to_pkcs8_der().to_vec();
+            let other = KeyPair::generate(a).unwrap().to_pkcs8_der().to_vec();
+            let f = fields(&der);
+            let misordered = tlv(0xa0, &[attribute(0x15), attribute(0x14)].concat());
+            let mut cases = vec![
+                ("trailing junk", [der.clone(), vec![0xde, 0xad]].concat()),
+                ("two keys", [der.clone(), other.clone()].concat()),
+                (
+                    "v2 without [1]",
+                    with_field(&sequence(&f[..3]), 0, vec![2, 1, 1]),
+                ),
+                (
+                    "attributes out of order",
+                    sequence(&[&f[..3], &[misordered], &f[3..]].concat()),
+                ),
+                (
+                    "an undefined field",
+                    sequence(&[&f[..], &[vec![0x02, 0x01, 0x05]]].concat()),
+                ),
+            ];
+            match a {
+                S::EcdsaP256Sha256 => cases.push(("explicit curve", der_hex(P256_EXPLICIT))),
+                S::Ed25519 => {
+                    let swapped = with_field(&der, 3, fields(&other)[3].clone());
+                    let carried = pkcs8::split_tlv(&fields(&other)[3]).unwrap().1[1..].to_vec();
+                    assert_eq!(checked_private_key(a, &swapped), Ok(Some(&carried[..])));
+                    assert_eq!(
+                        KeyPair::from_pkcs8_der(a, &swapped).err(),
+                        Some(CryptoError::SignaturePrivateKey { algorithm: a })
+                    );
+                }
+                S::Rsa2048Sha384 | S::Rsa3072Sha384Pss => {
+                    let no_null = sequence(&[fields(&f[1])[0].clone()]);
+                    cases.push(("rsaEncryption without NULL", with_field(&der, 1, no_null)));
+                    let (_, inner, _) = pkcs8::split_tlv(&f[2]).unwrap();
+                    let mut stripped = fields(inner);
+                    for at in [2, 4, 5, 6, 7, 8] {
+                        stripped[at] = vec![0x02, 0x01, 0x00];
+                    }
+                    let stripped = tlv(0x04, &sequence(&stripped));
+                    cases.push(("stripped", with_field(&der, 2, stripped)));
+                    if a == S::Rsa2048Sha384 {
+                        cases.push(("three primes", der_hex(RSA_THREE_PRIMES)));
+                    }
+                }
+                _ => {}
+            }
+            for (why, der) in cases {
+                assert_refused(a, why, &der);
+            }
+        }
+    }
+
+    fn der_hex(h: &str) -> Vec<u8> {
+        hex::decode(h).unwrap()
+    }
+
+    #[test]
+    fn the_crates_own_keys_and_every_rfc_form_are_taken() {
+        let attributes = tlv(0xa0, &[attribute(0x14), attribute(0x15)].concat());
+        for &a in S::ALL {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                continue;
+            }
+            let k = KeyPair::generate(a).unwrap();
+            let der = k.to_pkcs8_der().to_vec();
+            let f = fields(&der);
+            for form in [
+                der.clone(),
+                sequence(&[&f[..3], std::slice::from_ref(&attributes), &f[3..]].concat()),
+                sequence(&[&f[..3], &[tlv(0xa0, &[])], &f[3..]].concat()),
+            ] {
+                let imported = KeyPair::from_pkcs8_der(a, &form).unwrap();
+                assert_eq!(imported.public_key(), k.public_key(), "{a}");
+            }
+        }
+        let ed = sig::Ed25519KeyPair::generate().unwrap();
+        let v1: Pkcs8V1Der<'static> = ed.as_der().unwrap();
+        assert_eq!(fields(v1.as_ref()).len(), 3);
+        assert_eq!(
+            KeyPair::from_pkcs8_der(S::Ed25519, v1.as_ref())
+                .unwrap()
+                .public_key(),
+            ed.public_key().as_ref()
+        );
+        let p384 = KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let der = p384.to_pkcs8_der().to_vec();
+        let f = fields(&der);
+        let (_, inner, _) = pkcs8::split_tlv(&f[2]).unwrap();
+        let ec = fields(inner);
+        let parameters = tlv(0xa0, &tlv(0x06, &[0x2b, 0x81, 0x04, 0x00, 0x22]));
+        let with_parameters = sequence(&[&ec[..2], &[parameters], &ec[2..]].concat());
+        let der = with_field(&der, 2, tlv(0x04, &with_parameters));
+        assert_eq!(
+            KeyPair::from_pkcs8_der(S::EcdsaP384Sha384, &der)
+                .unwrap()
+                .public_key(),
+            p384.public_key()
+        );
+        assert_refused(S::EcdsaP384Sha384, "bare ECPrivateKey", &with_parameters);
+    }
+
+    #[test]
+    fn a_carried_public_key_is_the_keys_own() {
+        let refused = Err(CryptoError::SignaturePrivateKey {
+            algorithm: S::Ed25519,
+        });
+        assert_eq!(matches_carried(S::Ed25519, None, b"k"), Ok(()));
+        assert_eq!(matches_carried(S::Ed25519, Some(b"k"), b"k"), Ok(()));
+        assert_eq!(matches_carried(S::Ed25519, Some(b"j"), b"k"), refused);
+        for a in [S::EcdsaP256Sha256, S::EcdsaP521Sha384] {
+            let der = KeyPair::generate(a).unwrap().to_pkcs8_der().to_vec();
+            let other = KeyPair::generate(a).unwrap();
+            let private_key = fields(&der)[2].clone();
+            let (_, inner, _) = pkcs8::split_tlv(&private_key).unwrap();
+            let mut ec = fields(inner);
+            let point = tlv(0x03, &[&[0][..], other.public_key()].concat());
+            *ec.last_mut().unwrap() = tlv(0xa1, &point);
+            let der = with_field(&der, 2, tlv(0x04, &sequence(&ec)));
+            assert_eq!(
+                checked_private_key(a, &der),
+                Ok(Some(other.public_key())),
+                "{a}"
+            );
+            assert_eq!(
+                KeyPair::from_pkcs8_der(a, &der).err(),
+                Some(CryptoError::SignaturePrivateKey { algorithm: a }),
+                "{a}"
+            );
+        }
     }
 
     #[test]

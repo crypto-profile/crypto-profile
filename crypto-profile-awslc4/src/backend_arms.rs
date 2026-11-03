@@ -16,7 +16,9 @@ impl MlDsa {
 
     pub(crate) fn public_key(der: &[u8]) -> Result<Vec<u8>, CryptoError> {
         Ok(sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der)
-            .map_err(|_| CryptoError::PrivateKey)?
+            .map_err(|_| CryptoError::SignaturePrivateKey {
+                algorithm: SignatureAlgorithm::MlDsa87,
+            })?
             .public_key()
             .as_ref()
             .to_vec())
@@ -89,12 +91,113 @@ mod tests {
         let verifier = sig::UnparsedPublicKey::new(MlDsa::verifier().unwrap(), public);
         assert!(verifier.verify(b"message", &signature).is_ok());
         assert!(verifier.verify(b"different", &signature).is_err());
-        assert_eq!(MlDsa::public_key(b"invalid"), Err(CryptoError::PrivateKey));
+        assert_eq!(
+            MlDsa::public_key(b"invalid"),
+            Err(CryptoError::SignaturePrivateKey {
+                algorithm: SignatureAlgorithm::MlDsa87
+            })
+        );
         assert_eq!(
             MlDsa::sign(b"invalid", b"message"),
             Err(CryptoError::PrivateKey)
         );
         assert_eq!(MlDsa::rcgen_alg().unwrap(), &rcgen::PKCS_ML_DSA_87);
+    }
+
+    fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+        let n = u16::try_from(value.len()).unwrap();
+        let [hi, lo] = n.to_be_bytes();
+        let len = match n {
+            0..=0x7f => vec![lo],
+            0x80..=0xff => vec![0x81, lo],
+            _ => vec![0x82, hi, lo],
+        };
+        [&[tag][..], &len, value].concat()
+    }
+
+    // RFC 9881 §6 forms of one ML-DSA-87 key, rebuilt around the crate's own seed-form PKCS#8.
+    struct Forms {
+        public: Vec<u8>,
+        seed: Vec<u8>,
+        expanded: Vec<u8>,
+    }
+
+    impl Forms {
+        fn of(der: &[u8]) -> Self {
+            use aws_lc_rs::encoding::{AsRawBytes, PqdsaPrivateKeyRaw};
+            let key = sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der).unwrap();
+            let raw: PqdsaPrivateKeyRaw<'static> = key.private_key().as_raw_bytes().unwrap();
+            assert_eq!(&der[..22], ML_DSA_87_SEED_PREFIX);
+            Self {
+                public: key.public_key().as_ref().to_vec(),
+                seed: der[22..].to_vec(),
+                expanded: raw.as_ref().to_vec(),
+            }
+        }
+
+        fn key(&self, private_key: &[u8], public_key: Option<&[u8]>) -> Vec<u8> {
+            let version = [0x02, 0x01, u8::from(public_key.is_some())];
+            let algorithm = tlv(0x30, &tlv(0x06, &ML_DSA_87_OID));
+            let public = public_key.map_or(Vec::new(), |k| tlv(0x81, &[&[0][..], k].concat()));
+            tlv(
+                0x30,
+                &[&version[..], &algorithm, &tlv(0x04, private_key), &public].concat(),
+            )
+        }
+    }
+
+    const ML_DSA_87_OID: [u8; 9] = [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x13];
+    const ML_DSA_87_SEED_PREFIX: &[u8] = &[
+        0x30, 0x34, 0x02, 0x01, 0x00, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03,
+        0x04, 0x03, 0x13, 0x04, 0x22, 0x80, 0x20,
+    ];
+
+    #[test]
+    fn an_ml_dsa_key_outside_rfc_9881_is_refused_and_every_form_it_defines_is_taken() {
+        use crate::signature::KeyPair;
+        let a = SignatureAlgorithm::MlDsa87;
+        let refused = Some(CryptoError::SignaturePrivateKey { algorithm: a });
+        let generated = KeyPair::generate(a).unwrap();
+        let f = Forms::of(generated.to_pkcs8_der());
+        let other = Forms::of(KeyPair::generate(a).unwrap().to_pkcs8_der());
+        let seed = tlv(0x80, &f.seed);
+        let both = tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, &f.expanded)].concat());
+        for der in [
+            f.key(&seed, None),
+            f.key(&both, None),
+            f.key(&seed, Some(&f.public)),
+            f.key(&both, Some(&f.public)),
+        ] {
+            let k = KeyPair::from_pkcs8_der(a, &der).unwrap();
+            assert_eq!(k.public_key(), generated.public_key());
+        }
+        for (why, der) in [
+            ("expandedKey alone", f.key(&tlv(0x04, &f.expanded), None)),
+            (
+                "seed then 05 00",
+                f.key(&[&seed[..], &[0x05, 0x00]].concat(), None),
+            ),
+            (
+                "both then 05 00",
+                f.key(&[&both[..], &[0x05, 0x00]].concat(), None),
+            ),
+            (
+                "publicKey of another key",
+                f.key(&seed, Some(&other.public)),
+            ),
+            (
+                "both, expandedKey of another key",
+                f.key(
+                    &tlv(
+                        0x30,
+                        &[tlv(0x04, &f.seed), tlv(0x04, &other.expanded)].concat(),
+                    ),
+                    None,
+                ),
+            ),
+        ] {
+            assert_eq!(KeyPair::from_pkcs8_der(a, &der).err(), refused, "{why}");
+        }
     }
 
     #[test]

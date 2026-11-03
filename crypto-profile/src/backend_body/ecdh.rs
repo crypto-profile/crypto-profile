@@ -2,6 +2,7 @@
 //! 800-56A Rev. 3 §6.2.2.2) in both roles, each agreement completing into `kdf` in the same call,
 //! so the shared secret never leaves the crate. A NIST-curve public key is an uncompressed SEC 1
 //! point (65, 97 or 133 bytes); an X25519 public key is 32 bytes (RFC 7748).
+use super::pkcs8::{self, UNCOMPRESSED};
 use crate::kdf::{self, DerivedKey, Spec};
 use crate::{Admitted, CryptoError};
 use aws_lc_rs::agreement as ag;
@@ -50,8 +51,6 @@ fn curve(k: KeyAgreementAlgorithm) -> Result<Curve, CryptoError> {
     })
 }
 
-const UNCOMPRESSED: u8 = 0x04;
-
 // RFC 5480 §2.2: the only peer-key form is the uncompressed point.
 fn parse_peer(k: KeyAgreementAlgorithm, peer: &[u8]) -> Result<ag::ParsedPublicKey, CryptoError> {
     let refused = CryptoError::KeyAgreementPeerKey { algorithm: k };
@@ -74,129 +73,21 @@ pub(crate) fn spki_point(k: KeyAgreementAlgorithm, der: &[u8]) -> Result<&[u8], 
     Ok(point)
 }
 
-// One DER element with a minimal definite length of at most two bytes: its tag, its value and the
-// bytes after it.
-fn split_tlv(der: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-    let (tag, header, len) = match der {
-        [t, n @ 0..=0x7f, ..] => (*t, 2, usize::from(*n)),
-        [t, 0x81, n @ 0x80..=0xff, ..] => (*t, 3, usize::from(*n)),
-        [t, 0x82, hi @ 0x01..=0xff, lo, ..] => (*t, 4, usize::from(u16::from_be_bytes([*hi, *lo]))),
-        _ => return None,
-    };
-    let (value, rest) = der[header..].split_at_checked(len)?;
-    Some((tag, value, rest))
-}
-
-// RFC 5480 §2.1.1: the AlgorithmIdentifier id-ecPublicKey with its namedCurve.
-const P256_ALGORITHM: &[u8] = &[
-    0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86, 0x48,
-    0xce, 0x3d, 0x03, 0x01, 0x07,
-];
-const P384_ALGORITHM: &[u8] = &[
-    0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b, 0x81, 0x04,
-    0x00, 0x22,
-];
-const P521_ALGORITHM: &[u8] = &[
-    0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b, 0x81, 0x04,
-    0x00, 0x23,
-];
-const ALGORITHM_HEADER: usize = 11;
-
-struct EcKey {
-    algorithm: &'static [u8],
-    scalar_len: usize,
-    point_len: usize,
-}
-
-impl EcKey {
-    fn named_curve(&self) -> &'static [u8] {
-        &self.algorithm[ALGORITHM_HEADER..]
+fn ec_key(k: KeyAgreementAlgorithm) -> Option<&'static pkcs8::EcCurve> {
+    match k {
+        KeyAgreementAlgorithm::EcdhP256 => Some(&pkcs8::P256),
+        KeyAgreementAlgorithm::EcdhP384 => Some(&pkcs8::P384),
+        KeyAgreementAlgorithm::EcdhP521 => Some(&pkcs8::P521),
+        _ => None,
     }
-}
-
-fn ec_key(k: KeyAgreementAlgorithm) -> Option<EcKey> {
-    let (algorithm, scalar_len, point_len) = match k {
-        KeyAgreementAlgorithm::EcdhP256 => (P256_ALGORITHM, 32, 65),
-        KeyAgreementAlgorithm::EcdhP384 => (P384_ALGORITHM, 48, 97),
-        KeyAgreementAlgorithm::EcdhP521 => (P521_ALGORITHM, 66, 133),
-        _ => return None,
-    };
-    Some(EcKey {
-        algorithm,
-        scalar_len,
-        point_len,
-    })
 }
 
 /// The publicKey point a key's ECPrivateKey carries, if any, once the key is an RFC 5958 §2
 /// PrivateKeyInfo or an RFC 5915 §3 ECPrivateKey on `k`'s curve, as `from_pkcs8_der` lists.
 fn checked(k: KeyAgreementAlgorithm, der: &[u8]) -> Result<Option<&[u8]>, CryptoError> {
-    let carried = match (ec_key(k), split_tlv(der)) {
-        (Some(e), Some((0x30, body, []))) => match body {
-            [0x02, 0x01, 0x00, rest @ ..] => private_key_info(&e, rest),
-            _ => ec_private_key(&e, body, true),
-        },
-        _ => None,
-    };
-    carried.ok_or(CryptoError::KeyAgreementPrivateKey { algorithm: k })
-}
-
-// RFC 5958 §2 after version v1: privateKeyAlgorithm, privateKey and [0] attributes. RFC 5915 §1
-// puts an EC public key in ECPrivateKey, so v2 and its [1] publicKey never apply.
-fn private_key_info<'a>(e: &EcKey, der: &'a [u8]) -> Option<Option<&'a [u8]>> {
-    let rest = der.strip_prefix(e.algorithm)?;
-    let Some((0x04, private_key, rest)) = split_tlv(rest) else {
-        return None;
-    };
-    match split_tlv(rest) {
-        None if rest.is_empty() => {}
-        Some((0xa0, attributes, [])) if are_attributes(attributes) => {}
-        _ => return None,
-    }
-    let Some((0x30, body, [])) = split_tlv(private_key) else {
-        return None;
-    };
-    ec_private_key(e, body, false)
-}
-
-// RFC 5958 §2 Attributes, IMPLICIT: Attribute ::= SEQUENCE { type OBJECT IDENTIFIER, values SET },
-// a SET OF Attribute whose attrValues is a SET OF ANY.
-fn are_attributes(der: &[u8]) -> bool {
-    set_of(der, |tag, attribute| {
-        let Some((0x06, [_, ..], values)) = split_tlv(attribute) else {
-            return false;
-        };
-        tag == 0x30
-            && matches!(split_tlv(values), Some((0x31, set, [])) if set_of(set, |_, _| true))
-    })
-}
-
-// RFC 5915 §3 (EXPLICIT TAGS). §3 requires parameters; inside a PrivateKeyInfo, §1 a) puts the
-// curve in privateKeyAlgorithm.
-fn ec_private_key<'a>(e: &EcKey, body: &'a [u8], bare: bool) -> Option<Option<&'a [u8]>> {
-    let rest = body.strip_prefix(&[0x02, 0x01, 0x01])?;
-    let Some((0x04, scalar, rest)) = split_tlv(rest) else {
-        return None;
-    };
-    let (parameters, rest) = optional(0xa0, rest);
-    let (public_key, rest) = optional(0xa1, rest);
-    let curve = match parameters {
-        Some(named_curve) => named_curve == e.named_curve(),
-        None => !bare,
-    };
-    if scalar.len() != e.scalar_len || !curve || !rest.is_empty() {
-        return None;
-    }
-    match public_key.map(split_tlv) {
-        None => Some(None),
-        // RFC 5480 §2.2: an uncompressed point, the crate's only peer-key form.
-        Some(Some((0x03, [0x00, point @ ..], [])))
-            if point.len() == e.point_len && point.first() == Some(&UNCOMPRESSED) =>
-        {
-            Some(Some(point))
-        }
-        Some(_) => None,
-    }
+    ec_key(k)
+        .and_then(|c| pkcs8::ec(c, der, true))
+        .ok_or(CryptoError::KeyAgreementPrivateKey { algorithm: k })
 }
 
 // RFC 5915 §3 for the NIST curves, RFC 7748 §5 for X25519: the private key has the field's length.
@@ -208,45 +99,6 @@ fn checked_scalar(k: KeyAgreementAlgorithm, d: &[u8]) -> Result<(), CryptoError>
         Ok(())
     } else {
         Err(CryptoError::KeyAgreementPrivateKey { algorithm: k })
-    }
-}
-
-// X.690 §11.6: `next` does not precede `prev`, compared as octet strings with the shorter padded
-// at its end with 0-octets.
-fn not_after(prev: &[u8], next: &[u8]) -> bool {
-    let padded = |s: &[u8]| {
-        (0..prev.len().max(next.len()))
-            .map(|i| s.get(i).copied().unwrap_or(0))
-            .collect::<Vec<_>>()
-    };
-    padded(prev) <= padded(next)
-}
-
-// The elements of a SET OF in `der`, each passing `element(tag, value)`, in ascending order of their
-// encodings (X.690 §11.6).
-fn set_of(mut der: &[u8], element: impl Fn(u8, &[u8]) -> bool) -> bool {
-    let mut previous: Option<&[u8]> = None;
-    for _ in 0..=der.len() {
-        if der.is_empty() {
-            return true;
-        }
-        let Some((tag, value, rest)) = split_tlv(der) else {
-            return false;
-        };
-        let whole = &der[..der.len() - rest.len()];
-        if !element(tag, value) || !previous.is_none_or(|p| not_after(p, whole)) {
-            return false;
-        }
-        previous = Some(whole);
-        der = rest;
-    }
-    false
-}
-
-fn optional(tag: u8, der: &[u8]) -> (Option<&[u8]>, &[u8]) {
-    match split_tlv(der) {
-        Some((t, value, rest)) if t == tag => (Some(value), rest),
-        _ => (None, der),
     }
 }
 
@@ -531,6 +383,7 @@ impl StaticKey {
 
 #[cfg(test)]
 mod tests {
+    use super::super::pkcs8::split_tlv;
     use super::*;
     use crate::{Options, Profile, admit};
     use crypto_profile::conformance::__hex;
@@ -627,40 +480,6 @@ mod tests {
                 algorithm: KeyAgreementAlgorithm::EcdhP256
             })
         );
-    }
-
-    #[test]
-    fn only_one_minimally_encoded_sequence_spanning_the_input_is_whole() {
-        let with = |head: &[u8], n: usize| [head, &vec![0; n][..]].concat();
-        let is_one_sequence = |der: &[u8]| matches!(split_tlv(der), Some((0x30, _, [])));
-        for (whole, header) in [
-            (with(&[0x30, 0x03], 3), 2),
-            (with(&[0x30, 0x81, 0x80], 0x80), 3),
-            (with(&[0x30, 0x82, 0x01, 0x01], 0x101), 4),
-        ] {
-            let empty: &[u8] = &[];
-            assert_eq!(
-                split_tlv(&whole),
-                Some((0x30, &whole[header..], empty)),
-                "{:02x?}",
-                &whole[..4]
-            );
-        }
-        for bad in [
-            Vec::new(),
-            vec![0x30],
-            with(&[0x30, 0x03], 2),
-            with(&[0x30, 0x03], 4),
-            with(&[0x31, 0x03], 3),
-            with(&[0x30, 0x80], 2),
-            with(&[0x30, 0x81, 0x7f], 0x7f),
-            with(&[0x30, 0x81, 0x80], 0x81),
-            with(&[0x30, 0x82, 0x00, 0xff], 0xff),
-            with(&[0x30, 0x82, 0x01, 0x01], 0x100),
-            with(&[0x30, 0x83, 0x00, 0x01, 0x00], 0x100),
-        ] {
-            assert!(!is_one_sequence(&bad), "{bad:02x?}");
-        }
     }
 
     #[test]
@@ -1260,20 +1079,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    #[test]
-    fn set_of_elements_are_compared_as_octet_strings_padded_with_zeros() {
-        assert!(not_after(&[1, 2], &[1, 3]));
-        assert!(not_after(&[1, 2], &[1, 2]));
-        assert!(not_after(&[1, 2], &[1, 2, 1]));
-        assert!(not_after(&[1, 2], &[1, 2, 0]));
-        assert!(not_after(&[1, 2, 0], &[1, 2]));
-        assert!(!not_after(&[1, 3], &[1, 2]));
-        assert!(!not_after(&[1, 2, 1], &[1, 2]));
-        assert!(!not_after(&[1, 3], &[1, 2, 9]));
-        assert!(!not_after(&[2], &[1, 9, 9]));
-        assert!(not_after(&[1, 9, 9], &[2]));
     }
 
     fn attr(last: u8, values: &[u8]) -> Vec<u8> {

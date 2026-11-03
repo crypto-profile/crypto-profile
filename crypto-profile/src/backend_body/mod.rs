@@ -10,6 +10,7 @@ pub mod fips;
 pub mod hmac;
 pub mod kdf;
 pub mod peer_certificates;
+mod pkcs8;
 mod profiles;
 pub mod random;
 pub mod sealbox;

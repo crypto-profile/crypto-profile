@@ -205,6 +205,12 @@ pub enum CryptoError {
         /// The family left empty.
         category: Family,
     },
+    /// A signature private key that cannot be imported: its PKCS#8 structure is not the one its
+    /// RFCs define for the algorithm, or the module refuses it.
+    SignaturePrivateKey {
+        /// The signature algorithm.
+        algorithm: SignatureAlgorithm,
+    },
     /// A signature algorithm that is not a TLS certificate key algorithm, refused where a TLS key
     /// or a certificate request is made: an RSA-PSS variant.
     NotTlsKey {
@@ -362,6 +368,9 @@ impl fmt::Display for CryptoError {
                     "the {profile} profile, with {options}, names no {category:?}"
                 )
             }
+            CryptoError::SignaturePrivateKey { algorithm } => {
+                write!(f, "the {algorithm} private key was refused")
+            }
             CryptoError::NotTlsKey { algorithm } => {
                 write!(f, "{algorithm} is not a TLS certificate key algorithm")
             }
@@ -511,7 +520,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 19] = [
+        let table: [(CryptoError, &str); 20] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -534,6 +543,12 @@ mod tests {
                     algorithm: SignatureAlgorithm::Rsa3072Sha384,
                 },
                 "the bsi profile does not admit rsa3072-sha384 keys",
+            ),
+            (
+                CryptoError::SignaturePrivateKey {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                },
+                "the ed25519 private key was refused",
             ),
             (
                 CryptoError::NotTlsKey {

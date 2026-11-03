@@ -131,6 +131,8 @@ fn has_exact_child(source: &str) -> bool {
     false
 }
 
+const PRIVATE_BODY_MODULES: [&str; 2] = ["pkcs8", "profiles"];
+
 const PROFILE_EXPORTS: [&str; 2] = [
     "pub use profiles::{Resolved, assert_module_approves, resolve};",
     "pub use profiles::{Admitted, admit, assert_admitted_approved};",
@@ -185,8 +187,12 @@ fn modules(dir: &Path, body: bool) -> (String, bool) {
             continue;
         }
         let (visibility, name) = if body {
-            if line == "mod profiles;" && !test_support {
-                ("", "profiles")
+            if let Some(name) = line
+                .strip_prefix("mod ")
+                .and_then(|s| s.strip_suffix(';'))
+                .filter(|name| !test_support && PRIVATE_BODY_MODULES.contains(name))
+            {
+                ("", name)
             } else if let Some(name) = line
                 .strip_prefix("pub mod ")
                 .and_then(|s| s.strip_suffix(';'))
