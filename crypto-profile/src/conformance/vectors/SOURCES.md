@@ -29,6 +29,7 @@ Each file was fetched from `https://raw.githubusercontent.com/C2SP/wycheproof/d1
 | `ecdh_secp384r1_ecpoint_test.json` | `ffa7835fe1de359dff762c8f1272b98acebd5578e2f855d969051ff956c6dca3` |
 | `ecdh_secp521r1_ecpoint_test.json` | `87aba8739c96de2bde8c75b60ffea09d0493192c4d9543d1d969e5e998931f35` |
 | `x25519_test.json` | `35c3f5231cf25cc640b524d403461deee9e49441d5d915a3a25b2c8ff5adbe7d` |
+| `chacha20_poly1305_test.json` | `fe61d25f90e1bde4461d00eafe61049e5f29bd999f36b766df9cda90906ad53d` |
 
 The ECDH files are the raw-point (`ecpoint`) forms. The SubjectPublicKeyInfo forms (`ecdh_secp*_test.json`) are not used: `ecdh` refuses a public key in that form before the module sees it.
 

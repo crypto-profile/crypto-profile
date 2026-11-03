@@ -1,6 +1,7 @@
 //! Shared conformance data and helpers for `crypto-profile` backends.
 use crate::{Algorithm, CryptoError, Module, SignatureAlgorithm, TlsSignatureScheme, capability};
 
+mod aead_tests;
 #[doc(hidden)]
 pub mod golden;
 mod key_agreement_tests;
@@ -623,6 +624,8 @@ pub mod vectors {
     pub const ML_DSA_87: &str = include_str!("vectors/mldsa_87_verify_test.json");
     /// Wycheproof AES-GCM.
     pub const AES_GCM: &str = include_str!("vectors/aes_gcm_test.json");
+    /// Wycheproof ChaCha20-Poly1305.
+    pub const CHACHA20_POLY1305: &str = include_str!("vectors/chacha20_poly1305_test.json");
     /// Wycheproof HMAC-SHA256.
     pub const HMAC_SHA256: &str = include_str!("vectors/hmac_sha256_test.json");
     /// Wycheproof HMAC-SHA384.
@@ -824,9 +827,7 @@ macro_rules! conformance_tests {
         use $b::test_support::handshake;
         use $b::tls::Policy;
         use $b::*;
-        use $crate::conformance::{
-            __cavp_short, __wycheproof_aead_cases, __wycheproof_sig_cases, vectors,
-        };
+        use $crate::conformance::{__cavp_short, __wycheproof_sig_cases, vectors};
 
         fn policy(
             v: &[TlsVersion],
@@ -1070,33 +1071,6 @@ macro_rules! conformance_tests {
         }
 
         #[test]
-        fn conformance_wycheproof_aes_gcm() {
-            let cases = __wycheproof_aead_cases(vectors::AES_GCM, 256, 96, 128);
-            let (mut valid, mut invalid) = (0, 0);
-            for c in cases {
-                let key: [u8; aead::KEY_LEN] = c.key.as_slice().try_into().unwrap();
-                let nonce: [u8; aead::NONCE_LEN] = c.iv.as_slice().try_into().unwrap();
-                let k = aead::Aes256GcmKey::new(&key).unwrap();
-                let mut buf = c.ct_tag.clone();
-                let opened = k
-                    .open_in_place(&nonce, &c.aad, &mut buf)
-                    .map(|p| p.to_vec());
-                match c.result.as_str() {
-                    "valid" => {
-                        valid += 1;
-                        assert_eq!(opened, Ok(c.msg), "tcId {}", c.tc_id);
-                    }
-                    "invalid" => {
-                        invalid += 1;
-                        assert_eq!(opened, Err(CryptoError::AeadOpen), "tcId {}", c.tc_id);
-                    }
-                    other => panic!("tcId {}: unknown result {other:?}", c.tc_id),
-                }
-            }
-            assert_eq!((valid, invalid), (39, 27));
-        }
-
-        #[test]
         fn conformance_wycheproof_hmac() {
             let a = admit(Profile::Unrestricted, Options::default());
             for (m, file) in [
@@ -1201,6 +1175,11 @@ macro_rules! conformance_tests {
                             })
                         };
                         assert_eq!(a.admit_aead(d), want, "{p} {o} {d:?}");
+                        assert_eq!(
+                            aead::Key::new(&a, d, &vec![7; d.key_len()]).map(|k| k.algorithm()),
+                            want.map(|()| d),
+                            "{p} {o} {d:?}"
+                        );
                     }
                 }
             }
@@ -1582,6 +1561,14 @@ macro_rules! conformance_tests {
                     }
                     Algorithm::Aead(d) => {
                         assert!(cap.available, "{d:?}");
+                        let unrestricted = admit(Profile::Unrestricted, Options::default());
+                        let key = aead::Key::new(&unrestricted, d, &vec![7; d.key_len()])
+                            .unwrap_or_else(|e| panic!("{d:?}: {e}"));
+                        let mut buf = b"capability".to_vec();
+                        let (nonce, tag) = key.seal_in_place(b"", &mut buf).unwrap();
+                        buf.extend_from_slice(&tag);
+                        let opened = key.open_in_place(&nonce, b"", &mut buf).unwrap();
+                        assert_eq!(opened, b"capability", "{d:?}");
                     }
                     Algorithm::Kx(k) => {
                         let p = policy(
@@ -1781,6 +1768,10 @@ macro_rules! conformance_tests {
 
         mod conformance_key_agreement {
             $crate::__conformance_key_agreement_tests!($b);
+        }
+
+        mod conformance_aead {
+            $crate::__conformance_aead_tests!($b);
         }
     };
 }

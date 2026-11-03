@@ -9,19 +9,21 @@ pub use crypto_profile::sealbox_wire::{
 };
 pub use keys::{PEM_LEN, PrivateKey, PublicKey, SPKI_LEN};
 
-use crate::aead::{Aes256GcmKey, KEY_LEN};
+use crate::aead;
 use crate::ecdh::EphemeralKey;
 use crate::fips::assert_fips_module;
 use crate::kdf::Spec;
 use crate::{Admitted, CryptoError};
 use crypto_profile::sealbox_wire::{parse_blob, sealed_len};
-use crypto_profile::{KdfAlgorithm, KeyAgreementAlgorithm};
+use crypto_profile::{AeadAlgorithm, KdfAlgorithm, KeyAgreementAlgorithm};
 use std::fmt;
 use zeroize::Zeroizing;
 
 const KDF_SUITE: &[u8] = b" p384 hkdf-sha384 aes-256-gcm";
 const AGREEMENT: KeyAgreementAlgorithm = KeyAgreementAlgorithm::EcdhP384;
 const KDF: KdfAlgorithm = KdfAlgorithm::HkdfSha384;
+const AEAD: AeadAlgorithm = AeadAlgorithm::Aes256Gcm;
+const KEY_LEN: usize = AEAD.key_len();
 
 /// The wire bytes of one sealed box.
 pub struct SealedBlob(Vec<u8>);
@@ -68,9 +70,8 @@ fn kdf_spec<'a>(domain: &'a [u8], info: &'a [u8]) -> Spec<'a> {
     }
 }
 
-fn aead_key(okm: &[u8]) -> Result<Aes256GcmKey, CryptoError> {
-    let key: &[u8; KEY_LEN] = okm.try_into().map_err(|_| CryptoError::Primitive)?;
-    Aes256GcmKey::new(key)
+fn aead_key(a: &Admitted, okm: &[u8]) -> Result<aead::Key, CryptoError> {
+    aead::Key::new(a, AEAD, okm)
 }
 
 fn check_domain(domain: &[u8]) -> Result<(), CryptoError> {
@@ -107,7 +108,7 @@ pub fn seal(
         .map_err(|_| CryptoError::Primitive)?;
     let info = kdf_info(domain, &point, recipient);
     let okm = ephemeral.agree(recipient.point(), &kdf_spec(domain, &info), KEY_LEN)?;
-    let sealer = aead_key(okm.as_bytes())?;
+    let sealer = aead_key(a, okm.as_bytes())?;
     let mut out = Zeroizing::new(Vec::with_capacity(sealed_len(plaintext.len())));
     out.push(VERSION);
     out.extend_from_slice(&point);
@@ -142,7 +143,7 @@ pub fn open(
             CryptoError::KeyAgreementPeerKey { .. } => CryptoError::SealEphemeralKey,
             other => other,
         })?;
-    let opener = aead_key(okm.as_bytes())?;
+    let opener = aead_key(a, okm.as_bytes())?;
     let mut buf = Zeroizing::new(Vec::with_capacity(parts.sealed.len()));
     buf.extend_from_slice(parts.sealed);
     let opened = opener.open_in_place(&parts.nonce, aad, &mut buf[..]);
@@ -185,33 +186,33 @@ mod tests {
         unhex(kat::BLOB_HEX)[1..1 + EPHEMERAL_KEY_LEN].to_vec()
     }
 
-    fn derive_key(shared: &[u8], ephemeral: &[u8], recipient: &PublicKey) -> Aes256GcmKey {
+    fn derive_key(shared: &[u8], ephemeral: &[u8], recipient: &PublicKey) -> aead::Key {
         let info = kdf_info(DOMAIN, ephemeral, recipient);
         let okm = crate::kdf::derive(&fips(), shared, &kdf_spec(DOMAIN, &info), KEY_LEN).unwrap();
-        aead_key(okm.as_bytes()).unwrap()
+        aead_key(&fips(), okm.as_bytes()).unwrap()
     }
 
-    fn seal_with(key: &Aes256GcmKey) -> ([u8; NONCE_LEN], Vec<u8>) {
+    fn seal_with(key: &aead::Key) -> ([u8; NONCE_LEN], Vec<u8>) {
         let mut buf = KAT_PLAINTEXT.to_vec();
         let (nonce, tag) = key.seal_in_place(&kat_aad(), &mut buf).unwrap();
         buf.extend_from_slice(&tag);
         (nonce, buf)
     }
 
-    fn open_with(key: &Aes256GcmKey, nonce: [u8; NONCE_LEN], sealed: &[u8]) -> Option<Vec<u8>> {
+    fn open_with(key: &aead::Key, nonce: [u8; NONCE_LEN], sealed: &[u8]) -> Option<Vec<u8>> {
         let mut buf = sealed.to_vec();
         let n = key.open_in_place(&nonce, &kat_aad(), &mut buf).ok()?.len();
         buf.truncate(n);
         Some(buf)
     }
 
-    fn agreed_key(private: &PrivateKey, ephemeral: &[u8], recipient: &PublicKey) -> Aes256GcmKey {
+    fn agreed_key(private: &PrivateKey, ephemeral: &[u8], recipient: &PublicKey) -> aead::Key {
         let info = kdf_info(DOMAIN, ephemeral, recipient);
         let okm = private
             .agreement_key()
             .agree(ephemeral, &kdf_spec(DOMAIN, &info), KEY_LEN)
             .unwrap();
-        aead_key(okm.as_bytes()).unwrap()
+        aead_key(&fips(), okm.as_bytes()).unwrap()
     }
 
     #[test]
@@ -236,13 +237,20 @@ mod tests {
     }
 
     #[test]
-    fn only_a_32_byte_okm_makes_an_aead_key() {
-        assert!(aead_key(&[7; KEY_LEN]).is_ok());
+    fn only_a_32_byte_okm_makes_an_aes_256_gcm_key() {
+        assert_eq!(KEY_LEN, 32);
+        assert_eq!(
+            aead_key(&fips(), &[7; KEY_LEN]).map(|k| k.algorithm()),
+            Ok(AEAD)
+        );
         for len in [KEY_LEN - 1, KEY_LEN + 1] {
-            assert!(matches!(
-                aead_key(&vec![7; len]),
-                Err(CryptoError::Primitive)
-            ));
+            assert_eq!(
+                aead_key(&fips(), &vec![7; len]).err(),
+                Some(CryptoError::AeadKeyLength {
+                    algorithm: AEAD,
+                    bytes: len
+                })
+            );
         }
     }
 

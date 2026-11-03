@@ -70,6 +70,24 @@ mod admitted_is_read_only {}
 #[allow(dead_code)]
 mod ephemeral_keys_agree_once {}
 
+/// An `aead::Key` is not `Clone`, so its seal count cannot be copied:
+///
+/// ```
+/// use crypto_profile_awslc4::{AeadAlgorithm, Options, Profile, admit, aead};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let key = aead::Key::new(&a, AeadAlgorithm::Aes256Gcm, &[7; 32]).unwrap();
+/// assert_eq!(key.algorithm(), AeadAlgorithm::Aes256Gcm);
+/// ```
+///
+/// ```compile_fail,E0599
+/// use crypto_profile_awslc4::{AeadAlgorithm, Options, Profile, admit, aead};
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let key = aead::Key::new(&a, AeadAlgorithm::Aes256Gcm, &[7; 32]).unwrap();
+/// let copy = key.clone();
+/// ```
+#[allow(dead_code)]
+mod aead_keys_are_not_clone {}
+
 #[cfg(not(crypto_profile_provider_direct))]
 crypto_profile::provider!(crate::provider_arms);
 #[cfg(crypto_profile_provider_direct)]

@@ -21,6 +21,12 @@ pub fn ecdh_shared_secret(
     key.shared_secret(peer)
 }
 
+/// Sets the number of seals `key` has made, for tests that reach the 2^32 limit without sealing
+/// 2^32 times. Never compiled outside `test` and `test-support`: it can reset a key's count.
+pub fn aead_set_invocations(key: &crate::aead::Key, invocations: u64) {
+    key.set_invocations(invocations);
+}
+
 /// What a completed handshake negotiated.
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
