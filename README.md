@@ -13,7 +13,7 @@ One reviewed place for an application's cryptographic choices:
 - **Profiles.** Named, inspectable algorithm sets an application selects at start-up that report unavailable module-line entries in `Resolved::excluded` and refuse any empty family. See [Profiles](#profiles).
 - **A rustls provider** whose key-exchange groups, cipher suites and signature schemes follow a `tls::Policy`, and `fips::assert_fips_module`, which an application calls at start-up to refuse to run unless the loaded module reports FIPS mode.
 - **The functions applications need beside TLS,** each implemented once:
-  - hashing;
+  - hashing (SHA-2 and SHA-3) under a profile, through `digest::digest` and `digest::Hasher`;
   - random bytes;
   - AEAD (AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305) under a profile, through `aead::Key`, with nonces chosen inside the crate, never by the caller (AES-GCM by the module's seal, ChaCha20-Poly1305 from the module's DRBG), and a limit of 2^32 seals per `aead::Key`;
   - HMAC under a profile, admitted with `admit` outside TLS and keyed through `hmac::Key`;
