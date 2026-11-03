@@ -385,6 +385,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn plaintext_bounds_are_checked_before_the_counter() {
         for &d in AeadAlgorithm::ALL {
             let max = usize::try_from(d.max_plaintext_len()).unwrap();
@@ -405,6 +406,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_pointer_width = "64")]
     fn chacha20_poly1305_stops_one_byte_below_the_modules_refusal() {
         let d = D::Chacha20Poly1305;
         let module_refuses = 274_877_906_880usize;

@@ -15,7 +15,7 @@ One reviewed place for an application's cryptographic choices:
 - **The functions applications need beside TLS,** each implemented once:
   - hashing;
   - random bytes;
-  - AEAD (AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305) under a profile, through `aead::Key`, with nonces chosen inside the crate, never by the caller (AES-GCM by the module's seal, ChaCha20-Poly1305 from the module's DRBG), and a limit of 2^32 seals per key;
+  - AEAD (AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305) under a profile, through `aead::Key`, with nonces chosen inside the crate, never by the caller (AES-GCM by the module's seal, ChaCha20-Poly1305 from the module's DRBG), and a limit of 2^32 seals per `aead::Key`;
   - HMAC under a profile, admitted with `admit` outside TLS and keyed through `hmac::Key`;
   - key derivation (HKDF and the one-step KDF) under a profile, admitted with `admit` and derived through `kdf::derive`;
   - ECDH key agreement under a profile, through `ecdh::EphemeralKey` and `ecdh::StaticKey`, each completing into `kdf` (HKDF, the one-step KDF, or RFC 9180's DHKEM) so the shared secret never leaves the crate;

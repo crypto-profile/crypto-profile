@@ -352,7 +352,7 @@ pub const UNRESTRICTED: ProfileSpec = ProfileSpec {
 ///   beyond 2030" (p. 8).
 /// - AEADs: AES-256-GCM, AES-128-GCM. "The only approved symmetric cryptographic algorithm is
 ///   ... AES" (p. 6); AES-128, AES-192 or AES-256, "preferably AES-256", ISM-1769 (p. 11); GCM,
-///   named on p. 11 and required by ISM-1771 (p. 15), ISM-0998 (p. 16) and ISM-1369 (p. 20).
+///   named on p. 11, preferred by ISM-1771 (p. 15) and ISM-0998 (p. 16), and required for TLS by ISM-1369 (p. 20).
 ///   AES-128 "will not be approved beyond 2030" (p. 11). ChaCha20-Poly1305 excluded: p. 6 and
 ///   ISM-0471 (p. 7).
 pub const PREFERRED: ProfileSpec = ProfileSpec {

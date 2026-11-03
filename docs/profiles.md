@@ -426,12 +426,12 @@ ECDH outside TLS is governed through `ecdh` ([decision 0011](decisions/0011-ecdh
 
 ## 13. AEAD
 
-AES-GCM and ChaCha20-Poly1305 outside TLS are governed through `aead` ([decision 0013](decisions/0013-aead.md)). `admit(profile, options)` gives an `Admitted` whose `aeads()` are the profile's AEADs on this backend's module, independently of `resolve` and of the TLS cipher suites. `aead::Key::new(&admitted, algorithm, key)` refuses an AEAD the profile does not admit (`CryptoError::NotInProfile`, or `CryptoError::Unavailable` for one the module line lacks), then a key of the wrong length (`CryptoError::AeadKeyLength`).
+AES-GCM and ChaCha20-Poly1305 outside TLS are governed through `aead` ([decision 0013](decisions/0013-aead.md)). `admit(profile, options)` gives an `Admitted` whose `aeads()` are the profile's AEADs on this backend's module, independently of `resolve` and of the TLS cipher suites. `aead::Key::new(&admitted, algorithm, key)` refuses an AEAD the profile does not admit (`CryptoError::NotInProfile`, or `CryptoError::Unavailable` for one the module line lacks), then a key of the wrong length (`CryptoError::AeadKeyLength`), then a key the module refuses (`CryptoError::AeadKey`).
 
 | Profile | AEADs, in preference order | Source |
 |---|---|---|
 | `unrestricted` | AES-256-GCM, AES-128-GCM, ChaCha20-Poly1305 | The inventory |
-| `preferred` | AES-256-GCM, AES-128-GCM | ISM p. 6: "The only approved symmetric cryptographic algorithm is … AES"; ISM-1769 (p. 11), AES-128, AES-192 or AES-256, "preferably AES-256"; GCM is named on p. 11 and required by ISM-1771 (p. 15), ISM-0998 (p. 16) and ISM-1369 (p. 20). ChaCha20-Poly1305 excluded: p. 6 and ISM-0471 (p. 7) |
+| `preferred` | AES-256-GCM, AES-128-GCM | ISM p. 6: "The only approved symmetric cryptographic algorithm is … AES"; ISM-1769 (p. 11), AES-128, AES-192 or AES-256, "preferably AES-256"; GCM is named on p. 11, preferred by ISM-1771 (p. 15) and ISM-0998 (p. 16), and required for TLS by ISM-1369 (p. 20). ChaCha20-Poly1305 excluded: p. 6 and ISM-0471 (p. 7) |
 | `cnsa2` | AES-256-GCM | CNSSP 15 (December 2024) Annex B ¶1 (p. B-1), AES "Use 256 bit keys"; ¶8a and footnote 1 (p. 5): RFC 9151 §4 (AES-256 in GCM) and RFC 9206 as protocol guidance |
 | `cnsa1` | AES-256-GCM | CNSSP 15 (2016) Annex B ¶1 (p. B-1), "Use 256 bit keys"; RFC 9151 §4. `Options::cnsa1_unclassified_nss` does not widen it: ¶2b (p. B-2) names RSA, DH and SHA-256 only |
 | `bsi` | AES-256-GCM, AES-128-GCM | TR-02102-1 Table 3.1 (p. 40), Table 3.2 (p. 42) and §3.1.2 (pp. 42-43). ChaCha20-Poly1305 excluded: §3.2 (p. 44), "no dedicated stream ciphers are recommended" |
