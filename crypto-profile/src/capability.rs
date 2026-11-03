@@ -318,9 +318,7 @@ const fn tested_on(l: Linkage, dynamic: &'static str, static_build: &'static str
 
 /// Each `AlgorithmTested` cell cites the lowest-numbered AWS-LC FIPS 4.0.0 CAVP certificate of its
 /// linkage (A7839-A7876 dynamic build, A7886-A7923 static build) that alone shows every operation
-/// the cell needs, with the parameters the citation names (decision 0004). The certificates
-/// each build's cells cite show the same capabilities as their counterparts, so every cell has
-/// the same verdict on both.
+/// the cell needs, with the parameters the citation names (decision 0004).
 const fn four_x_cell(l: Linkage, a: Algorithm) -> Approval {
     match a {
         Algorithm::Signature(s) => match s {
