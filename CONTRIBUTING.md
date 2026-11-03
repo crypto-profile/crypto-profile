@@ -143,7 +143,7 @@ The suite checks the backend against the known answers, walks every capability c
 - `fips::assert_fips_client_config` and `fips::assert_fips_server_config`;
 - `signature::KeyPair::generate`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`, with `KeyPair` implementing `rcgen::SigningKey`;
 - `digest::digest`;
-- `aead::NONCE_LEN` and `aead::Key`, with `new`, `algorithm`, `seal_in_place` and `open_in_place`, and `test_support::aead_set_invocations` under the `test-support` feature;
+- `aead::NONCE_LEN`, `aead::TAG_LEN` and `aead::Key`, with `new`, `algorithm`, `seal_in_place` and `open_in_place`, and `test_support::aead_set_invocations` under the `test-support` feature;
 - `admit`, `Admitted::macs`, `Admitted::kdfs`, `Admitted::key_agreements`, `Admitted::aeads` and `Admitted::admit_aead`, `hmac::Key`, `kdf::derive` and `kdf::Spec` (`Hkdf`, `OneStep`, `Dhkem`), and `ecdh::EphemeralKey` with `generate`, `algorithm`, `public_key` and `agree`, and `ecdh::StaticKey` with `from_pkcs8_der`, `from_scalar`, `algorithm`, `public_key` and `agree`;
 - `test_support::ecdh_shared_secret`, under the `test-support` feature;
 - `sealbox::PrivateKey::generate`, `sealbox::PrivateKey::from_pkcs8_der`, `sealbox::PrivateKey::recipient`, `sealbox::seal` and `sealbox::open`.

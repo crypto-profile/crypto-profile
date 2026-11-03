@@ -15,7 +15,7 @@ One reviewed place for an application's cryptographic choices:
 - **The functions applications need beside TLS,** each implemented once:
   - hashing;
   - random bytes;
-  - AEAD (AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305) under a profile, through `aead::Key`, with module-chosen nonces and a limit of 2^32 seals per key;
+  - AEAD (AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305) under a profile, through `aead::Key`, with nonces chosen inside the crate, never by the caller (AES-GCM by the module's seal, ChaCha20-Poly1305 from the module's DRBG), and a limit of 2^32 seals per key;
   - HMAC under a profile, admitted with `admit` outside TLS and keyed through `hmac::Key`;
   - key derivation (HKDF and the one-step KDF) under a profile, admitted with `admit` and derived through `kdf::derive`;
   - ECDH key agreement under a profile, through `ecdh::EphemeralKey` and `ecdh::StaticKey`, each completing into `kdf` (HKDF, the one-step KDF, or RFC 9180's DHKEM) so the shared secret never leaves the crate;
@@ -43,7 +43,7 @@ Select exactly one backend per build. Both declare `links = "crypto-profile-back
 
 AWS-LC 3.6.0 is a later revision of the AWS-LC FIPS 3.x line whose 3.1.0 release has the certificates below.
 
-The modules' certificate status, as recorded when this file was last updated (CMVP lists read 2026-11-03). The [CMVP lists](https://csrc.nist.gov/projects/cryptographic-module-validation-program) are authoritative.
+The modules' certificate status, as recorded when this file was last updated (CMVP Modules In Process list last updated 11/2/2026, captured 2026-11-02). The [CMVP lists](https://csrc.nist.gov/projects/cryptographic-module-validation-program) are authoritative.
 
 | Module | Status |
 |---|---|
