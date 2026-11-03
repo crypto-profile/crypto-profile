@@ -22,6 +22,6 @@ Message authentication is the first family the rule decides. CNSSP 15 names no M
 
 ## Consequences
 
-`cnsa2` HMAC works on the 3.x line, where `resolve(Cnsa2, ..)` refuses for want of ML-DSA, and a caller that only uses TLS is never refused for a cell outside TLS. Later families (HKDF, ECDH, ML-KEM, RSA-OAEP) join `Admitted` and are decided under the same rule. *(Note 2026-11-01: HKDF has joined, [decision 0010](0010-hkdf.md).)* *(Note 2026-11-02: ECDH and the one-step KDF have joined, [decision 0011](0011-ecdh-and-one-step-kdf.md).)*
+`cnsa2` HMAC works on the 3.x line, where `resolve(Cnsa2, ..)` refuses for want of ML-DSA, and a caller that only uses TLS is never refused for a cell outside TLS. Later families (HKDF, ECDH, ML-KEM, RSA-OAEP) join `Admitted` and are decided under the same rule. *(Note 2026-11-01: HKDF has joined, [decision 0010](0010-hkdf.md).)* *(Note 2026-11-02: ECDH and the one-step KDF have joined, [decision 0011](0011-ecdh-and-one-step-kdf.md).)* *(Note 2026-11-03: AEAD has joined, as `Family::Aead`, [decision 0013](0013-aead.md).)*
 
 A format whose MAC is fixed at HMAC-SHA256 cannot be produced under `cnsa2`, or under `cnsa1` without the option. The crate refuses it; it does not carve out an exception.

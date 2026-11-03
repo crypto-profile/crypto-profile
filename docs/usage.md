@@ -36,9 +36,9 @@ AWS-LC supports static FIPS builds only on Linux ("Static FIPS builds are only s
 | Module | Static | Dynamic |
 |---|---|---|
 | AWS-LC FIPS 3.1.0 | certificate #5314 | certificate #5298 |
-| AWS-LC FIPS 4.x | separate submission, in CMVP review | separate submission, in CMVP review |
+| AWS-LC FIPS 4.x | "AWS-LC 4 Cryptographic Module (static)", FIPS 140-3, in CMVP review | "AWS-LC 4 Cryptographic Module (dynamic)", FIPS 140-3, in CMVP review |
 
-Sources: the CMVP certificate pages for [#5314](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5314) and [#5298](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5298); AWS-LC `crypto/fipsmodule/FIPS.md:13-14` (3.1) and `:56-60` (4.0, "Modules in Process").
+Sources: the CMVP certificate pages for [#5314](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5314) and [#5298](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5298); the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), last updated 11/2/2026, where both 4.x modules are in "Comment Resolution - Lab (10/22/2026)".
 
 **How the crate knows.** aws-lc-fips-sys 0.14.2 reports `link_kind` (`static` or `dylib`) as build metadata (`aws-lc-fips-sys-0.14.2/README.md:11-24`), and aws-lc-rs re-exports it under its own `links` key (`aws-lc-rs-1.18.2/build.rs:53-124`). The backend's build script (`crypto-profile-awslc4/build.rs`) reads the variable matching `DEP_AWS_LC_RS_*_SYS_LINK_KIND`, found by prefix because the name embeds the aws-lc-rs version. If the variable is absent or holds anything other than `static` or `dylib`, the build fails; the crate never guesses a linkage.
 
@@ -62,7 +62,12 @@ The crate never claims:
 - that it is validated or certified itself;
 - that a deployment's operating system or processor is a tested operational environment. Both 3.x certificates list Amazon Linux 2023 only, on Graviton4 and Xeon Platinum 8375C, each with and without PAA (#5314 and #5298 security policies, Table 3, p. 7). Whether a deployment falls inside a certificate's operational environments is the deployer's determination.
 
-**The 4.x module** is submitted, in CMVP review, with no security policy published (AWS-LC `FIPS.md:56-60`; the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), read 2026-10-28). With no policy to cite, every 4.x static cell is `Approval::Unverified`. A 4.x dynamic cell is `Approval::AlgorithmTested { cavp }` where one AWS-LC FIPS 4.0.0 CAVP certificate (A7839-A7876) shows every operation the cell needs, and `Unverified` otherwise ([decision 0004](decisions/0004-algorithm-tested.md)). An `AlgorithmTested` cell claims only the parameters its `cavp` names; for a signature scheme, rustls verifies a wider range of peer keys (decision 0004 §5). 28 dynamic cells are `AlgorithmTested`, the three HMAC and three HKDF cells on A7855 among them, and 19 are `Unverified`: X25519 and the three hybrid groups, because CAVP has no algorithm for them; the ChaCha20 suites, because none exists; TLS 1.2 and TLS 1.3, because no certificate shows a TLS 1.2 KDF with extended master secret or a TLS 1.3 KDF; and the ECDSA keys and the AES-GCM suites, because no single certificate shows every operation they need. `certificate()` reports `CertStatus::InProcess` with no number (`crypto-profile/src/capability.rs`, `four_x`, `four_x_dynamic` and `certificate`). Neither `AlgorithmTested` nor `Unverified` is ever treated as approved (`Approval::is_approved`).
+**The 4.x modules**, static and dynamic, are submitted, in CMVP review, with no security policy published: the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), last updated 11/2/2026, lists "AWS-LC 4 Cryptographic Module (dynamic)" and "AWS-LC 4 Cryptographic Module (static)", FIPS 140-3, both in "Comment Resolution - Lab (10/22/2026)". Neither is validated. With no policy to cite, a 4.x cell is `Approval::AlgorithmTested { cavp }` where one AWS-LC FIPS 4.0.0 CAVP certificate of its own build (A7839-A7876 dynamic, A7886-A7923 static) shows every operation the cell needs, and `Unverified` otherwise ([decision 0004](decisions/0004-algorithm-tested.md)). An `AlgorithmTested` cell claims only the parameters its `cavp` names; for a signature scheme, rustls verifies a wider range of peer keys (decision 0004 §5). On each build, of the 57 cells, 36 are `AlgorithmTested`, 19 `Unverified` and 2 `NotApproved`, the same cells on both:
+- `AlgorithmTested`: the three RSA keys; ML-DSA-87 and Ed25519 (keys and schemes), ML-KEM-1024, the three SHA-2 hashes, the three HMACs and the three HKDFs; the three ECDSA and six RSA handshake schemes and the three one-step KDFs; secp384r1, secp256r1 and ECDH on the three NIST curves; AES-128-GCM and AES-256-GCM outside TLS;
+- `Unverified`: the three hybrid groups, because CAVP has no algorithm for them; the nine cipher suites, because no ChaCha20 certificate exists and no single certificate shows every operation the AES-GCM suites need; TLS 1.2 and TLS 1.3, because no certificate shows a TLS 1.2 KDF with extended master secret or a TLS 1.3 KDF; the four ECDSA keys, because no single certificate shows every operation they need; and ChaCha20-Poly1305 outside TLS;
+- `NotApproved`: X25519, as a TLS group and in key agreement (FIPS 140-3 IG C.K Resolution 5, p. 160).
+
+On the 3.x line, 42 cells are `Approved`, 11 `NotApproved` and 4 `Unverified` (the three hybrid groups and TLS 1.3). `certificate()` reports `CertStatus::InProcess` with no number for both 4.x builds (`crypto-profile/src/capability.rs`, `four_x`, `four_x_cell` and `certificate`). Neither `AlgorithmTested` nor `Unverified` is ever treated as approved (`Approval::is_approved`).
 
 ## 4. Build prerequisites
 
@@ -162,7 +167,7 @@ The backend answers two questions that are easy to confuse.
 
 **The crate's approval report.** `fips::approval(alg)` returns the capability cell's `Approval` for this build's module, as its source states it: the module's security policy, or, for a module with none published, the CAVP certificate behind an `AlgorithmTested` cell (decision 0004). It is void (`Unverified`) unless the module reports FIPS mode at the time of the call (`crypto-profile/src/backend_body/fips.rs`, `approval` and `approval_given`).
 - On 3.x, the hybrid groups are `Unverified`, because neither 3.x security policy mentions hybrid key establishment, and so is TLS 1.3, because the policies' TLS KDF row lists v1.0/1.1 and v1.2 only (`crypto-profile/src/capability.rs`, `three_x`).
-- On 4.x, no security policy is published: a static-build cell is `Unverified`, and a dynamic-build cell is `AlgorithmTested` or `Unverified` as §3 lists. Neither is approved.
+- On 4.x, no security policy is published: a cell of either build is `AlgorithmTested`, `Unverified` or, for X25519, `NotApproved`, as §3 lists. None is approved.
 
 `assert_module_approves(&resolved)` refuses with `NotFips` unless the module reports FIPS mode, and with `PolicyEmpty` if a family of the resolved profile is empty. Otherwise it checks the capability cell of every algorithm the resolved profile names, as `fips::approval` reports it in FIPS mode, and refuses every cell that is not `Approved`, `AlgorithmTested` included ([`profiles.md`](profiles.md) §6).
 
@@ -179,15 +184,15 @@ aws-lc-fips-sys has a start-up check that aborts the process if the runtime libr
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** Its schemes are narrowed, but its algorithm is not checked against any profile; `Resolved::certified_key` checks it (`crypto-profile/src/backend_body/tls.rs`, `load_private_key`).
 - **Key generation.** `signature::KeyPair::generate` generates any algorithm it is asked for. Calling `Resolved::admit_key` where a key is generated or a certificate request is made is the consumer's call.
 - **The peer leaf's key size and curve.** See [`profiles.md`](profiles.md) §4, item 1.
-- **`csr`, `aead` and `digest`.** No profile governs them ([`profiles.md`](profiles.md) §5).
-- **`sealbox`'s AES-256-GCM.** A profile governs the sealed box's ECDH on P-384 and HKDF-SHA384, and refuses the box unless it admits both; its AEAD is not checked. `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`: the domain is the box's HKDF salt, and the module does not mark an HKDF call with an empty salt approved.
+- **`csr` and `digest`.** No profile governs them ([`profiles.md`](profiles.md) §5).
+- **The sealed box's empty domain.** A profile governs the sealed box's ECDH on P-384, HKDF-SHA384 and AES-256-GCM, and refuses the box unless it admits all three. `sealbox::seal` and `sealbox::open` also refuse an empty `domain` with `CryptoError::SealDomainEmpty`: the domain is the box's HKDF salt, and the module does not mark an HKDF call with an empty salt approved.
 - **Server session resumption and identity checks.** A resumed server session is not re-verified, so a configuration whose client verifier carries an identity check must not share `session_storage` or a `ticketer` with one whose check differs. Default stores are per configuration ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Identity checks that change over time.** A resumed session does not call the check again, so a check whose answer can change, such as a revocable allow-list, needs a new verifier and configuration when it changes, or resumption disabled ([decision 0009](decisions/0009-peer-identity-check.md)).
 - **Unauthenticated clients and identity checks.** With `allow_unauthenticated`, a client that presents no certificate is admitted without the identity check.
 
 ## 10. Which module a build is
 
-The 4.x backend compiles aws-lc-fips-sys 0.14.2, which bundles AWS-LC 4.2.0 source (`AWSLC_VERSION_NUMBER_STRING "4.2.0"`, `aws-lc-fips-sys-0.14.2/aws-lc/include/openssl/base.h:125`). The module in CMVP review is AWS-LC-FIPS v4.0 (AWS-LC `FIPS.md:56-60`). Whether this build is the submitted module is unverified, and the crate does not claim it.
+The 4.x backend compiles aws-lc-fips-sys 0.14.2, which bundles AWS-LC 4.2.0 source (`AWSLC_VERSION_NUMBER_STRING "4.2.0"`, `aws-lc-fips-sys-0.14.2/aws-lc/include/openssl/base.h:125`). The modules in CMVP review are "AWS-LC 4 Cryptographic Module (static)" and "(dynamic)" (CMVP Modules In Process list, last updated 11/2/2026), and their CAVP certificates read "AWS-LC FIPS 4.0.0". Whether this build is the submitted module is unverified, and the crate does not claim it.
 
 Each backend's build refuses any module but its bundled source build. aws-lc-fips-sys can instead link a system-installed AWS-LC, one named by `AWS_LC_FIPS_SYS_SYSTEM_DIR` or one it detects through `OPENSSL_DIR`, `OPENSSL_INCLUDE_DIR`/`OPENSSL_LIB_DIR` or pkg-config (`aws-lc-fips-sys-0.14.2/builder/main.rs:730-779`). The backend's build script requires the one library name aws-lc-rs reports to be the bundled build's prefixed name (`aws_lc_fips_0_14_2_crypto` on 4.x, `aws_lc_fips_0_13_17_crypto` on 3.x), and otherwise fails. On a host with a system AWS-LC installed, build with `AWS_LC_FIPS_SYS_USE_SYSTEM=0`. On 4.x, a bundled build with `AWS_LC_FIPS_SYS_NO_PREFIX` set is refused too, because its reported name cannot be told apart from a system module's; 0.13.17 reports the prefixed name either way. `ci/module-guard-negative.sh` checks the 4.x refusal end to end, and `ci/build-script-tests.sh` tests both guards.
 
@@ -202,6 +207,8 @@ The crate holds secret material in zeroizing buffers that are sized at allocatio
 - **HKDF inside the module.** `kdf::derive` returns a `kdf::DerivedKey` that is `Zeroizing` from allocation. aws-lc-rs copies the secret into a buffer it wipes on drop (`aws-lc-rs-1.18.2/src/hkdf.rs:181`, `:293`), and the pseudorandom key exists only inside the module's one-shot `HKDF()`. SP 800-56C Rev. 2 §5 requires that key to "be destroyed (along with all other sensitive, locally stored data) after its use" (p. 20). The 4.x module meets that: `HKDF()` calls `OPENSSL_cleanse` on it on every exit (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:50`). The 3.x module does not: `HKDF()` returns with it still in a stack buffer it never cleanses (`aws-lc-fips-sys-0.13.17/aws-lc/crypto/fipsmodule/hkdf/hkdf.c:32-56`), and the crate cannot fix that without changing the validated module. aws-lc-rs copies the salt and `info` into buffers it does not wipe (`aws-lc-rs-1.18.2/src/hkdf.rs:132`, `:440-465`). SP 800-56C Rev. 2 §5.1 and RFC 5869 §3.1 allow a secret salt, but this crate supports only a non-secret salt and a non-secret `info`: put no secret in either. The secret slice stays the caller's.
 
 - **The ECDH shared secret inside the module.** `ecdh`'s `agree` hands the shared secret Z straight to `kdf`, and no function returns it. The module's `pkey_ec_derive` leaves Z in a stack buffer it never cleanses, on both lines (`aws-lc-fips-sys-0.14.2/aws-lc/crypto/fipsmodule/evp/p_ec.c:144-175`; 0.13.17 `:145-176`), and aws-lc-rs 1.17.4 frees an unwiped heap copy on the 3.x line (`aws-lc-rs-1.17.4/src/evp_pkey.rs:532-540`); 1.18.2 wipes its copy. SP 800-56A Rev. 3 §5.8 requires each copy of Z to be "destroyed immediately following its use" (p. 53); the crate cannot fix the module's copies ([decision 0011](decisions/0011-ecdh-and-one-step-kdf.md)). The crate treats the one-step KDF's `fixed_info` as non-secret: put no secret in it. The `test-support` feature adds `test_support::ecdh_shared_secret`, which returns Z: enabling `test-support` outside test builds exposes the raw shared secret, so a production dependency graph must not enable it. A static key's private scalar is cleansed by the module when the key drops; the slice passed to `StaticKey::from_scalar` or `from_pkcs8_der` stays the caller's.
+
+- **AEAD keys and per-call state.** An `aead::Key` holds its key schedule in the module's AEAD contexts, which the module cleanses when the key drops (`OPENSSL_free`). Each AES-GCM seal and open copies the GHASH key table into a stack context the module never cleanses, and ChaCha20-Poly1305 leaves its one-time Poly1305 key on the stack, on both lines ([decision 0013](decisions/0013-aead.md), residual 5). The slice passed to `aead::Key::new` stays the caller's. The `test-support` feature adds `test_support::aead_set_invocations`, which resets a key's seal count: a production dependency graph must not enable it.
 
 A further residual holds no secret material:
 
@@ -221,7 +228,8 @@ The conformance suite (`crypto-profile/src/conformance/`, run by every backend) 
 | Ed25519 verification | Wycheproof, and RFC 8032 §7.1 tests 1 to 3 |
 | RSA PKCS#1 v1.5 SHA-384 verification | Wycheproof at 2048, 3072 and 4096 bits |
 | ML-DSA-87 verification | Wycheproof, the cases with an empty context only; the backend verifies under the empty context |
-| AES-256-GCM | Wycheproof, 256-bit keys with 96-bit nonces and 128-bit tags, opening only |
+| AES-128-GCM, AES-256-GCM | Wycheproof, 128- and 256-bit keys with 96-bit nonces and 128-bit tags (40 valid and 27 invalid cases at 128 bits, 39 and 27 at 256), opening only; the other groups, with other nonce lengths or 192-bit keys, are skipped |
+| ChaCha20-Poly1305 | Wycheproof, 96-bit nonces (256 valid and 60 invalid cases), opening only; the 9 cases with other nonce lengths are skipped |
 | HMAC-SHA256, HMAC-SHA384, HMAC-SHA512 | Wycheproof: full-length tags sign and verify, or are refused when invalid; truncated tags are refused, and the valid ones match the leading bytes of the full tag |
 | HKDF-SHA256, HKDF-SHA384, HKDF-SHA512 | RFC 5869 Appendix A cases 1-3 (SHA-256); Wycheproof: every valid case derives under `unrestricted`, and under every other profile that admits the hash when `info` is non-empty (empty-`info` cases are refused with `KdfInfoEmpty`), and outputs over 255 × HashLen are refused |
 | One-step KDF, SHA-256, SHA-384, SHA-512 | NIST ACVP sample cases (KDA OneStep for SHA2-512; the one-step KDF of the KAS-IFC sample for SHA2-256 and SHA2-384); RFC 7518 Appendix C (Concat KDF) |
@@ -237,7 +245,7 @@ Gaps, and what covers them instead:
 - **ECDSA P-521/SHA-384** has no Wycheproof file. Its signatures are checked by the CSR test, which verifies every algorithm's CSR signature (`crypto-profile/src/backend_body/csr.rs`, `every_algorithm_signs_a_request_for_its_own_key`): on 4.x with rustls-webpki, on 3.x with the crate's own verifiers, because rustls-webpki's aws-lc-rs verifiers need aws-lc-rs 1.18. The 3.x check is therefore not independent; independence rests on the 4.x differential test, which compares the shared verifiers with the upstream ones.
 - **ML-DSA** has no 3.x known answers: every ML-DSA operation is refused as unavailable.
 - **RSA-PSS** is verified through TLS handshakes over the three PSS schemes, not through Wycheproof. `signature::verify` checks PKCS#1 v1.5, the scheme this crate's RSA keys sign CSRs with.
-- **AES-GCM sealing** has no known answers, because sealing never takes a caller's nonce: the module chooses it (`crypto-profile/src/backend_body/aead.rs`). Round trips and refusals cover sealing.
+- **AEAD sealing** has no known answers, because sealing never takes a caller's nonce: the module chooses it (`crypto-profile/src/backend_body/aead.rs`). Round trips, a check that 2^16 seals never repeat a nonce, and refusals cover sealing.
 
 ## 13. HMAC under a profile
 
@@ -255,7 +263,7 @@ key.verify(message, tag.as_ref())?;
 - **Comparing tags.** `Key::verify` compares in constant time, and refuses a tag of any other length with `CryptoError::MacVerify`, whatever the cause. It is the only constant-time comparison: comparing `Tag::as_ref()` bytes directly is not one, and `Tag` has no `==`.
 - **Full-length tags only.** The crate offers no truncation.
 - **The near-term option.** `Options::cnsa1_unclassified_nss` admits HMAC-SHA256 and HKDF-SHA256 under `cnsa1` for systems that protect only UNCLASSIFIED NSS data or separate communities of interest, under CNSSP 15 (2016) Annex B ¶2b. Setting it is the caller's claim that the system qualifies.
-- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC or KDF the profile does not admit. Read it through `profile()`, `options()`, `macs()`, `kdfs()`, `key_agreements()` and `excluded()`.
+- **`Admitted` is read-only.** Unlike `Resolved`, its fields are private and `admit` is its only constructor, so a caller cannot add a MAC or KDF the profile does not admit. Read it through `profile()`, `options()`, `macs()`, `kdfs()`, `key_agreements()`, `aeads()` and `excluded()`.
 - **Asserting approval.** Name the families you use: `assert_admitted_approved(&admitted, &[Family::Mac])` walks the MAC cells only. Under `unrestricted` it passes the MACs wherever the module approves them; the empty-`info` refusal (§14) applies only when `Family::Kdf` is named. A TLS family is refused with `CryptoError::FamilyNotAdmitted`, because `assert_module_approves` checks TLS, and an empty list approves nothing.
 - **Panics.** `Key::new`, `sign` and `verify` panic only if the module's HMAC context fails, as aws-lc-rs's do.
 
@@ -302,10 +310,11 @@ let key_bytes: &[u8] = key.as_bytes();
 - **Signature keys.** `KeyPair::from_pkcs8(a, der)` is `KeyPair::from_pkcs8_der(a, der)`, `key.pkcs8_der()` is `key.to_pkcs8_der()`, and `key.public_key()` returns `&[u8]`: call `.to_vec()` where you kept the `Vec`.
 - **Hashing.** `digest::digest(h, data)` and `digest::Hasher::new(h)` return a `Result`; a hash the backend does not implement is refused with `CryptoError::Unavailable`.
 - **Parse errors.** `ParseAlgorithmError` and `ParseProfileError` are `#[non_exhaustive]` tuple structs: read the message with `.0`, and do not construct or destructure one.
-- **New variants and fields.** `Algorithm` has `Mac`, `Kdf` and `KeyAgreement`; `ProfileSpec` has `macs`, `kdfs` and `key_agreements`; `Options` has `cnsa1_unclassified_nss`; `CryptoError` and `Family` have new variants.
+- **New variants and fields.** `Algorithm` has `Mac`, `Kdf`, `KeyAgreement` and `Aead`; `ProfileSpec` has `macs`, `kdfs`, `key_agreements` and `aeads`; `Options` has `cnsa1_unclassified_nss`; `CryptoError` and `Family` have new variants.
 - **`ParseAlgorithmError`** displays as "unknown algorithm name …", since `KeyAgreementAlgorithm` parses with it too.
 - **Sealed boxes.** `sealbox::seal` and `sealbox::open` refuse an empty `domain` with `CryptoError::SealDomainEmpty`; a blob sealed under an empty domain by 0.9.0 no longer opens.
-- **Sealed boxes take an `Admitted`.** `sealbox::seal(&admitted, recipient, ..)`, `sealbox::open(&admitted, key, ..)`, `sealbox::PrivateKey::generate(&admitted)` and `sealbox::PrivateKey::from_pkcs8_der(&admitted, der)` refuse unless the profile admits ECDH on P-384 and HKDF-SHA384, so `bsi` and `cnsa2` refuse the sealed box. `PrivateKey::to_pkcs8_der()` is unchanged; `PrivateKey::public_key()` is now the raw public key, the uncompressed point, and the `PublicKey` to seal to is `PrivateKey::recipient()`. The wire format is unchanged: a blob sealed by 0.9.0 opens.
+- **Sealed boxes take an `Admitted`.** `sealbox::seal(&admitted, recipient, ..)`, `sealbox::open(&admitted, key, ..)`, `sealbox::PrivateKey::generate(&admitted)` and `sealbox::PrivateKey::from_pkcs8_der(&admitted, der)` refuse unless the profile admits ECDH on P-384, HKDF-SHA384 and AES-256-GCM, so `bsi` and `cnsa2` refuse the sealed box. `PrivateKey::to_pkcs8_der()` is unchanged; `PrivateKey::public_key()` is now the raw public key, the uncompressed point, and the `PublicKey` to seal to is `PrivateKey::recipient()`. The wire format is unchanged: a blob sealed by 0.9.0 opens.
+- **AEAD keys take an `Admitted`.** `aead::Aes256GcmKey::new(&key)` is `aead::Key::new(&admitted, AeadAlgorithm::Aes256Gcm, &key)`, which refuses under a profile that does not admit AES-256-GCM, and takes a slice whose length it checks (`CryptoError::AeadKeyLength`); `aead::KEY_LEN` is `AeadAlgorithm::key_len()`. `seal_in_place` and `open_in_place` keep their shapes. A key refuses its 2^32 + 1th seal with `CryptoError::AeadLimit`, and a plaintext over the algorithm's maximum with `CryptoError::AeadPlaintextLength` (§17).
 
 ## 16. ECDH key agreement
 
@@ -349,7 +358,7 @@ let shared_secret = sender.agree(&recipient_public_key, &spec, 48)?; // Encap; s
 let same = recipient.agree(&enc, &spec, 48)?; // Decap
 ```
 
-The HPKE key schedule and AEAD are the caller's, from `shared_secret` through `kdf::derive` with its own labelled inputs. Any other pairing is refused with `CryptoError::KdfSpecMismatch`, and another length with `CryptoError::KdfOutputLength`.
+Any other pairing is refused with `CryptoError::KdfSpecMismatch`, and another length with `CryptoError::KdfOutputLength`. The HPKE key schedule is the caller's, from `shared_secret` through `kdf::derive` with its own labelled inputs. Its AEAD seal cannot use `aead`: HPKE's nonces come from its key schedule (RFC 9180 §5.2), and `aead` seals only under nonces the module chooses (§17). `aead` can open what an HPKE sender sealed.
 
 JOSE `ECDH-ES` (RFC 7518 §4.6) is the same shape with `kdf::Spec::OneStep`, `fixed_info` being the encoded AlgorithmID, PartyUInfo, PartyVInfo and SuppPubInfo, and an `algorithm` whose hash is SHA-256.
 
@@ -361,3 +370,27 @@ JOSE `ECDH-ES` (RFC 7518 §4.6) is the same shape with `kdf::Spec::OneStep`, `fi
 - **What the protocol must do.** `ecdh` does not authenticate the public keys, check that a static key's owner holds its private key, keep a static key to one purpose, or confirm the agreed key (SP 800-56A Rev. 3 §5.6.3.2, §5.9). Authenticate the recipient's public key before you send to it.
 - **The test hook.** `test_support::ecdh_shared_secret` returns the raw shared secret for the conformance suite. It exists only in test builds and under the `test-support` feature: enabling `test-support` outside test builds exposes the raw shared secret, so a production dependency graph must not enable it.
 - **What it cannot produce.** CMS ECDH (RFC 5753) needs the ANSI X9.63 KDF, which AWS-LC lacks.
+
+## 17. AEAD under a profile
+
+```rust
+use crypto_profile_awslc4::{AeadAlgorithm, Family, Options, Profile, admit, aead, assert_admitted_approved};
+
+let admitted = admit(Profile::Fips1403, Options::default());
+assert_admitted_approved(&admitted, &[Family::Aead])?; // passes on 3.x; refuses on 4.x today, see profiles.md §13
+let key = aead::Key::new(&admitted, AeadAlgorithm::Aes256Gcm, &key_bytes)?;
+let mut buf = plaintext.to_vec();
+let (nonce, tag) = key.seal_in_place(aad, &mut buf)?;
+buf.extend_from_slice(&tag);
+// store nonce beside buf; later:
+let opened = key.open_in_place(&nonce, aad, &mut buf)?;
+```
+
+- **Algorithms.** AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305 (RFC 5116; SP 800-38D; RFC 8439). Which profiles admit which: [`profiles.md`](profiles.md) §13. Only `unrestricted` admits ChaCha20-Poly1305.
+- **Refusals.** `Key::new` refuses, in order, an AEAD the profile does not admit (`CryptoError::NotInProfile`, or `CryptoError::Unavailable`), a key that is not `algorithm.key_len()` bytes (`CryptoError::AeadKeyLength`), and a key the module refuses (`CryptoError::AeadKey`). `seal_in_place` refuses a plaintext over `algorithm.max_plaintext_len()` (`CryptoError::AeadPlaintextLength`), then a seal past the limit (`CryptoError::AeadLimit`). `open_in_place` refuses anything that does not authenticate, and a buffer shorter than the tag, with `CryptoError::AeadOpen`.
+- **Nonces.** The seal chooses the nonce and returns it; store it beside the ciphertext. AES-GCM's is drawn inside the module's seal (FIPS 140-3 IG C.H Scenario 2), ChaCha20-Poly1305's from the module's DRBG. There is no way to seal under a nonce of your own, because such a seal is off the approved path on both module lines (SP 800-38D §9.1); opening takes any stored nonce.
+- **The seal limit.** A key seals at most 2^32 times (SP 800-38D §8.3), then refuses with `CryptoError::AeadLimit`: make a new key. A seal refused after its length check still counts; opening never counts. The count is per `Key` object and is not shared: `Key` is not `Clone`, but the same key bytes loaded twice, in one process or two, get two counts, so keep a key's bytes in one `Key`.
+- **Tags** are always 16 bytes. A CMS message sealed with RFC 5084's default 12-octet tag cannot be opened.
+- **The sealed box** uses AES-256-GCM through `aead::Key`, so its profile must admit AES-256-GCM too.
+- **Formats `aead` cannot seal.** HPKE and MLS nonces come from their key schedules, and `aead` takes no caller nonce for a seal ([`profiles.md`](profiles.md) §4, item 20).
+- **`Debug`** prints the algorithm only.

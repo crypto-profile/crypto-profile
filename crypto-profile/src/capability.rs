@@ -40,7 +40,7 @@ pub struct Module {
 pub enum CertStatus {
     /// On the CMVP validated list.
     Validated,
-    /// Submitted and in CMVP review.
+    /// Submitted and in CMVP review, on the CMVP Modules In Process list; not validated.
     InProcess,
     /// Moved to the CMVP historical list.
     Historical,

@@ -110,7 +110,9 @@ pub use backend_body::{
 pub use backend_body::{aead, csr, digest, ecdh, fips, hmac, kdf, random, sealbox, signature, tls};
 
 /// The AWS-LC FIPS module (line and linkage) this build links. Its certificate status is
-/// [`fips::certificate()`]; for 4.x the module is in CMVP review.
+/// [`fips::certificate()`]; for 4.x the module is in CMVP review: the CMVP Modules In Process
+/// list, last updated 11/2/2026, shows both 4.x modules in "Comment Resolution - Lab
+/// (10/22/2026)".
 pub const MODULE: Module = Module {
     line: ModuleLine::AwsLcFips4,
     linkage: if cfg!(crypto_profile_static) {

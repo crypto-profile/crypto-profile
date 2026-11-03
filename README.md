@@ -15,7 +15,7 @@ One reviewed place for an application's cryptographic choices:
 - **The functions applications need beside TLS,** each implemented once:
   - hashing;
   - random bytes;
-  - AEAD with module-chosen nonces;
+  - AEAD (AES-128-GCM, AES-256-GCM and ChaCha20-Poly1305) under a profile, through `aead::Key`, with module-chosen nonces and a limit of 2^32 seals per key;
   - HMAC under a profile, admitted with `admit` outside TLS and keyed through `hmac::Key`;
   - key derivation (HKDF and the one-step KDF) under a profile, admitted with `admit` and derived through `kdf::derive`;
   - ECDH key agreement under a profile, through `ecdh::EphemeralKey` and `ecdh::StaticKey`, each completing into `kdf` (HKDF, the one-step KDF, or RFC 9180's DHKEM) so the shared secret never leaves the crate;
@@ -27,7 +27,7 @@ One reviewed place for an application's cryptographic choices:
 ## What it is not
 
 - **Not new cryptography.** Every primitive is AWS-LC's, through aws-lc-rs.
-- **Not a validated module, and not FIPS-certified.** The validation status that matters is the AWS-LC FIPS module's, which this crate builds on; it does not change it or claim it. See the AWS-LC [FIPS module status](https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/FIPS.md).
+- **Not a validated module, and not FIPS-certified.** The validation status that matters is the AWS-LC FIPS module's, which this crate builds on; it does not change it or claim it. See the [CMVP lists](https://csrc.nist.gov/projects/cryptographic-module-validation-program) and the table below.
 - Not affiliated with AWS or the rustls project.
 
 ## AWS-LC FIPS module lines
@@ -43,12 +43,12 @@ Select exactly one backend per build. Both declare `links = "crypto-profile-back
 
 AWS-LC 3.6.0 is a later revision of the AWS-LC FIPS 3.x line whose 3.1.0 release has the certificates below.
 
-The modules' certificate status, as recorded when this file was last updated (read 2026-10-28). The [CMVP lists](https://csrc.nist.gov/projects/cryptographic-module-validation-program) are authoritative.
+The modules' certificate status, as recorded when this file was last updated (CMVP lists read 2026-11-03). The [CMVP lists](https://csrc.nist.gov/projects/cryptographic-module-validation-program) are authoritative.
 
 | Module | Status |
 |---|---|
 | AWS-LC FIPS 3.1.0 | Validated: certificate [#5314](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5314) (static) and [#5298](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5298) (dynamic). |
-| AWS-LC FIPS 4.x | Submitted, in CMVP review; no security policy published yet. Static and dynamic are separate submissions ([AWS-LC `FIPS.md`](https://github.com/aws/aws-lc/blob/main/crypto/fipsmodule/FIPS.md), "Modules in Process"). |
+| AWS-LC FIPS 4.x | Submitted, in CMVP review; not validated, and no security policy published yet. Static and dynamic are separate submissions: the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), last updated 11/2/2026, shows "AWS-LC 4 Cryptographic Module (dynamic)" and "AWS-LC 4 Cryptographic Module (static)", FIPS 140-3, both in "Comment Resolution - Lab (10/22/2026)". |
 
 aws-lc-rs 1.17.4 with its `fips` feature compiles ML-DSA out, so the 3.x backend refuses ML-DSA with a typed error rather than fall back. See [`docs/usage.md`](docs/usage.md) for linkage, what the crate claims, and its limits.
 
