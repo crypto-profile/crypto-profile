@@ -3,8 +3,7 @@
 use crate::provider::verify::Verifier;
 use aws_lc_rs::signature::{self, KeyPair as _, PqdsaKeyPair};
 use rustls::pki_types::{
-    AlgorithmIdentifier, PrivatePkcs8KeyDer, SignatureVerificationAlgorithm,
-    SubjectPublicKeyInfoDer, alg_id,
+    PrivatePkcs8KeyDer, SignatureVerificationAlgorithm, SubjectPublicKeyInfoDer, alg_id,
 };
 use rustls::sign::{Signer, SigningKey, public_key_to_spki};
 use rustls::{Error, SignatureAlgorithm, SignatureScheme};
@@ -27,6 +26,8 @@ static ML_DSA_87: &dyn SignatureVerificationAlgorithm = &Verifier {
     verification_alg: &signature::ML_DSA_87,
 };
 
+const SCHEME: SignatureScheme = SignatureScheme::ML_DSA_87;
+
 pub(crate) static PQDSA_ALL: &[&dyn SignatureVerificationAlgorithm] =
     &[ML_DSA_44, ML_DSA_65, ML_DSA_87];
 pub(crate) static PQDSA_MAPPING: &[(SignatureScheme, &[&dyn SignatureVerificationAlgorithm])] =
@@ -37,36 +38,33 @@ pub(crate) fn load_pqdsa(pkcs8: &PrivatePkcs8KeyDer<'_>) -> Option<Arc<dyn Signi
 }
 
 struct PqdsaSigningKey {
-    kind: PqdsaKeyKind,
     inner: Arc<PqdsaKeyPair>,
 }
 
 impl PqdsaSigningKey {
     fn from_pkcs8(pkcs8: &PrivatePkcs8KeyDer<'_>) -> Option<Self> {
-        PqdsaKeyKind::iter().find_map(|kind| {
-            kind.load(pkcs8.secret_pkcs8_der()).map(|key_pair| Self {
-                kind,
-                inner: Arc::new(key_pair),
+        crate::backend_body::signature::ml_dsa_87_key(pkcs8.secret_pkcs8_der())
+            .ok()
+            .map(|key| Self {
+                inner: Arc::new(crate::backend_arms::MlDsaKey::into_pair(key)),
             })
-        })
     }
 }
 
 impl SigningKey for PqdsaSigningKey {
     fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
-        if !offered.contains(&self.kind.scheme()) {
+        if !offered.contains(&SCHEME) {
             return None;
         }
 
         Some(Box::new(PqdsaSigner {
             key: self.inner.clone(),
-            kind: self.kind,
         }))
     }
 
     fn public_key(&self) -> Option<SubjectPublicKeyInfoDer<'_>> {
         Some(public_key_to_spki(
-            &self.kind.alg_id(),
+            &alg_id::ML_DSA_87,
             self.inner.public_key(),
         ))
     }
@@ -79,14 +77,13 @@ impl SigningKey for PqdsaSigningKey {
 impl Debug for PqdsaSigningKey {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PqdsaSigningKey")
-            .field("scheme", &self.kind.scheme())
+            .field("scheme", &SCHEME)
             .finish_non_exhaustive()
     }
 }
 
 struct PqdsaSigner {
     key: Arc<PqdsaKeyPair>,
-    kind: PqdsaKeyKind,
 }
 
 impl Signer for PqdsaSigner {
@@ -106,55 +103,15 @@ impl Signer for PqdsaSigner {
     }
 
     fn scheme(&self) -> SignatureScheme {
-        self.kind.scheme()
+        SCHEME
     }
 }
 
 impl Debug for PqdsaSigner {
     fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
         f.debug_struct("PqdsaSigner")
-            .field("scheme", &self.kind.scheme())
+            .field("scheme", &SCHEME)
             .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Copy)]
-enum PqdsaKeyKind {
-    MlDsa44,
-    MlDsa65,
-    MlDsa87,
-}
-
-impl PqdsaKeyKind {
-    fn iter() -> impl Iterator<Item = Self> {
-        [Self::MlDsa44, Self::MlDsa65, Self::MlDsa87].into_iter()
-    }
-
-    fn load(self, der: &[u8]) -> Option<PqdsaKeyPair> {
-        let module = |alg| PqdsaKeyPair::from_pkcs8(alg, der).ok();
-        match self {
-            Self::MlDsa44 => module(&signature::ML_DSA_44_SIGNING),
-            Self::MlDsa65 => module(&signature::ML_DSA_65_SIGNING),
-            Self::MlDsa87 => crate::backend_body::signature::ml_dsa_87_key(der)
-                .ok()
-                .map(crate::backend_arms::MlDsaKey::into_pair),
-        }
-    }
-
-    fn scheme(&self) -> SignatureScheme {
-        match self {
-            Self::MlDsa44 => SignatureScheme::ML_DSA_44,
-            Self::MlDsa65 => SignatureScheme::ML_DSA_65,
-            Self::MlDsa87 => SignatureScheme::ML_DSA_87,
-        }
-    }
-
-    fn alg_id(&self) -> AlgorithmIdentifier {
-        match self {
-            Self::MlDsa44 => alg_id::ML_DSA_44,
-            Self::MlDsa65 => alg_id::ML_DSA_65,
-            Self::MlDsa87 => alg_id::ML_DSA_87,
-        }
     }
 }
 
@@ -175,61 +132,47 @@ mod tests {
     }
 
     #[test]
-    fn every_ml_dsa_parameter_set_loads_and_signs_only_with_its_own_scheme() {
-        let kinds = [
-            (
-                &signature::ML_DSA_44_SIGNING,
-                &signature::ML_DSA_44,
-                SignatureScheme::ML_DSA_44,
-                alg_id::ML_DSA_44,
-                "ML_DSA_44",
-            ),
-            (
-                &signature::ML_DSA_65_SIGNING,
-                &signature::ML_DSA_65,
-                SignatureScheme::ML_DSA_65,
-                alg_id::ML_DSA_65,
-                "ML_DSA_65",
-            ),
-            (
-                &signature::ML_DSA_87_SIGNING,
-                &signature::ML_DSA_87,
+    fn an_ml_dsa_87_key_loads_and_signs_only_with_its_own_scheme() {
+        let der = pkcs8(&signature::ML_DSA_87_SIGNING);
+        let pair = PqdsaKeyPair::from_pkcs8(&signature::ML_DSA_87_SIGNING, der.secret_pkcs8_der())
+            .unwrap();
+        let key = load_pqdsa(&der).unwrap();
+        assert_eq!(key.algorithm(), SignatureAlgorithm::Unknown(0));
+        assert_eq!(
+            key.public_key(),
+            Some(public_key_to_spki(&alg_id::ML_DSA_87, pair.public_key()))
+        );
+        assert_eq!(
+            format!("{key:?}"),
+            "PqdsaSigningKey { scheme: ML_DSA_87, .. }"
+        );
+        assert!(
+            key.choose_scheme(&[SignatureScheme::ML_DSA_44, SignatureScheme::ML_DSA_65])
+                .is_none()
+        );
+        let signer = key
+            .choose_scheme(&[
+                SignatureScheme::ECDSA_NISTP384_SHA384,
                 SignatureScheme::ML_DSA_87,
-                alg_id::ML_DSA_87,
-                "ML_DSA_87",
-            ),
-        ];
-        for (signing, verify, scheme, spki, name) in kinds {
-            let der = pkcs8(signing);
-            let pair = PqdsaKeyPair::from_pkcs8(signing, der.secret_pkcs8_der()).unwrap();
-            let key = load_pqdsa(&der).unwrap();
-            assert_eq!(key.algorithm(), SignatureAlgorithm::Unknown(0));
-            assert_eq!(
-                key.public_key(),
-                Some(public_key_to_spki(&spki, pair.public_key()))
-            );
-            assert_eq!(
-                format!("{key:?}"),
-                format!("PqdsaSigningKey {{ scheme: {name}, .. }}")
-            );
-            let others: Vec<SignatureScheme> =
-                kinds.iter().map(|k| k.2).filter(|s| *s != scheme).collect();
-            assert!(key.choose_scheme(&others).is_none(), "{name}");
-            let signer = key
-                .choose_scheme(&[SignatureScheme::ECDSA_NISTP384_SHA384, scheme])
-                .unwrap();
-            assert_eq!(signer.scheme(), scheme);
-            assert_eq!(
-                format!("{signer:?}"),
-                format!("PqdsaSigner {{ scheme: {name}, .. }}")
-            );
-            let sig = signer.sign(b"message").unwrap();
-            assert!(
-                signature::UnparsedPublicKey::new(verify, pair.public_key().as_ref())
-                    .verify(b"message", &sig)
-                    .is_ok(),
-                "{name}"
-            );
+            ])
+            .unwrap();
+        assert_eq!(signer.scheme(), SignatureScheme::ML_DSA_87);
+        assert_eq!(
+            format!("{signer:?}"),
+            "PqdsaSigner { scheme: ML_DSA_87, .. }"
+        );
+        let sig = signer.sign(b"message").unwrap();
+        assert!(
+            signature::UnparsedPublicKey::new(&signature::ML_DSA_87, pair.public_key().as_ref())
+                .verify(b"message", &sig)
+                .is_ok()
+        );
+    }
+
+    #[test]
+    fn an_ml_dsa_44_or_65_key_is_not_loaded() {
+        for alg in [&signature::ML_DSA_44_SIGNING, &signature::ML_DSA_65_SIGNING] {
+            assert!(load_pqdsa(&pkcs8(alg)).is_none());
         }
     }
 

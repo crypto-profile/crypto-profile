@@ -3586,7 +3586,7 @@ mod tests {
     }
 
     #[test]
-    fn an_ml_dsa_44_or_65_key_loads_but_no_policy_signs_with_it() {
+    fn an_ml_dsa_44_or_65_key_is_refused_because_no_policy_signs_with_it() {
         for (fixture, scheme) in [
             (
                 super::super::backend::MlDsa::fixture44(),
@@ -3609,10 +3609,9 @@ mod tests {
                 continue;
             };
             let der = PrivateKeyDer::Pkcs8(pkcs8.to_vec().into());
-            let key = load_private_key(&one13(K::Secp384r1), der).unwrap();
-            assert!(
-                key.choose_scheme(&[scheme, rustls::SignatureScheme::ML_DSA_87])
-                    .is_none(),
+            assert_eq!(
+                load_private_key(&one13(K::Secp384r1), der).err(),
+                Some(CryptoError::Tls(TlsError::PrivateKey)),
                 "{scheme:?}"
             );
         }

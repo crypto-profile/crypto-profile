@@ -397,18 +397,26 @@ pub(crate) fn ml_dsa_87_key(der: &[u8]) -> Result<MlDsaKey, CryptoError> {
     let (seed, carried) = pkcs8::ml_dsa_87(der).ok_or_else(refused)?;
     let key = MlDsa::from_seed(seed)?;
     let expanded = key.expanded_key().map_err(|_| refused())?;
-    matches_carried(a, carried.expanded_key, &expanded)?;
-    matches_carried(a, carried.public_key, &key.public_key()?)?;
-    Ok(key)
+    let own = key.public_key()?;
+    if carried_is(carried.expanded_key, &expanded) && carried_is(carried.public_key, &own) {
+        Ok(key)
+    } else {
+        Err(refused())
+    }
 }
 
 // RFC 5915 §3, RFC 8410 §7, RFC 9881 §6 and §8.2: a carried publicKey or expandedKey that is not
 // the key's own marks a corrupt key.
 fn matches_carried(a: S, carried: Option<&[u8]>, own: &[u8]) -> Result<(), CryptoError> {
-    match carried {
-        Some(key) if key != own => Err(CryptoError::SignaturePrivateKey { algorithm: a }),
-        _ => Ok(()),
+    if carried_is(carried, own) {
+        Ok(())
+    } else {
+        Err(CryptoError::SignaturePrivateKey { algorithm: a })
     }
+}
+
+fn carried_is(carried: Option<&[u8]>, own: &[u8]) -> bool {
+    carried.is_none_or(|key| key == own)
 }
 
 // SEC 1 §2.3.3 (uncompressed), RFC 8032 §5.1.5, FIPS 204 Table 2, RFC 8017 A.1.1: the raw key.
