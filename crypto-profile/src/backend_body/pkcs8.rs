@@ -1,16 +1,33 @@
 //! Strict DER for the private keys the crate imports (decision 0011): RFC 5958 §2
 //! OneAsymmetricKey, and the structure each key type carries inside it.
 
-// One DER element with a minimal definite length of at most two bytes: its tag, its value and the
-// bytes after it.
+// X.690 §8.1.2: the identifier's first octet and the bytes after the identifier. A tag number
+// above 30, and only such a number, takes the high-tag-number form, in minimal base-128 octets.
+fn identifier(der: &[u8]) -> Option<(u8, &[u8])> {
+    let (&first, rest) = der.split_first()?;
+    if first & 0x1f != 0x1f {
+        return Some((first, rest));
+    }
+    let end = rest.iter().position(|octet| octet & 0x80 == 0)?;
+    let minimal = match &rest[..=end] {
+        [only] => *only > 30,
+        [leading, ..] => *leading != 0x80,
+        [] => false,
+    };
+    minimal.then_some((first, &rest[end + 1..]))
+}
+
+// One DER element with a minimal definite length of at most two bytes: its identifier's first
+// octet, its value and the bytes after it.
 pub(crate) fn split_tlv(der: &[u8]) -> Option<(u8, &[u8], &[u8])> {
-    let (tag, header, len) = match der {
-        [t, n @ 0..=0x7f, ..] => (*t, 2, usize::from(*n)),
-        [t, 0x81, n @ 0x80..=0xff, ..] => (*t, 3, usize::from(*n)),
-        [t, 0x82, hi @ 0x01..=0xff, lo, ..] => (*t, 4, usize::from(u16::from_be_bytes([*hi, *lo]))),
+    let (tag, after) = identifier(der)?;
+    let (header, len) = match after {
+        [n @ 0..=0x7f, ..] => (1, usize::from(*n)),
+        [0x81, n @ 0x80..=0xff, ..] => (2, usize::from(*n)),
+        [0x82, hi @ 0x01..=0xff, lo, ..] => (3, usize::from(u16::from_be_bytes([*hi, *lo]))),
         _ => return None,
     };
-    let (value, rest) = der[header..].split_at_checked(len)?;
+    let (value, rest) = after[header..].split_at_checked(len)?;
     Some((tag, value, rest))
 }
 
@@ -117,7 +134,6 @@ impl EcCurve {
     }
 }
 
-/// P-256.
 pub(crate) const P256: EcCurve = EcCurve {
     algorithm: &[
         0x30, 0x13, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x08, 0x2a, 0x86,
@@ -127,7 +143,6 @@ pub(crate) const P256: EcCurve = EcCurve {
     point_len: 65,
 };
 
-/// P-384.
 pub(crate) const P384: EcCurve = EcCurve {
     algorithm: &[
         0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b, 0x81,
@@ -137,7 +152,6 @@ pub(crate) const P384: EcCurve = EcCurve {
     point_len: 97,
 };
 
-/// P-521.
 pub(crate) const P521: EcCurve = EcCurve {
     algorithm: &[
         0x30, 0x10, 0x06, 0x07, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x02, 0x01, 0x06, 0x05, 0x2b, 0x81,
@@ -222,7 +236,7 @@ fn positive(der: &[u8]) -> Option<(&[u8], &[u8])> {
 
 /// Whether `der` is an RFC 5958 §2 PrivateKeyInfo, version v1, with rsaEncryption and NULL
 /// parameters, whose privateKey is one RFC 8017 A.1.2 RSAPrivateKey: version 0 (two primes), then
-/// nine positive, minimal INTEGERs and nothing after them, the modulus of exactly `bits` bits and
+/// eight positive, minimal INTEGERs and nothing after them, the modulus of exactly `bits` bits and
 /// the public exponent 65537.
 pub(crate) fn rsa(der: &[u8], bits: usize) -> bool {
     let Some((private_key, _)) = one_asymmetric_key(der, RSA_ALGORITHM, false) else {
@@ -321,6 +335,38 @@ mod tests {
             with(&[0x30, 0x83, 0x00, 0x01, 0x00], 0x100),
         ] {
             assert!(!is_one_sequence(&bad), "{bad:02x?}");
+        }
+    }
+
+    #[test]
+    fn a_tag_number_above_30_alone_takes_the_minimal_high_tag_number_form() {
+        let empty: &[u8] = &[];
+        for (der, first) in [
+            (&[0x1f, 0x1f, 0x01, 0x00][..], 0x1f),
+            (&[0x9f, 0x28, 0x01, 0x00], 0x9f),
+            (&[0xbf, 0x81, 0x00, 0x01, 0x00], 0xbf),
+            (&[0x1f, 0x8f, 0xff, 0xff, 0xff, 0x7f, 0x01, 0x00], 0x1f),
+            (&[0x1f, 0x90, 0x80, 0x80, 0x80, 0x00, 0x01, 0x00], 0x1f),
+            (
+                &[0x1f, 0x81, 0x80, 0x80, 0x80, 0x80, 0x00, 0x01, 0x00],
+                0x1f,
+            ),
+        ] {
+            assert_eq!(
+                split_tlv(der),
+                Some((first, &[0x00][..], empty)),
+                "{der:02x?}"
+            );
+        }
+        for bad in [
+            &[0x1f, 0x01, 0x00][..],
+            &[0x1f, 0x1e, 0x01, 0x00],
+            &[0x1f, 0x80, 0x1f, 0x01, 0x00],
+            &[0x1f],
+            &[0x1f, 0x81],
+            &[0x1f, 0x81, 0x80],
+        ] {
+            assert_eq!(split_tlv(bad), None, "{bad:02x?}");
         }
     }
 
@@ -639,7 +685,7 @@ mod tests {
     }
 
     #[test]
-    fn an_rsa_key_is_two_primes_of_nine_positive_minimal_integers() {
+    fn an_rsa_key_is_version_0_then_eight_positive_minimal_integers() {
         let pki = |inner: &[u8]| key(&V1, RSA_ALGORITHM, inner, &[]);
         for bits in [2048, 3072, 4096] {
             assert!(rsa(&pki(&rsa_private_key(bits, &[0x01, 0x00, 0x01])), bits));

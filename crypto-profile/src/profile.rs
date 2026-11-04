@@ -247,8 +247,9 @@ impl Profile {
 
 /// `unrestricted`: the crate's own set, following no published text. Not a government profile.
 ///
-/// - Versions: TLS 1.3, TLS 1.2. Suites: all nine. Groups: all seven. Schemes: all eleven. Keys:
-///   all nine (`crypto_profile::algorithm`, each family's `ALL`).
+/// - Versions: TLS 1.3, TLS 1.2. Suites: all nine. Groups: all seven. Schemes: all eleven
+///   (`crypto_profile::algorithm`, each family's `ALL`). Keys: the nine TLS key algorithms, every
+///   `SignatureAlgorithm` but the RSA-PSS variants.
 /// - MACs: every HMAC in the inventory.
 /// - KDFs: every HKDF and one-step KDF in the inventory.
 /// - Key agreement: ECDH on P-384, P-521 and P-256, and X25519: every curve the backends implement.
@@ -645,7 +646,9 @@ pub const BSI: ProfileSpec = ProfileSpec {
 /// - X25519 on its own excluded: IG C.K Resolution 5 (p. 160).
 /// - ECDSA P-256, P-384, P-521 schemes and keys: SP 800-140C list §6.2.3.1; SP 800-186 Table 2
 ///   (p. 7); SP 800-131A r2 Table 2 (p. 9).
-/// - ECDSA P-521 with SHA-384: FIPS 186-5 §6.4 (p. 23).
+/// - ECDSA P-521 with SHA-384 key, in TLS only: it signs handshakes with ecdsa_secp521r1_sha512,
+///   and SHA-384 names only its certificate request's signature; FIPS 186-5 §6.1.1 (p. 21) and
+///   §6.4 (pp. 23-24) (decision 0015).
 /// - Ed25519 scheme and key: SP 800-140C list §6.2.3.1; IG C.A (p. 136); IG C.K Additional
 ///   Comment 8 (p. 161).
 /// - RSA-PSS and RSA PKCS#1 v1.5 with SHA-256, 384, 512: FIPS 186-5 §5.4; IG C.F (pp. 142-143);
@@ -1047,7 +1050,7 @@ fn retain_available<X: Copy>(
     });
 }
 
-const fn unclassified_nss_macs(p: Profile) -> &'static [MacAlgorithm] {
+fn unclassified_nss_macs(p: Profile) -> &'static [MacAlgorithm] {
     match p {
         Profile::Cnsa1 => &[MacAlgorithm::HmacSha256],
         Profile::Unrestricted
@@ -1059,7 +1062,7 @@ const fn unclassified_nss_macs(p: Profile) -> &'static [MacAlgorithm] {
     }
 }
 
-const fn unclassified_nss_kdfs(p: Profile) -> &'static [KdfAlgorithm] {
+fn unclassified_nss_kdfs(p: Profile) -> &'static [KdfAlgorithm] {
     match p {
         Profile::Cnsa1 => &[KdfAlgorithm::HkdfSha256],
         Profile::Unrestricted
@@ -1071,7 +1074,7 @@ const fn unclassified_nss_kdfs(p: Profile) -> &'static [KdfAlgorithm] {
     }
 }
 
-const fn unclassified_nss_hashes(p: Profile) -> &'static [HashAlgorithm] {
+fn unclassified_nss_hashes(p: Profile) -> &'static [HashAlgorithm] {
     match p {
         Profile::Cnsa1 => &[HashAlgorithm::Sha256],
         Profile::Unrestricted
@@ -1083,7 +1086,7 @@ const fn unclassified_nss_hashes(p: Profile) -> &'static [HashAlgorithm] {
     }
 }
 
-const fn unclassified_nss_signatures(p: Profile) -> &'static [S] {
+fn unclassified_nss_signatures(p: Profile) -> &'static [S] {
     match p {
         Profile::Cnsa1 => &[S::Rsa2048Sha384Pss, S::Rsa2048Sha384],
         Profile::Unrestricted

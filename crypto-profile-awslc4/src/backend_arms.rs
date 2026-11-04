@@ -4,7 +4,6 @@ use zeroize::Zeroizing;
 
 pub(crate) struct MlDsa;
 
-/// An ML-DSA-87 key, held parsed.
 pub(crate) struct MlDsaKey(sig::PqdsaKeyPair);
 
 impl MlDsa {

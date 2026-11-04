@@ -1089,6 +1089,25 @@ mod tests {
     }
 
     #[test]
+    fn an_attribute_value_takes_the_high_tag_number_form_only_above_tag_30() {
+        let a = admit(Profile::Unrestricted, Options::default());
+        for k in EC_CURVES {
+            let p = Parts::of(StaticKey::generate(&a, k).unwrap());
+            let info = |value: &[u8]| p.info(&p.ec_key(), &[tlv(0xa0, &attr(0x14, value))]);
+            for value in [&[0x1f, 0x1f, 0x00][..], &[0x9f, 0x28, 0x00]] {
+                assert_taken(&a, k, &info(value), p.key.public_key());
+            }
+            for (why, value) in [
+                ("tag 1 in the high form", &[0x1f, 0x01, 0x00][..]),
+                ("tag 30 in the high form", &[0x1f, 0x1e, 0x00]),
+                ("a leading 0x80 tag octet", &[0x1f, 0x80, 0x1f, 0x00]),
+            ] {
+                assert_refused(&a, k, why, &info(value));
+            }
+        }
+    }
+
+    #[test]
     fn the_set_ofs_of_a_private_key_info_are_in_ascending_der_order() {
         let a = admit(Profile::Unrestricted, Options::default());
         let octets = |b: &[u8]| tlv(0x04, b);

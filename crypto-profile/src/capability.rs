@@ -191,8 +191,6 @@ const fn gcm_scenario_2(l: Linkage) -> &'static str {
     }
 }
 
-/// Ed25519 signing and verifying on the 3.x static module: its Approved Services table lists
-/// signature generation and verification with RSA and ECDSA only (decision 0015).
 const ED25519_5314: Approval = Approval::NotApproved {
     source: "AWS-LC FIPS 3.1.0 Security Policy, cert #5314 (static), Table 12 (Approved Services), pp. 24-25: Signature Generation and Signature Verification list RSA and ECDSA, not EdDSA",
 };

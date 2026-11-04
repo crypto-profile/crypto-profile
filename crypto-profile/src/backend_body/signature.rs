@@ -246,8 +246,8 @@ impl KeyPair {
     /// - Ed25519: `id-Ed25519` without parameters, privateKey the 32-byte `CurvePrivateKey` (RFC
     ///   8410 §3, §7), version v1, or v2 with the 32-byte publicKey;
     /// - RSA: version v1, `rsaEncryption` with NULL parameters, privateKey a two-prime RFC 8017
-    ///   A.1.2 `RSAPrivateKey` of nine positive, minimal INTEGERs, the modulus exactly `a`'s bit
-    ///   length and the public exponent 65537;
+    ///   A.1.2 `RSAPrivateKey` of version 0, then eight positive, minimal INTEGERs, the modulus
+    ///   exactly `a`'s bit length and the public exponent 65537;
     /// - ML-DSA-87: `id-ml-dsa-87` without parameters, privateKey the seed or both the seed and the
     ///   expanded key (RFC 9881 §6), version v1, or v2 with the 2,592-byte publicKey. The expanded
     ///   key alone is refused: the module cannot export such a key again.

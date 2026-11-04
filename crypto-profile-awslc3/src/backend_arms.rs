@@ -21,14 +21,10 @@ impl MlDsa {
         unavailable().map(MlDsaKey)
     }
     pub(crate) fn verifier() -> Result<&'static dyn sig::VerificationAlgorithm, CryptoError> {
-        Err(CryptoError::Unavailable(Algorithm::Signature(
-            SignatureAlgorithm::MlDsa87,
-        )))
+        unavailable()
     }
     pub(crate) fn rcgen_alg() -> Result<&'static rcgen::SignatureAlgorithm, CryptoError> {
-        Err(CryptoError::Unavailable(Algorithm::Signature(
-            SignatureAlgorithm::MlDsa87,
-        )))
+        unavailable()
     }
     #[cfg(test)]
     pub(crate) fn fixture44() -> Option<Zeroizing<Vec<u8>>> {
@@ -57,11 +53,7 @@ pub(crate) fn csr_oracle(
     a: SignatureAlgorithm,
 ) -> Result<&'static dyn rustls::pki_types::SignatureVerificationAlgorithm, CryptoError> {
     Ok(match a {
-        SignatureAlgorithm::MlDsa87 => {
-            return Err(CryptoError::Unavailable(Algorithm::Signature(
-                SignatureAlgorithm::MlDsa87,
-            )));
-        }
+        SignatureAlgorithm::MlDsa87 => return unavailable(),
         SignatureAlgorithm::EcdsaP256Sha256 => crate::provider::verify::ECDSA_P256_SHA256,
         SignatureAlgorithm::EcdsaP384Sha384 => crate::provider::verify::ECDSA_P384_SHA384,
         SignatureAlgorithm::EcdsaP521Sha384 => crate::provider::verify::ECDSA_P521_SHA384,

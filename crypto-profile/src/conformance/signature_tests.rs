@@ -6,7 +6,7 @@ macro_rules! __conformance_signature_tests {
         use $b::SignatureAlgorithm as S;
         use $b::*;
         use $crate::conformance::golden::SIGNATURE_GOLDEN;
-        use $crate::conformance::{__wycheproof_pss_cases, __wycheproof_sig_cases, vectors};
+        use $crate::conformance::{__wycheproof_pss_cases, vectors};
 
         fn unrestricted() -> Admitted {
             admit(Profile::Unrestricted, Options::default())
@@ -140,7 +140,8 @@ macro_rules! __conformance_signature_tests {
                 ),
             ] {
                 let (mut valid, mut invalid) = (0, 0);
-                for (pk, msg, sig, result, id) in __wycheproof_sig_cases(file, "publicKeyAsn", "") {
+                for (params, (pk, msg, sig, result, id)) in __wycheproof_pss_cases(file) {
+                    assert_eq!(params, "SHA-384/SHA-384/48", "{a} tcId {id}");
                     let verdict = signature::verify(&u, a, &pk, &msg, &sig);
                     match result.as_str() {
                         "valid" => {
