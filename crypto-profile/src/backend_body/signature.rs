@@ -2,7 +2,7 @@
 //! SubjectPublicKeyInfo shape check.
 use super::backend::{MlDsa, MlDsaKey};
 use super::pkcs8;
-use crate::{Admitted, Algorithm, CryptoError, SignatureAlgorithm as S, ensure};
+use crate::{Admitted, Algorithm, CryptoError, SignatureAlgorithm as S};
 use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::KeySize;
@@ -202,13 +202,6 @@ impl KeyPair {
     /// outside TLS, or its module line lacks (`Admitted::admit_signature`).
     pub fn generate(admitted: &Admitted, a: S) -> Result<KeyPair, CryptoError> {
         check(admitted, a)?;
-        KeyPair::generated(a)
-    }
-
-    /// A new TLS certificate key of algorithm `a`, for `csr` and the TLS tests: refuses an
-    /// algorithm that is not a TLS key algorithm, then one the module line lacks.
-    pub(crate) fn generate_tls_key(a: S) -> Result<KeyPair, CryptoError> {
-        tls_key(a)?;
         KeyPair::generated(a)
     }
 
@@ -517,13 +510,6 @@ fn checked_public_key(a: S, k: Kind, public_key: &[u8]) -> Result<(), CryptoErro
         Ok(())
     } else {
         Err(CryptoError::SignaturePublicKey { algorithm: a })
-    }
-}
-
-fn tls_key(a: S) -> Result<(), CryptoError> {
-    match a.tls_scheme() {
-        Some(_) => ensure(Algorithm::Signature(a)),
-        None => Err(CryptoError::NotTlsKey { algorithm: a }),
     }
 }
 
@@ -1199,36 +1185,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn only_a_tls_key_algorithm_makes_a_tls_key() {
-        for &a in S::ALL {
-            let want = match a.tls_scheme() {
-                None => Err(CryptoError::NotTlsKey { algorithm: a }),
-                Some(_) if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available => {
-                    Err(CryptoError::Unavailable(Algorithm::Signature(a)))
-                }
-                Some(_) => Ok(()),
-            };
-            assert_eq!(tls_key(a), want, "{a}");
-        }
-        for a in [
-            S::Rsa2048Sha384Pss,
-            S::Rsa3072Sha384Pss,
-            S::Rsa4096Sha384Pss,
-        ] {
-            assert_eq!(
-                KeyPair::generate_tls_key(a).err(),
-                Some(CryptoError::NotTlsKey { algorithm: a })
-            );
-        }
-        assert_eq!(
-            KeyPair::generate_tls_key(S::EcdsaP384Sha384)
-                .unwrap()
-                .algorithm(),
-            S::EcdsaP384Sha384
-        );
-    }
-
     fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
         let n = u16::try_from(value.len()).unwrap();
         let [hi, lo] = n.to_be_bytes();
@@ -1667,8 +1623,9 @@ mod tests {
             let k = KeyPair::generate(&u(), a).unwrap();
             let der = k.to_pkcs8_der().unwrap().to_vec();
             assert!(tls_loads(PrivateKeyDer::Pkcs8(der.into())), "{a}");
-            if a.tls_scheme().is_some() {
-                let k = KeyPair::generate_tls_key(a).unwrap();
+            let r = crate::resolve(Profile::Unrestricted, Options::default()).unwrap();
+            if r.keys.contains(&a) {
+                let k = crate::tls::CertificateKey::generate(&r, a).unwrap();
                 let der = k.to_pkcs8_der().unwrap().to_vec();
                 assert!(tls_loads(PrivateKeyDer::Pkcs8(der.into())), "{a}");
             }

@@ -439,10 +439,12 @@ pub fn load_private_key(
 /// `signature::KeyPair::from_pkcs8_der` only under an `Admitted` whose signatures admit it
 /// (decision 0016).
 ///
-#[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, tls};")]
+#[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, csr, resolve, tls};")]
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let r = resolve(Profile::Fips1403, Options::default())?;
 /// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384)?;
+/// let request = csr::generate_csr(&key, &csr::CsrParams::default())?;
+/// assert!(request.starts_with("-----BEGIN CERTIFICATE REQUEST-----"));
 /// let der = key.to_pkcs8_der()?;
 /// let again = tls::CertificateKey::from_pkcs8_der(&r, SignatureAlgorithm::EcdsaP384Sha384, &der)?;
 /// assert_eq!(again.public_key(), key.public_key());
@@ -493,6 +495,10 @@ impl CertificateKey {
     pub fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
         self.0.to_pkcs8_der()
     }
+
+    pub(crate) fn key_pair(&self) -> &KeyPair {
+        &self.0
+    }
 }
 
 fn admit_certificate_key(r: &Resolved, a: SignatureAlgorithm) -> Result<(), CryptoError> {
@@ -501,10 +507,11 @@ fn admit_certificate_key(r: &Resolved, a: SignatureAlgorithm) -> Result<(), Cryp
 }
 
 /// A `CertificateKey` does not sign, is not a `signature::KeyPair`, does not convert into one and
-/// is not `Clone`. This block compiles, and holds every import, path and call the `compile_fail`
-/// blocks below make before their last line:
+/// is not `Clone`, and `csr::generate_csr` and `Resolved::certified_key` take a `CertificateKey`,
+/// not a `signature::KeyPair`. This block compiles, and holds every import, path and call the
+/// `compile_fail` blocks below make before their last line:
 ///
-#[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, admit, resolve, signature, tls};")]
+#[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, admit, csr, resolve, signature, tls};")]
 /// fn signer<T: rcgen::SigningKey>(_: &T) {}
 /// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
 /// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
@@ -512,6 +519,8 @@ fn admit_certificate_key(r: &Resolved, a: SignatureAlgorithm) -> Result<(), Cryp
 /// let pair = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
 /// signer(&pair);
 /// let _: &signature::KeyPair = &pair;
+/// let request = csr::generate_csr(&key, &csr::CsrParams::default());
+/// let certified = r.certified_key(Vec::new(), &key);
 /// ```
 ///
 #[doc = concat!("```compile_fail,E0599\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, tls};")]
@@ -548,6 +557,19 @@ fn admit_certificate_key(r: &Resolved, a: SignatureAlgorithm) -> Result<(), Cryp
 /// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
 /// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
 /// let copy = key.clone();
+/// ```
+///
+#[doc = concat!("```compile_fail,E0308\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, admit, csr, signature};")]
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let key = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let request = csr::generate_csr(&key, &csr::CsrParams::default());
+/// ```
+///
+#[doc = concat!("```compile_fail,E0308\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, admit, resolve, signature};")]
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let key = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let certified = r.certified_key(Vec::new(), &key);
 /// ```
 mod certificate_keys_do_not_sign {}
 
@@ -1342,7 +1364,7 @@ mod tests {
         sans: Vec<rcgen::SanType>,
         extensions: Vec<rcgen::CustomExtension>,
     ) -> CertificateDer<'static> {
-        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let key = crate::test_support::key_pair(S::EcdsaP384Sha384).unwrap();
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
         params.subject_alt_names = sans;
         params.custom_extensions = extensions;
@@ -1742,12 +1764,12 @@ mod tests {
                 V::ChainSignature(CS::RsaPkcs1(H::Sha256)),
             ),
         ] {
-            let root_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+            let root_key = crate::test_support::key_pair(S::EcdsaP384Sha384).unwrap();
             let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
             params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
             let root = params.self_signed(&root_key).unwrap();
             let root_issuer = Issuer::new(params.clone(), &root_key);
-            let intermediate_key = crate::signature::KeyPair::generate_tls_key(algorithm).unwrap();
+            let intermediate_key = crate::test_support::key_pair(algorithm).unwrap();
             let intermediate = params.signed_by(&intermediate_key, &root_issuer).unwrap();
             let sha256_key = Sha256(&intermediate_key);
             let signing_key: &dyn rcgen::SigningKey = if sha256 {
@@ -1756,10 +1778,10 @@ mod tests {
                 &intermediate_key
             };
             let issuer = Issuer::new(params, signing_key);
-            let leaf_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+            let leaf_key = crate::test_support::certificate_key(S::EcdsaP384Sha384).unwrap();
             let leaf = CertificateParams::new(vec!["localhost".into()])
                 .unwrap()
-                .signed_by(&leaf_key, &issuer)
+                .signed_by(leaf_key.key_pair(), &issuer)
                 .unwrap();
             let mut roots = rustls::RootCertStore::empty();
             roots.add(root.der().clone()).unwrap();
@@ -1828,16 +1850,15 @@ mod tests {
             params.distinguished_name.push(DnType::CommonName, name);
             params
         };
-        let good_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
-        let bad_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP256Sha256).unwrap();
+        let good_key = crate::test_support::key_pair(S::EcdsaP384Sha384).unwrap();
+        let bad_key = crate::test_support::key_pair(S::EcdsaP256Sha256).unwrap();
         let good_params = ca_params("good root");
         let bad_params = ca_params("bad root");
         let good_root = good_params.self_signed(&good_key).unwrap();
         let bad_root = bad_params.self_signed(&bad_key).unwrap();
         let good_issuer = Issuer::new(good_params, &good_key);
         let bad_issuer = Issuer::new(bad_params, &bad_key);
-        let intermediate_key =
-            crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let intermediate_key = crate::test_support::key_pair(S::EcdsaP384Sha384).unwrap();
         let intermediate_params = ca_params("shared intermediate");
         let good = intermediate_params
             .signed_by(&intermediate_key, &good_issuer)
@@ -1876,10 +1897,10 @@ mod tests {
             .unwrap()
             .with_expiration_policy(webpki::ExpirationPolicy::Enforce)
             .build();
-        let leaf_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let leaf_key = crate::test_support::certificate_key(S::EcdsaP384Sha384).unwrap();
         let leaf = CertificateParams::new(vec!["localhost".into()])
             .unwrap()
-            .signed_by(&leaf_key, &issuer)
+            .signed_by(leaf_key.key_pair(), &issuer)
             .unwrap();
         let mut roots = rustls::RootCertStore::empty();
         roots.add(good_root.der().clone()).unwrap();
@@ -1990,17 +2011,17 @@ mod tests {
     fn peer_certificates_sha256_crls_stay_baseline_with_strict_sha384_paths() {
         use rcgen::{CertificateParams, CertificateRevocationListParams, SerialNumber};
         use rustls::server::danger::ClientCertVerifier;
-        let key = crate::signature::KeyPair::generate_tls_key(S::Rsa3072Sha384).unwrap();
+        let key = crate::test_support::key_pair(S::Rsa3072Sha384).unwrap();
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let root = params.self_signed(&Sha256(&key)).unwrap();
         let issuer = rcgen::Issuer::new(params.clone(), &key);
         let sha256 = Sha256(&key);
         let crl_issuer = rcgen::Issuer::new(params, &sha256);
-        let leaf_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let leaf_key = crate::test_support::certificate_key(S::EcdsaP384Sha384).unwrap();
         let mut params = CertificateParams::new(vec!["localhost".into()]).unwrap();
         params.serial_number = Some(SerialNumber::from(42));
-        let leaf = params.signed_by(&leaf_key, &issuer).unwrap();
+        let leaf = params.signed_by(leaf_key.key_pair(), &issuer).unwrap();
         let mut roots = rustls::RootCertStore::empty();
         roots.add(root.der().clone()).unwrap();
         let roots = Arc::new(roots);
@@ -2142,15 +2163,15 @@ mod tests {
         use rcgen::{CertificateParams, CertificateRevocationListParams, SerialNumber};
         use rustls::pki_types::{ServerName, UnixTime};
         use rustls::server::danger::ClientCertVerifier;
-        let ca_key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let ca_key = crate::test_support::key_pair(S::EcdsaP384Sha384).unwrap();
         let mut params = CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let ca = params.self_signed(&ca_key).unwrap();
         let issuer = rcgen::Issuer::new(params, &ca_key);
-        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let key = crate::test_support::certificate_key(S::EcdsaP384Sha384).unwrap();
         let mut leaf_params = CertificateParams::new(vec!["localhost".into()]).unwrap();
         leaf_params.serial_number = Some(SerialNumber::from(42));
-        let leaf = leaf_params.signed_by(&key, &issuer).unwrap();
+        let leaf = leaf_params.signed_by(key.key_pair(), &issuer).unwrap();
         let mut roots = rustls::RootCertStore::empty();
         roots.add(ca.der().clone()).unwrap();
         let roots = Arc::new(roots);
@@ -2797,7 +2818,7 @@ mod tests {
 
     #[test]
     fn every_builder_route_refuses_a_key_with_a_byte_after_it() {
-        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let key = crate::test_support::key_pair(S::EcdsaP384Sha384).unwrap();
         let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
             .unwrap()
             .self_signed(&key)
@@ -2829,7 +2850,7 @@ mod tests {
 
     #[test]
     fn a_server_config_with_x25519_is_not_fips() {
-        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let key = crate::test_support::key_pair(S::EcdsaP384Sha384).unwrap();
         let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
             .unwrap()
             .self_signed(&key)
@@ -2855,7 +2876,7 @@ mod tests {
 
     #[test]
     fn verifiers_carry_the_policys_schemes_in_the_canonical_order() {
-        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let key = crate::test_support::key_pair(S::EcdsaP384Sha384).unwrap();
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).unwrap();
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let mut roots = rustls::RootCertStore::empty();
@@ -3123,13 +3144,19 @@ mod tests {
             if a.tls_scheme().is_none() {
                 assert_eq!(
                     handshake(&one13(K::Secp384r1), &one13(K::Secp384r1), a).err(),
-                    Some(CryptoError::NotTlsKey { algorithm: a }.to_string())
+                    Some(
+                        CryptoError::KeyNotInProfile {
+                            profile: crate::Profile::Unrestricted,
+                            algorithm: a
+                        }
+                        .to_string()
+                    )
                 );
                 continue;
             }
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    crate::signature::KeyPair::generate_tls_key(a).err(),
+                    crate::test_support::key_pair(a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
@@ -3161,7 +3188,7 @@ mod tests {
         for (a, t) in cases {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    crate::signature::KeyPair::generate_tls_key(a).err(),
+                    crate::test_support::key_pair(a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
@@ -3204,7 +3231,7 @@ mod tests {
     }
 
     fn chosen(p: &Policy, a: S, offered: &[T]) -> Option<u16> {
-        let key = crate::signature::KeyPair::generate_tls_key(a).unwrap();
+        let key = crate::test_support::key_pair(a).unwrap();
         let der =
             rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().unwrap().to_vec().into());
         let offered: Vec<_> = offered.iter().map(|t| rustls_scheme(*t).unwrap()).collect();

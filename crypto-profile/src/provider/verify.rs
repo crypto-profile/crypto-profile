@@ -335,10 +335,8 @@ mod tests {
 
     #[test]
     fn an_ecdsa_signature_verifies_and_a_flipped_one_or_a_bad_point_prefix_does_not() {
-        let k = crate::signature::KeyPair::generate_tls_key(
-            crypto_profile::SignatureAlgorithm::EcdsaP256Sha256,
-        )
-        .unwrap();
+        let k = crate::test_support::key_pair(crypto_profile::SignatureAlgorithm::EcdsaP256Sha256)
+            .unwrap();
         let pk = k.public_key().to_vec();
         let sig = k.sign(b"m").unwrap();
         assert!(ECDSA_P256_SHA256.verify_signature(&pk, b"m", &sig).is_ok());

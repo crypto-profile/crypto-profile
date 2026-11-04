@@ -197,10 +197,8 @@ mod tests {
     #[test]
     #[expect(clippy::disallowed_methods)]
     fn the_key_provider_loads_through_any_supported_type() {
-        let k = crate::signature::KeyPair::generate_tls_key(
-            crypto_profile::SignatureAlgorithm::EcdsaP384Sha384,
-        )
-        .unwrap();
+        let k = crate::test_support::key_pair(crypto_profile::SignatureAlgorithm::EcdsaP384Sha384)
+            .unwrap();
         let key = KEYS
             .load_private_key(PrivateKeyDer::Pkcs8(
                 k.to_pkcs8_der().unwrap().to_vec().into(),
