@@ -3913,6 +3913,25 @@ mod tests {
     }
 
     #[test]
+    fn an_rsa_pss_key_in_a_reassigned_list_is_certified_under_the_policys_schemes() {
+        let mut r =
+            crate::resolve(crate::Profile::Unrestricted, crate::Options::default()).unwrap();
+        r.keys.push(S::Rsa3072Sha384Pss);
+        r.tls.signature_schemes = vec![T::RsaPssSha384];
+        let key = CertificateKey::generate(&r, S::Rsa3072Sha384Pss).unwrap();
+        let pki = crate::test_support::issue(S::EcdsaP384Sha384, key).unwrap();
+        let certified = r.certified_key(pki.chain, &pki.key).unwrap();
+        let offer = [
+            rustls::SignatureScheme::RSA_PSS_SHA512,
+            rustls::SignatureScheme::RSA_PSS_SHA384,
+            rustls::SignatureScheme::RSA_PSS_SHA256,
+        ];
+        let signer = certified.key.choose_scheme(&offer).unwrap();
+        assert_eq!(signer.scheme(), rustls::SignatureScheme::RSA_PSS_SHA384);
+        assert!(certified.key.choose_scheme(&offer[2..]).is_none());
+    }
+
+    #[test]
     fn a_certificate_key_the_module_line_lacks_is_unavailable_after_admission() {
         let mut r =
             crate::resolve(crate::Profile::Unrestricted, crate::Options::default()).unwrap();
