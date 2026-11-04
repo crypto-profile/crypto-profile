@@ -404,11 +404,15 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
 /// `p.signature_schemes`. The key's algorithm is not checked against any profile;
 /// `Resolved::certified_key` checks it.
 ///
-/// Each form is taken only in the structure its RFC defines (decision 0015): `Pkcs8` as
-/// [`signature::KeyPair::from_pkcs8_der`](crate::signature::KeyPair::from_pkcs8_der) takes it,
-/// `Sec1` as one RFC 5915 `ECPrivateKey` with parameters naming its curve, `Pkcs1` as one RFC 8017
-/// `RSAPrivateKey`. An RSA key is 2048, 3072 or 4096 bits with public exponent 65537. Anything
-/// else is refused with `CryptoError::Tls(TlsError::PrivateKey)`.
+/// A key is taken only when it is one of these, with nothing after it (decision 0015):
+/// - `Pkcs8`: an RFC 5958 PrivateKeyInfo holding an ECDSA key on P-256, P-384 or P-521 (its scalar
+///   and point as for `Sec1`), an Ed25519 key, an RSA key as below, or an ML-DSA-87 key;
+/// - `Sec1`: one RFC 5915 `ECPrivateKey` on P-256, P-384 or P-521, with its parameters, a scalar
+///   of the curve's length and, if it carries a public key, an uncompressed point;
+/// - `Pkcs1`: one two-prime RFC 8017 `RSAPrivateKey`.
+///
+/// An RSA key is 2048, 3072 or 4096 bits with public exponent 65537. Anything else is refused
+/// with `CryptoError::Tls(TlsError::PrivateKey)`.
 #[expect(clippy::disallowed_methods)]
 pub fn load_private_key(
     p: &Policy,

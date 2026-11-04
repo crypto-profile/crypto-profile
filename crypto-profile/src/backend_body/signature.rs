@@ -441,8 +441,8 @@ static TLS_CURVES: [TlsCurve; 3] = [
 
 const TLS_RSA_BITS: [usize; 3] = [2048, 3072, 4096];
 
-/// The module's key for the TLS private key `der`, in the structure its form names (decision
-/// 0015). The structure that accepts `der` names the loader that parses it.
+/// The module's key for the TLS private key `der`, once the structure check for its form accepts
+/// it (decision 0015); the check that accepts `der` names the loader that parses it.
 pub(crate) fn tls_key_pair(der: &PrivateKeyDer<'_>) -> Option<TlsKeyPair> {
     match der {
         PrivateKeyDer::Pkcs8(der) => {
@@ -1454,8 +1454,7 @@ mod tests {
         sequence(&[&ec[..2], &[tlv(0xa0, &curve)], &ec[2..]].concat())
     }
 
-    // The fields of the ECPrivateKey inside an EC PKCS#8 `der`, rewritten into forms the module
-    // takes and RFC 5915 §3 does not.
+    // Forms RFC 5915 §3 does not define.
     fn lenient_ec_keys(der: &[u8]) -> Vec<(&'static str, Vec<Vec<u8>>)> {
         let ec = fields(&private_key(der));
         let (_, scalar, _) = pkcs8::split_tlv(&ec[1]).unwrap();
