@@ -47,10 +47,9 @@ pub struct CsrParams {
     pub key_usage: Vec<KeyUsage>,
 }
 
-/// A PEM PKCS#10 request for `key`, signed by it. The profile admitted `key` when it was made
-/// (`tls::CertificateKey::generate`), so the request is for a key of the profile's TLS key list;
-/// keep the key to request again for it. Refuses the request's names and parameters
-/// (`CryptoError::Csr`).
+/// A PEM PKCS#10 request for `key`, signed by it; keep the key to request again for it. Refuses
+/// the request's names and parameters (`CryptoError::Csr`), and a key rcgen cannot sign with
+/// (`CsrError::Signing`).
 pub fn generate_csr(key: &CertificateKey, p: &CsrParams) -> Result<String, CryptoError> {
     let name = |_| CryptoError::Csr(CsrError::InvalidName);
     let signing = |_| CryptoError::Csr(CsrError::Signing);

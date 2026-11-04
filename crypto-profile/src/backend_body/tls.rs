@@ -436,7 +436,7 @@ pub fn load_private_key(
 /// TLS key provider with the policy's TLS schemes, and that signer signs whatever bytes it is
 /// given (decision 0016, residual 2). Its PKCS#8 export goes back in only through
 /// [`CertificateKey::from_pkcs8_der`], [`load_private_key`], or
-/// `signature::KeyPair::from_pkcs8_der` only under an `Admitted` whose signatures admit it
+/// `signature::KeyPair::from_pkcs8_der` under an `Admitted` whose signatures admit it
 /// (decision 0016).
 ///
 #[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, csr, resolve, tls};")]
@@ -3156,7 +3156,7 @@ mod tests {
             }
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    crate::test_support::key_pair(a).err(),
+                    crate::test_support::certificate_key(a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
@@ -3188,7 +3188,7 @@ mod tests {
         for (a, t) in cases {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    crate::test_support::key_pair(a).err(),
+                    crate::test_support::certificate_key(a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
