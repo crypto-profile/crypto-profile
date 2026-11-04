@@ -406,7 +406,8 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
 ///
 /// A key is taken only when it is one of these, with nothing after it (decision 0015):
 /// - `Pkcs8`: an RFC 5958 PrivateKeyInfo holding an ECDSA key on P-256, P-384 or P-521 (its scalar
-///   and point as for `Sec1`), an Ed25519 key, an RSA key as below, or an ML-DSA-87 key;
+///   and point as for `Sec1`), an Ed25519 key, an RSA key as below, or, on the 4.x line, an
+///   ML-DSA-87 key;
 /// - `Sec1`: one RFC 5915 `ECPrivateKey` on P-256, P-384 or P-521, with its parameters, a scalar
 ///   of the curve's length and, if it carries a public key, an uncompressed point;
 /// - `Pkcs1`: one two-prime RFC 8017 `RSAPrivateKey`.

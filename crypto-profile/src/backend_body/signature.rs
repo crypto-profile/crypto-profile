@@ -1454,7 +1454,6 @@ mod tests {
         sequence(&[&ec[..2], &[tlv(0xa0, &curve)], &ec[2..]].concat())
     }
 
-    // Forms RFC 5915 §3 does not define.
     fn lenient_ec_keys(der: &[u8]) -> Vec<(&'static str, Vec<Vec<u8>>)> {
         let ec = fields(&private_key(der));
         let (_, scalar, _) = pkcs8::split_tlv(&ec[1]).unwrap();
