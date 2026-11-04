@@ -434,10 +434,11 @@ pub fn load_private_key(
 /// (`Resolved::certified_key`). It is held once, as the module's parsed key (decision 0012), and
 /// is not `Clone`; its `Debug` prints the algorithm only. It has no `sign`; it signs through the
 /// TLS key provider with the policy's TLS schemes, and that signer signs whatever bytes it is
-/// given (decision 0016, residual 2). Its PKCS#8 export goes back in only through
-/// [`CertificateKey::from_pkcs8_der`], [`load_private_key`], or
-/// `signature::KeyPair::from_pkcs8_der` under an `Admitted` whose signatures admit it
-/// (decision 0016).
+/// given (decision 0016, residual 2). Within this crate's API, outside the `test-support`
+/// feature, its PKCS#8 export goes back in only through [`CertificateKey::from_pkcs8_der`],
+/// [`load_private_key`], or `signature::KeyPair::from_pkcs8_der` under an `Admitted` whose
+/// signatures admit it. The export is the private key: a library that holds it signs with it
+/// under no profile (decision 0016, residual 2).
 ///
 #[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, csr, resolve, tls};")]
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -507,18 +508,23 @@ fn admit_certificate_key(r: &Resolved, a: SignatureAlgorithm) -> Result<(), Cryp
 }
 
 /// A `CertificateKey` does not sign, is not a `signature::KeyPair`, does not convert into one and
-/// is not `Clone`, and `csr::generate_csr` and `Resolved::certified_key` take a `CertificateKey`,
-/// not a `signature::KeyPair`. This block compiles, and holds every import, path and call the
+/// is not `Clone`, is neither an `rcgen::PublicKeyData` nor a `Borrow<signature::KeyPair>`, and
+/// `csr::generate_csr` and `Resolved::certified_key` take a `CertificateKey`, not a
+/// `signature::KeyPair`. This block compiles, and holds every import, path and call the
 /// `compile_fail` blocks below make before their last line:
 ///
 #[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, admit, csr, resolve, signature, tls};")]
+/// use std::borrow::Borrow;
 /// fn signer<T: rcgen::SigningKey>(_: &T) {}
+/// fn spki<T: rcgen::PublicKeyData>(_: &T) {}
 /// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
 /// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
 /// let a = admit(Profile::Fips1403, Options::default());
 /// let pair = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
 /// signer(&pair);
+/// spki(&pair);
 /// let _: &signature::KeyPair = &pair;
+/// let _: &signature::KeyPair = pair.borrow();
 /// let request = csr::generate_csr(&key, &csr::CsrParams::default());
 /// let certified = r.certified_key(Vec::new(), &key);
 /// ```
@@ -557,6 +563,20 @@ fn admit_certificate_key(r: &Resolved, a: SignatureAlgorithm) -> Result<(), Cryp
 /// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
 /// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
 /// let copy = key.clone();
+/// ```
+///
+#[doc = concat!("```compile_fail,E0277\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, tls};")]
+/// fn spki<T: rcgen::PublicKeyData>(_: &T) {}
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// spki(&key);
+/// ```
+///
+#[doc = concat!("```compile_fail,E0277\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, signature, tls};")]
+/// use std::borrow::Borrow;
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let pair: &signature::KeyPair = key.borrow();
 /// ```
 ///
 #[doc = concat!("```compile_fail,E0308\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, admit, csr, signature};")]
