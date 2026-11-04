@@ -1,6 +1,6 @@
 # Conformance vector sources
 
-Every file in this directory is byte-for-byte as retrieved, except `ed25519_rfc8032.json` and `hkdf_rfc5869.json`, which transcribe RFC text, `kda_onestep_acvp.json`, which transcribes NIST ACVP samples, and `nist_hash_examples.json`, which transcribes NIST example values. Retrieved 2026-10-28; the three `hmac_*` files 2026-10-31, the three `hkdf_sha*` files 2026-11-01, and the three `ecdh_*` files and `x25519_test.json` 2026-11-02, from the same commit; the three `SHA3_*` files and `nist_hash_examples.json` 2026-11-03.
+Every file in this directory is byte-for-byte as retrieved, except `ed25519_rfc8032.json` and `hkdf_rfc5869.json`, which transcribe RFC text, `kda_onestep_acvp.json`, which transcribes NIST ACVP samples, and `nist_hash_examples.json`, which transcribes NIST example values. Retrieved 2026-10-28; the three `hmac_*` files 2026-10-31, the three `hkdf_sha*` files 2026-11-01, and the three `ecdh_*` files and `x25519_test.json` 2026-11-02, from the same commit; the three `SHA3_*` files and `nist_hash_examples.json` 2026-11-03; the three `rsa_pss_*` files 2026-11-04, from the same commit.
 
 ## Wycheproof
 
@@ -30,6 +30,11 @@ Each file was fetched from `https://raw.githubusercontent.com/C2SP/wycheproof/d1
 | `ecdh_secp521r1_ecpoint_test.json` | `87aba8739c96de2bde8c75b60ffea09d0493192c4d9543d1d969e5e998931f35` |
 | `x25519_test.json` | `35c3f5231cf25cc640b524d403461deee9e49441d5d915a3a25b2c8ff5adbe7d` |
 | `chacha20_poly1305_test.json` | `fe61d25f90e1bde4461d00eafe61049e5f29bd999f36b766df9cda90906ad53d` |
+| `rsa_pss_2048_sha384_mgf1_48_test.json` | `66d464778b0b2f683a1d1a20e94f77e9472b8cc393b45f423fa08a48e677063c` |
+| `rsa_pss_4096_sha384_mgf1_48_test.json` | `d632649a7630f7c267eda576714ca11cf0ff068d6622f576b8701f923c112577` |
+| `rsa_pss_misc_test.json` | `1fac515f67fea8ccbf44ea08fde2de00cd76169f774a54ce2994c9963c31e84f` |
+
+The commit has no RSA-PSS file for a 3072-bit key with SHA-384; the 2048-bit and 4096-bit ones are used, and `rsa_pss_misc_test.json`, one signature for each hash, MGF1 hash and salt length on a 2048-bit key, checks that only SHA-384 with MGF1 SHA-384 and a 48-byte salt verifies.
 
 The ECDH files are the raw-point (`ecpoint`) forms. The SubjectPublicKeyInfo forms (`ecdh_secp*_test.json`) are not used: `ecdh` refuses a public key in that form before the module sees it.
 

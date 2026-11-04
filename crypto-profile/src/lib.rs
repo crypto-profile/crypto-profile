@@ -59,10 +59,10 @@ mod options_are_built_from_their_default {}
 /// use crypto_profile::{Algorithm, MacAlgorithm};
 /// fn outside_tls(a: Algorithm) -> Option<bool> {
 ///     match a {
-///         Algorithm::Signature(_) | Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
+///         Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
 ///         Algorithm::Cipher(_) | Algorithm::Protocol(_) => Some(false),
 ///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) => Some(true),
-///         Algorithm::Aead(_) | Algorithm::Hash(_) => Some(true),
+///         Algorithm::Aead(_) | Algorithm::Hash(_) | Algorithm::Signature(_) => Some(true),
 ///         _ => None,
 ///     }
 /// }
@@ -73,10 +73,10 @@ mod options_are_built_from_their_default {}
 /// use crypto_profile::{Algorithm, MacAlgorithm};
 /// fn outside_tls(a: Algorithm) -> Option<bool> {
 ///     match a {
-///         Algorithm::Signature(_) | Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
+///         Algorithm::Scheme(_) | Algorithm::Kx(_) => Some(false),
 ///         Algorithm::Cipher(_) | Algorithm::Protocol(_) => Some(false),
 ///         Algorithm::Mac(_) | Algorithm::Kdf(_) | Algorithm::KeyAgreement(_) => Some(true),
-///         Algorithm::Aead(_) | Algorithm::Hash(_) => Some(true),
+///         Algorithm::Aead(_) | Algorithm::Hash(_) | Algorithm::Signature(_) => Some(true),
 ///     }
 /// }
 /// assert_eq!(outside_tls(Algorithm::Mac(MacAlgorithm::HmacSha256)), Some(true));
@@ -128,6 +128,33 @@ mod options_are_built_from_their_default {}
 ///     }
 /// }
 /// assert_eq!(sha3(HashAlgorithm::Sha3_384), Some(true));
+/// ```
+///
+/// ```
+/// use crypto_profile::SignatureAlgorithm as S;
+/// fn pss(a: S) -> Option<bool> {
+///     match a {
+///         S::Rsa2048Sha384Pss | S::Rsa3072Sha384Pss | S::Rsa4096Sha384Pss => Some(true),
+///         S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => Some(false),
+///         S::MlDsa87 | S::EcdsaP256Sha256 | S::EcdsaP384Sha384 => Some(false),
+///         S::EcdsaP521Sha384 | S::EcdsaP521Sha512 | S::Ed25519 => Some(false),
+///         _ => None,
+///     }
+/// }
+/// assert_eq!(pss(S::Rsa3072Sha384Pss), Some(true));
+/// ```
+///
+/// ```compile_fail,E0004
+/// use crypto_profile::SignatureAlgorithm as S;
+/// fn pss(a: S) -> Option<bool> {
+///     match a {
+///         S::Rsa2048Sha384Pss | S::Rsa3072Sha384Pss | S::Rsa4096Sha384Pss => Some(true),
+///         S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => Some(false),
+///         S::MlDsa87 | S::EcdsaP256Sha256 | S::EcdsaP384Sha384 => Some(false),
+///         S::EcdsaP521Sha384 | S::EcdsaP521Sha512 | S::Ed25519 => Some(false),
+///     }
+/// }
+/// assert_eq!(pss(S::Rsa3072Sha384Pss), Some(true));
 /// ```
 #[allow(dead_code)]
 mod matches_outside_the_crate_need_a_wildcard {}

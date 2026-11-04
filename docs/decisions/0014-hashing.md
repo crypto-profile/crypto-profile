@@ -10,7 +10,7 @@ Before this decision `digest::digest(h, data)`, `digest::Hasher::new(h)`, `diges
 
 **SHA-3 (maintainer, 2026-11-03).** `HashAlgorithm` gains `Sha3_256`, `Sha3_384` and `Sha3_512` (FIPS 202), the three aws-lc-rs exposes on both pins, beside `Sha256`, `Sha384` and `Sha512` (FIPS 180-4). Its configuration names are `sha256`, `sha384`, `sha512`, `sha3-256`, `sha3-384` and `sha3-512` (`as_str`, `Display`, `FromStr`), and `output_len()` is 32, 48 or 64 bytes. The enum was already `#[non_exhaustive]` (decision 0012), so the variants are an addition; the deliberate compile stops change with them (decision 0012, amended).
 
-**Types and API (maintainer, 2026-11-03).** `Family::Hash`, `ProfileSpec::hashes`, `AdmittedSelection::hashes`, `Admitted::hashes()` and `Admitted::admit_hash` follow the other families outside TLS (decision 0008). `assert_admitted_approved` walks the hash cells last, after the AEAD cells.
+**Types and API (maintainer, 2026-11-03).** `Family::Hash`, `ProfileSpec::hashes`, `AdmittedSelection::hashes`, `Admitted::hashes()` and `Admitted::admit_hash` follow the other families outside TLS (decision 0008). `assert_admitted_approved` walks the hash cells last, after the AEAD cells. *(Amended 2026-11-04, #46: the signature cells are now walked after the hash cells (decision 0015).)*
 
 ```rust
 pub fn digest(a: &Admitted, h: HashAlgorithm, data: &[u8]) -> Result<Vec<u8>, CryptoError>;
@@ -53,7 +53,7 @@ No test allocates or feeds such a message.
 
 `preferred` follows the ISM's SECRET-level control ISM-1767. Its TOP SECRET control, ISM-1768 (p. 11), asks for at least 384 bits; that is the caller's to apply, as for HMAC (decision 0008). The ISM says "SHA-224 and SHA-256 will not be approved beyond 2030" (p. 11); `preferred` keeps SHA-256 until a later transition point, with a warning first, as it does HMAC-SHA256. NIST sets no end date for SHA-256 or SHA-3 (IR 8547).
 
-**The near-term option reaches hashing (maintainer, 2026-11-03).** `Options::cnsa1_unclassified_nss` adds SHA-256 to `cnsa1`'s hashes, under CNSSP 15 (2016) Annex B ¶2b (p. B-2), by decision 0010's reading: ¶2b's near-term SHA-256 allowance is not limited to one use. Its scope widens from message authentication and key derivation to include hashing (decisions 0008 and 0010, amended).
+**The near-term option reaches hashing (maintainer, 2026-11-03).** `Options::cnsa1_unclassified_nss` adds SHA-256 to `cnsa1`'s hashes, under CNSSP 15 (2016) Annex B ¶2b (p. B-2), by decision 0010's reading: ¶2b's near-term SHA-256 allowance is not limited to one use. Its scope widens from message authentication and key derivation to include hashing (decisions 0008 and 0010, amended). *(Amended 2026-11-04, #46: it widens again, to RSA-2048 signatures outside TLS (decision 0015).)*
 
 **Module cells.**
 

@@ -1,6 +1,8 @@
-//! Signature keys: generation, signing, verification, and the SubjectPublicKeyInfo shape check.
-use super::backend::MlDsa;
-use crate::{Algorithm, CryptoError, SignatureAlgorithm as S, ensure};
+//! Signature keys under a profile: generation, import, signing, verification, and the
+//! SubjectPublicKeyInfo shape check.
+use super::backend::{MlDsa, MlDsaKey};
+use super::pkcs8;
+use crate::{Admitted, Algorithm, CryptoError, SignatureAlgorithm as S, ensure};
 use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::KeySize;
@@ -16,6 +18,7 @@ const SECP256R1: &str = "1.2.840.10045.3.1.7";
 const SECP384R1: &str = "1.3.132.0.34";
 const SECP521R1: &str = "1.3.132.0.35";
 const RSA_EXPONENT: [u8; 3] = [0x01, 0x00, 0x01];
+const ML_DSA_87_PUBLIC_LEN: usize = 2592;
 
 /// The SubjectPublicKeyInfo algorithm parameters, as far as [`matches_spki`] reads them.
 #[derive(Debug, PartialEq, Eq)]
@@ -30,11 +33,13 @@ pub enum SpkiParams {
     Other,
 }
 
+#[derive(Clone, Copy)]
 enum Kind {
     Ecdsa {
         signing: &'static sig::EcdsaSigningAlgorithm,
         verifying: &'static sig::EcdsaVerificationAlgorithm,
         curve: &'static str,
+        key: &'static pkcs8::EcCurve,
         public_len: usize,
     },
     Ed25519,
@@ -53,28 +58,37 @@ fn kind(a: S) -> Result<Kind, CryptoError> {
             signing: &sig::ECDSA_P256_SHA256_ASN1_SIGNING,
             verifying: &sig::ECDSA_P256_SHA256_ASN1,
             curve: SECP256R1,
+            key: &pkcs8::P256,
             public_len: 65,
         },
         S::EcdsaP384Sha384 => Kind::Ecdsa {
             signing: &sig::ECDSA_P384_SHA384_ASN1_SIGNING,
             verifying: &sig::ECDSA_P384_SHA384_ASN1,
             curve: SECP384R1,
+            key: &pkcs8::P384,
             public_len: 97,
         },
         S::EcdsaP521Sha384 => Kind::Ecdsa {
             signing: &sig::ECDSA_P521_SHA384_ASN1_SIGNING,
             verifying: &sig::ECDSA_P521_SHA384_ASN1,
             curve: SECP521R1,
+            key: &pkcs8::P521,
             public_len: 133,
         },
         S::EcdsaP521Sha512 => Kind::Ecdsa {
             signing: &sig::ECDSA_P521_SHA512_ASN1_SIGNING,
             verifying: &sig::ECDSA_P521_SHA512_ASN1,
             curve: SECP521R1,
+            key: &pkcs8::P521,
             public_len: 133,
         },
         S::Ed25519 => Kind::Ed25519,
         S::Rsa2048Sha384 => Kind::Rsa {
+            size: KeySize::Rsa2048,
+            bits: 2048,
+            public_len: 270,
+        },
+        S::Rsa2048Sha384Pss => Kind::Rsa {
             size: KeySize::Rsa2048,
             bits: 2048,
             public_len: 270,
@@ -84,7 +98,17 @@ fn kind(a: S) -> Result<Kind, CryptoError> {
             bits: 3072,
             public_len: 398,
         },
+        S::Rsa3072Sha384Pss => Kind::Rsa {
+            size: KeySize::Rsa3072,
+            bits: 3072,
+            public_len: 398,
+        },
         S::Rsa4096Sha384 => Kind::Rsa {
+            size: KeySize::Rsa4096,
+            bits: 4096,
+            public_len: 526,
+        },
+        S::Rsa4096Sha384Pss => Kind::Rsa {
             size: KeySize::Rsa4096,
             bits: 4096,
             public_len: 526,
@@ -101,7 +125,12 @@ pub(crate) fn rcgen_alg(a: S) -> Result<&'static rcgen::SignatureAlgorithm, Cryp
         S::EcdsaP521Sha384 => &rcgen::PKCS_ECDSA_P521_SHA384,
         S::EcdsaP521Sha512 => &rcgen::PKCS_ECDSA_P521_SHA512,
         S::Ed25519 => &rcgen::PKCS_ED25519,
-        S::Rsa2048Sha384 | S::Rsa3072Sha384 | S::Rsa4096Sha384 => &rcgen::PKCS_RSA_SHA384,
+        S::Rsa2048Sha384
+        | S::Rsa3072Sha384
+        | S::Rsa4096Sha384
+        | S::Rsa2048Sha384Pss
+        | S::Rsa3072Sha384Pss
+        | S::Rsa4096Sha384Pss => &rcgen::PKCS_RSA_SHA384,
         _ => return Err(CryptoError::Unavailable(Algorithm::Signature(a))),
     })
 }
@@ -112,6 +141,8 @@ pub(crate) fn rcgen_alg(a: S) -> Result<&'static rcgen::SignatureAlgorithm, Cryp
 /// [`verify`] check the exact bit length and the exponent. Strictly a shape check: it does not
 /// consult availability, so an algorithm this backend does not implement can still match (check
 /// `capability(..).available` separately); false only for a variant the backend cannot classify.
+/// An `rsaEncryption` key matches both RSA paddings of its size, so the SPKI alone does not tell
+/// `Rsa3072Sha384` from `Rsa3072Sha384Pss`.
 pub fn matches_spki(
     a: S,
     alg_oid: &str,
@@ -135,16 +166,26 @@ pub fn matches_spki(
                 alg_oid == ID_RSA_ENCRYPTION && *params == SpkiParams::Null && key_len == public_len
             }
             Ok(Kind::MlDsa87) => {
-                alg_oid == ID_ML_DSA_87 && *params == SpkiParams::Absent && key_len == 2592
+                alg_oid == ID_ML_DSA_87
+                    && *params == SpkiParams::Absent
+                    && key_len == ML_DSA_87_PUBLIC_LEN
             }
             Err(_) => false,
         }
 }
 
-/// A signature key pair. The PKCS#8 encoding is held zeroizing.
+enum Held {
+    Ecdsa(sig::EcdsaKeyPair),
+    Ed25519(sig::Ed25519KeyPair),
+    Rsa(sig::RsaKeyPair),
+    MlDsa(MlDsaKey),
+}
+
+/// A signature key pair, held once: the module's parsed key and its raw public key, never the key's
+/// encoding (decision 0012). Not `Clone`.
 pub struct KeyPair {
     alg: S,
-    pkcs8: Zeroizing<Vec<u8>>,
+    key: Held,
     public: Vec<u8>,
     descriptor: &'static rcgen::SignatureAlgorithm,
 }
@@ -156,67 +197,84 @@ impl fmt::Debug for KeyPair {
 }
 
 impl KeyPair {
-    /// A new key pair of algorithm `a`.
-    pub fn generate(a: S) -> Result<KeyPair, CryptoError> {
-        ensure(Algorithm::Signature(a))?;
+    /// A new key pair of algorithm `a`. Refuses an algorithm `admitted`'s profile does not admit
+    /// outside TLS, or its module line lacks (`Admitted::admit_signature`).
+    pub fn generate(admitted: &Admitted, a: S) -> Result<KeyPair, CryptoError> {
+        check(admitted, a)?;
+        let k = kind(a)?;
+        KeyPair::generated(a, k)
+    }
+
+    /// A new TLS certificate key of algorithm `a`, for `csr` and the TLS tests: refuses an
+    /// algorithm that is not a TLS key algorithm, then one the module line lacks.
+    pub(crate) fn generate_tls_key(a: S) -> Result<KeyPair, CryptoError> {
+        tls_key(a)?;
+        KeyPair::generated(a, kind(a)?)
+    }
+
+    fn generated(a: S, k: Kind) -> Result<KeyPair, CryptoError> {
         let fail = |_| CryptoError::KeyGeneration(Algorithm::Signature(a));
-        let pkcs8 = match kind(a)? {
+        let key = match k {
             Kind::Ecdsa { signing, .. } => {
-                let doc = sig::EcdsaKeyPair::generate_pkcs8(signing, &SystemRandom::new())
-                    .map_err(fail)?;
-                Zeroizing::new(doc.as_ref().to_vec())
+                Held::Ecdsa(sig::EcdsaKeyPair::generate(signing).map_err(fail)?)
             }
-            Kind::Ed25519 => {
-                let doc = sig::Ed25519KeyPair::generate()
-                    .and_then(|k| k.to_pkcs8())
-                    .map_err(fail)?;
-                Zeroizing::new(doc.as_ref().to_vec())
-            }
-            Kind::Rsa { size, .. } => {
-                let der: Pkcs8V1Der<'static> = sig::RsaKeyPair::generate(size)
-                    .and_then(|k| k.as_der())
-                    .map_err(fail)?;
-                Zeroizing::new(der.as_ref().to_vec())
-            }
-            Kind::MlDsa87 => MlDsa::generate()?,
+            Kind::Ed25519 => Held::Ed25519(sig::Ed25519KeyPair::generate().map_err(fail)?),
+            Kind::Rsa { size, .. } => Held::Rsa(sig::RsaKeyPair::generate(size).map_err(fail)?),
+            Kind::MlDsa87 => Held::MlDsa(MlDsa::generate()?),
         };
-        KeyPair::load(a, pkcs8)
+        KeyPair::held(a, key)
     }
 
-    /// Loads a PKCS#8 key, refusing one that is not of algorithm `a`, including an RSA key whose
-    /// modulus is not exactly `a`'s bit length or whose public exponent is not 65537.
-    pub fn from_pkcs8_der(a: S, der: &[u8]) -> Result<KeyPair, CryptoError> {
-        ensure(Algorithm::Signature(a))?;
-        KeyPair::load(a, Zeroizing::new(der.to_vec()))
-    }
-
-    fn load(a: S, pkcs8: Zeroizing<Vec<u8>>) -> Result<KeyPair, CryptoError> {
-        let der = pkcs8.as_slice();
-        let bad = |_| CryptoError::PrivateKey;
-        let public = match kind(a)? {
-            Kind::Ecdsa { signing, .. } => sig::EcdsaKeyPair::from_pkcs8(signing, der)
-                .map_err(bad)?
-                .public_key()
-                .as_ref()
-                .to_vec(),
-            Kind::Ed25519 => sig::Ed25519KeyPair::from_pkcs8(der)
-                .map_err(bad)?
-                .public_key()
-                .as_ref()
-                .to_vec(),
-            Kind::Rsa { bits, .. } => {
-                let k = sig::RsaKeyPair::from_pkcs8(der).map_err(bad)?;
-                let public = k.public_key().as_ref();
-                if !rsa_public_key_is(public, bits) {
-                    return Err(CryptoError::PrivateKey);
-                }
-                public.to_vec()
+    /// Imports a DER RFC 5958 §2 OneAsymmetricKey of algorithm `a`. Refuses, in this order, an
+    /// algorithm `admitted`'s profile does not admit outside TLS, or its module line lacks
+    /// (`Admitted::admit_signature`); then any structure its RFCs do not define, before the module
+    /// parses the key; then a key the module refuses, or one whose carried publicKey or
+    /// expandedKey is not its own (`CryptoError::SignaturePrivateKey`). The structure:
+    ///
+    /// - ECDSA: version v1, `id-ecPublicKey` with `a`'s namedCurve (RFC 5480 §2.1.1), privateKey an
+    ///   RFC 5915 §3 `ECPrivateKey` with a scalar of the curve's length, optional parameters naming
+    ///   the same curve and an optional uncompressed publicKey;
+    /// - Ed25519: `id-Ed25519` without parameters, privateKey the 32-byte `CurvePrivateKey` (RFC
+    ///   8410 §3, §7), version v1, or v2 with the 32-byte publicKey;
+    /// - RSA: version v1, `rsaEncryption` with NULL parameters, privateKey a two-prime RFC 8017
+    ///   A.1.2 `RSAPrivateKey` of version 0, then eight positive, minimal INTEGERs, the modulus
+    ///   exactly `a`'s bit length and the public exponent 65537;
+    /// - ML-DSA-87: `id-ml-dsa-87` without parameters, privateKey the seed or both the seed and the
+    ///   expanded key (RFC 9881 §6), version v1, or v2 with the 2,592-byte publicKey. The expanded
+    ///   key alone is refused: the module cannot export such a key again. In the `both` form the
+    ///   expanded key must be byte for byte the seed's (RFC 9881 §8.2), and the key held is the
+    ///   seed's.
+    ///
+    /// Each takes optional `[0]` attributes in X.690 §11.6 order, and nothing after the key. The key
+    /// is held parsed; [`KeyPair::to_pkcs8_der`] encodes it again.
+    pub fn from_pkcs8_der(admitted: &Admitted, a: S, der: &[u8]) -> Result<KeyPair, CryptoError> {
+        check(admitted, a)?;
+        let k = kind(a)?;
+        let carried = checked_private_key(a, k, der)?;
+        let bad = |_| CryptoError::SignaturePrivateKey { algorithm: a };
+        let key = match k {
+            Kind::Ecdsa { signing, .. } => {
+                Held::Ecdsa(sig::EcdsaKeyPair::from_pkcs8(signing, der).map_err(bad)?)
             }
-            Kind::MlDsa87 => MlDsa::public_key(der)?,
+            Kind::Ed25519 => Held::Ed25519(sig::Ed25519KeyPair::from_pkcs8(der).map_err(bad)?),
+            Kind::Rsa { .. } => Held::Rsa(sig::RsaKeyPair::from_pkcs8(der).map_err(bad)?),
+            Kind::MlDsa87 => Held::MlDsa(ml_dsa_87_key(der)?),
+        };
+        let key = KeyPair::held(a, key)?;
+        matches_carried(a, carried.public_key, &key.public)?;
+        Ok(key)
+    }
+
+    fn held(a: S, key: Held) -> Result<KeyPair, CryptoError> {
+        let public = match &key {
+            Held::Ecdsa(k) => k.public_key().as_ref().to_vec(),
+            Held::Ed25519(k) => k.public_key().as_ref().to_vec(),
+            Held::Rsa(k) => k.public_key().as_ref().to_vec(),
+            Held::MlDsa(k) => k.public_key()?,
         };
         Ok(KeyPair {
             alg: a,
-            pkcs8,
+            key,
             public,
             descriptor: rcgen_alg(a)?,
         })
@@ -227,9 +285,21 @@ impl KeyPair {
         self.alg
     }
 
-    /// The key's PKCS#8 encoding.
-    pub fn to_pkcs8_der(&self) -> &[u8] {
-        &self.pkcs8
+    /// The key's PKCS#8 encoding, made by the module on each call into a buffer the caller owns and
+    /// that is wiped on drop: the canonical encoding, not the bytes the key was imported from.
+    /// ECDSA, RSA and ML-DSA-87 (the seed form) are version v1; Ed25519 is version v2 with its
+    /// public key (RFC 8410 §7).
+    pub fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        let fail = |_| CryptoError::Primitive;
+        Ok(Zeroizing::new(match &self.key {
+            Held::Ecdsa(k) => k.to_pkcs8v1().map_err(fail)?.as_ref().to_vec(),
+            Held::Ed25519(k) => k.to_pkcs8().map_err(fail)?.as_ref().to_vec(),
+            Held::Rsa(k) => {
+                let der: Pkcs8V1Der<'static> = k.as_der().map_err(fail)?;
+                der.as_ref().to_vec()
+            }
+            Held::MlDsa(k) => return k.to_pkcs8_der(),
+        }))
     }
 
     /// The raw public key: the bytes of the SubjectPublicKeyInfo `subjectPublicKey` BIT STRING.
@@ -237,29 +307,24 @@ impl KeyPair {
         &self.public
     }
 
-    /// Signs `msg`. RSA keys sign RSASSA-PKCS1-v1_5 with SHA-384.
+    /// Signs `msg` with the held key. RSA keys sign RSASSA-PKCS1-v1_5 with SHA-384, or, for an
+    /// RSA-PSS variant, RSASSA-PSS with SHA-384, MGF1 with SHA-384 and a 48-byte salt.
     pub fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let rng = SystemRandom::new();
-        let key = |_| CryptoError::PrivateKey;
         let fail = |_| CryptoError::Sign;
-        match kind(self.alg)? {
-            Kind::Ecdsa { signing, .. } => {
-                let k = sig::EcdsaKeyPair::from_pkcs8(signing, &self.pkcs8).map_err(key)?;
-                Ok(k.sign(&rng, msg).map_err(fail)?.as_ref().to_vec())
-            }
-            Kind::Ed25519 => Ok(sig::Ed25519KeyPair::from_pkcs8(&self.pkcs8)
-                .map_err(key)?
-                .sign(msg)
+        match &self.key {
+            Held::Ecdsa(k) => Ok(k
+                .sign(&SystemRandom::new(), msg)
+                .map_err(fail)?
                 .as_ref()
                 .to_vec()),
-            Kind::Rsa { .. } => {
-                let k = sig::RsaKeyPair::from_pkcs8(&self.pkcs8).map_err(key)?;
+            Held::Ed25519(k) => Ok(k.try_sign(msg).map_err(fail)?.as_ref().to_vec()),
+            Held::Rsa(k) => {
                 let mut out = vec![0u8; k.public_modulus_len()];
-                k.sign(&sig::RSA_PKCS1_SHA384, &rng, msg, &mut out)
+                k.sign(rsa_encoding(self.alg), &SystemRandom::new(), msg, &mut out)
                     .map_err(fail)?;
                 Ok(out)
             }
-            Kind::MlDsa87 => MlDsa::sign(&self.pkcs8, msg),
+            Held::MlDsa(k) => k.sign(msg),
         }
     }
 }
@@ -274,9 +339,107 @@ impl rcgen::PublicKeyData for KeyPair {
     }
 }
 
+// rcgen labels what it signs with `PublicKeyData::algorithm`, which has no RSA-PSS descriptor.
 impl rcgen::SigningKey for KeyPair {
     fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
+        rcgen_signs(self.alg)?;
         KeyPair::sign(self, msg).map_err(|_| rcgen::Error::RingUnspecified)
+    }
+}
+
+fn rcgen_signs(a: S) -> Result<(), rcgen::Error> {
+    match a.tls_scheme() {
+        Some(_) => Ok(()),
+        None => Err(rcgen::Error::UnsupportedSignatureAlgorithm),
+    }
+}
+
+fn is_pss(a: S) -> bool {
+    matches!(
+        a,
+        S::Rsa2048Sha384Pss | S::Rsa3072Sha384Pss | S::Rsa4096Sha384Pss
+    )
+}
+
+fn rsa_encoding(a: S) -> &'static dyn sig::RsaEncoding {
+    if is_pss(a) {
+        &sig::RSA_PSS_SHA384
+    } else {
+        &sig::RSA_PKCS1_SHA384
+    }
+}
+
+fn check(admitted: &Admitted, a: S) -> Result<(), CryptoError> {
+    admitted.admit_signature(a)
+}
+
+/// What `der` carries besides the key, once its structure is `a`'s (`KeyPair::from_pkcs8_der`).
+fn checked_private_key(a: S, k: Kind, der: &[u8]) -> Result<pkcs8::Carried<'_>, CryptoError> {
+    let public = |public_key| pkcs8::Carried {
+        public_key,
+        expanded_key: None,
+    };
+    let checked = match k {
+        Kind::Ecdsa { key, .. } => pkcs8::ec(key, der, false).map(public),
+        Kind::Ed25519 => pkcs8::ed25519(der).map(public),
+        Kind::Rsa { bits, .. } => pkcs8::rsa(der, bits as usize).then(pkcs8::Carried::default),
+        Kind::MlDsa87 => pkcs8::ml_dsa_87(der).map(|(_, carried)| carried),
+    };
+    checked.ok_or(CryptoError::SignaturePrivateKey { algorithm: a })
+}
+
+/// The key an ML-DSA-87 `der` holds, refused as [`KeyPair::from_pkcs8_der`] refuses it: the key its
+/// seed expands to, once the publicKey and expandedKey it carries are that key's. The TLS key
+/// provider loads ML-DSA-87 keys through it.
+pub(crate) fn ml_dsa_87_key(der: &[u8]) -> Result<MlDsaKey, CryptoError> {
+    let a = S::MlDsa87;
+    let refused = || CryptoError::SignaturePrivateKey { algorithm: a };
+    let (seed, carried) = pkcs8::ml_dsa_87(der).ok_or_else(refused)?;
+    let key = MlDsa::from_seed(seed)?;
+    let expanded = key.expanded_key().map_err(|_| refused())?;
+    let own = key.public_key()?;
+    if carried_is(carried.expanded_key, &expanded) && carried_is(carried.public_key, &own) {
+        Ok(key)
+    } else {
+        Err(refused())
+    }
+}
+
+// RFC 5915 §3, RFC 8410 §7, RFC 9881 §6 and §8.2: a carried publicKey or expandedKey that is not
+// the key's own marks a corrupt key.
+fn matches_carried(a: S, carried: Option<&[u8]>, own: &[u8]) -> Result<(), CryptoError> {
+    if carried_is(carried, own) {
+        Ok(())
+    } else {
+        Err(CryptoError::SignaturePrivateKey { algorithm: a })
+    }
+}
+
+fn carried_is(carried: Option<&[u8]>, own: &[u8]) -> bool {
+    carried.is_none_or(|key| key == own)
+}
+
+// SEC 1 §2.3.3 (uncompressed), RFC 8032 §5.1.5, FIPS 204 Table 2, RFC 8017 A.1.1: the raw key.
+fn checked_public_key(a: S, k: Kind, public_key: &[u8]) -> Result<(), CryptoError> {
+    let raw = match k {
+        Kind::Ecdsa { public_len, .. } => {
+            public_key.len() == public_len && public_key.first() == Some(&pkcs8::UNCOMPRESSED)
+        }
+        Kind::Ed25519 => public_key.len() == 32,
+        Kind::Rsa { bits, .. } => rsa_public_key_is(public_key, bits),
+        Kind::MlDsa87 => public_key.len() == ML_DSA_87_PUBLIC_LEN,
+    };
+    if raw {
+        Ok(())
+    } else {
+        Err(CryptoError::SignaturePublicKey { algorithm: a })
+    }
+}
+
+fn tls_key(a: S) -> Result<(), CryptoError> {
+    match a.tls_scheme() {
+        Some(_) => ensure(Algorithm::Signature(a)),
+        None => Err(CryptoError::NotTlsKey { algorithm: a }),
     }
 }
 
@@ -286,20 +449,29 @@ fn rsa_public_key_is(public_key: &[u8], bits: u32) -> bool {
             .is_ok_and(|k| k.exponent().big_endian_without_leading_zero() == RSA_EXPONENT)
 }
 
-/// Verifies `signature` over `msg` under the raw public key `public_key` of algorithm `a`,
-/// refusing an RSA key whose modulus is not exactly `a`'s bit length or whose public exponent
-/// is not 65537.
-pub fn verify(a: S, public_key: &[u8], msg: &[u8], signature: &[u8]) -> Result<(), CryptoError> {
-    ensure(Algorithm::Signature(a))?;
-    let v: &dyn sig::VerificationAlgorithm = match kind(a)? {
+/// Verifies `signature` over `msg` under the raw public key `public_key` of algorithm `a`.
+/// Refuses, in this order, an algorithm `admitted`'s profile does not admit outside TLS, or its
+/// module line lacks (`Admitted::admit_signature`); then a public key that is not the raw key of
+/// `a`'s shape (`CryptoError::SignaturePublicKey`): an uncompressed SEC 1 point of 65, 97 or 133
+/// bytes, a 32-byte Ed25519 key, a 2,592-byte ML-DSA-87 key, or an RFC 8017 `RSAPublicKey` whose
+/// modulus is exactly `a`'s bit length and whose public exponent is 65537, so never a
+/// SubjectPublicKeyInfo; then a signature that does not verify (`CryptoError::Verify`). An RSA-PSS
+/// variant accepts only SHA-384, MGF1 with SHA-384 and a 48-byte salt.
+pub fn verify(
+    admitted: &Admitted,
+    a: S,
+    public_key: &[u8],
+    msg: &[u8],
+    signature: &[u8],
+) -> Result<(), CryptoError> {
+    check(admitted, a)?;
+    let k = kind(a)?;
+    checked_public_key(a, k, public_key)?;
+    let v: &dyn sig::VerificationAlgorithm = match k {
         Kind::Ecdsa { verifying, .. } => verifying,
         Kind::Ed25519 => &sig::ED25519,
-        Kind::Rsa { bits, .. } => {
-            if !rsa_public_key_is(public_key, bits) {
-                return Err(CryptoError::Verify);
-            }
-            &sig::RSA_PKCS1_2048_8192_SHA384
-        }
+        Kind::Rsa { .. } if is_pss(a) => &sig::RSA_PSS_2048_8192_SHA384,
+        Kind::Rsa { .. } => &sig::RSA_PKCS1_2048_8192_SHA384,
         Kind::MlDsa87 => MlDsa::verifier()?,
     };
     sig::UnparsedPublicKey::new(v, public_key)
@@ -310,32 +482,42 @@ pub fn verify(a: S, public_key: &[u8], msg: &[u8], signature: &[u8]) -> Result<(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Options, Profile, admit};
     use crypto_profile::SignatureAlgorithm as S;
+    use rustls::pki_types::PrivateKeyDer;
+
+    fn u() -> Admitted {
+        admit(Profile::Unrestricted, Options::default())
+    }
 
     #[test]
     fn every_algorithm_generates_signs_and_verifies() {
         for &a in S::ALL {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    KeyPair::generate(a).err(),
+                    KeyPair::generate(&u(), a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 assert_eq!(
-                    KeyPair::from_pkcs8_der(a, b"invalid").err(),
+                    KeyPair::from_pkcs8_der(&u(), a, b"invalid").err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 assert_eq!(
-                    verify(a, b"", b"", b""),
+                    verify(&u(), a, b"", b"", b""),
                     Err(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
             }
-            let k = KeyPair::generate(a).unwrap();
+            let k = KeyPair::generate(&u(), a).unwrap();
             assert_eq!(k.algorithm(), a);
             let sig = k.sign(b"message").unwrap();
-            assert_eq!(verify(a, k.public_key(), b"message", &sig), Ok(()), "{a}");
             assert_eq!(
-                verify(a, k.public_key(), b"messagE", &sig),
+                verify(&u(), a, k.public_key(), b"message", &sig),
+                Ok(()),
+                "{a}"
+            );
+            assert_eq!(
+                verify(&u(), a, k.public_key(), b"messagE", &sig),
                 Err(CryptoError::Verify),
                 "{a}"
             );
@@ -347,62 +529,80 @@ mod tests {
         for &a in S::ALL {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    KeyPair::generate(a).err(),
+                    KeyPair::generate(&u(), a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 assert_eq!(
-                    KeyPair::from_pkcs8_der(a, b"invalid").err(),
+                    KeyPair::from_pkcs8_der(&u(), a, b"invalid").err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 assert_eq!(
-                    verify(a, b"", b"", b""),
+                    verify(&u(), a, b"", b"", b""),
                     Err(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
             }
-            let k = KeyPair::generate(a).unwrap();
-            let r = KeyPair::from_pkcs8_der(a, k.to_pkcs8_der()).unwrap();
+            let k = KeyPair::generate(&u(), a).unwrap();
+            let r = KeyPair::from_pkcs8_der(&u(), a, &k.to_pkcs8_der().unwrap()).unwrap();
             assert_eq!(r.public_key(), k.public_key(), "{a}");
         }
     }
 
     #[test]
     fn keys_cross_the_boundary_as_der_and_the_public_key_is_borrowed() {
-        let k = KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let k = KeyPair::generate(&u(), S::EcdsaP384Sha384).unwrap();
         let public: &[u8] = k.public_key();
         assert_eq!(public, rcgen::PublicKeyData::der_bytes(&k));
         assert_eq!(public.len(), 97);
-        let r = KeyPair::from_pkcs8_der(S::EcdsaP384Sha384, k.to_pkcs8_der()).unwrap();
+        let r =
+            KeyPair::from_pkcs8_der(&u(), S::EcdsaP384Sha384, &k.to_pkcs8_der().unwrap()).unwrap();
         assert_eq!(r.public_key(), public);
         assert_eq!(r.to_pkcs8_der(), k.to_pkcs8_der());
     }
 
     #[test]
     fn a_key_of_the_wrong_algorithm_or_size_is_refused() {
-        let p384 = KeyPair::generate(S::EcdsaP384Sha384).unwrap();
+        let p384 = KeyPair::generate(&u(), S::EcdsaP384Sha384).unwrap();
         assert_eq!(
-            KeyPair::from_pkcs8_der(S::Ed25519, p384.to_pkcs8_der()).err(),
-            Some(CryptoError::PrivateKey)
+            KeyPair::from_pkcs8_der(&u(), S::Ed25519, &p384.to_pkcs8_der().unwrap()).err(),
+            Some(CryptoError::SignaturePrivateKey {
+                algorithm: S::Ed25519
+            })
         );
         assert_eq!(
-            KeyPair::from_pkcs8_der(S::EcdsaP384Sha384, b"not a key").err(),
-            Some(CryptoError::PrivateKey)
+            KeyPair::from_pkcs8_der(&u(), S::EcdsaP384Sha384, b"not a key").err(),
+            Some(CryptoError::SignaturePrivateKey {
+                algorithm: S::EcdsaP384Sha384
+            })
         );
-        let rsa2048 = KeyPair::generate(S::Rsa2048Sha384).unwrap();
+        for other in [S::EcdsaP256Sha256, S::EcdsaP521Sha512] {
+            assert_eq!(
+                KeyPair::from_pkcs8_der(&u(), other, &p384.to_pkcs8_der().unwrap()).err(),
+                Some(CryptoError::SignaturePrivateKey { algorithm: other })
+            );
+        }
+        let rsa2048 = KeyPair::generate(&u(), S::Rsa2048Sha384).unwrap();
         assert_eq!(
-            KeyPair::from_pkcs8_der(S::Rsa3072Sha384, rsa2048.to_pkcs8_der()).err(),
-            Some(CryptoError::PrivateKey)
+            KeyPair::from_pkcs8_der(&u(), S::Rsa3072Sha384, &rsa2048.to_pkcs8_der().unwrap()).err(),
+            Some(CryptoError::SignaturePrivateKey {
+                algorithm: S::Rsa3072Sha384
+            })
         );
     }
 
     #[test]
     fn verify_refuses_an_rsa_key_of_the_wrong_size() {
-        let k = KeyPair::generate(S::Rsa3072Sha384).unwrap();
+        let k = KeyPair::generate(&u(), S::Rsa3072Sha384).unwrap();
         let sig = k.sign(b"m").unwrap();
-        assert_eq!(verify(S::Rsa3072Sha384, k.public_key(), b"m", &sig), Ok(()));
         assert_eq!(
-            verify(S::Rsa2048Sha384, k.public_key(), b"m", &sig),
-            Err(CryptoError::Verify)
+            verify(&u(), S::Rsa3072Sha384, k.public_key(), b"m", &sig),
+            Ok(())
+        );
+        assert_eq!(
+            verify(&u(), S::Rsa2048Sha384, k.public_key(), b"m", &sig),
+            Err(CryptoError::SignaturePublicKey {
+                algorithm: S::Rsa2048Sha384
+            })
         );
     }
 
@@ -411,28 +611,37 @@ mod tests {
         for &a in S::ALL {
             if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
                 assert_eq!(
-                    KeyPair::generate(a).err(),
+                    KeyPair::generate(&u(), a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 assert_eq!(
-                    KeyPair::from_pkcs8_der(a, b"invalid").err(),
+                    KeyPair::from_pkcs8_der(&u(), a, b"invalid").err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 assert_eq!(
-                    verify(a, b"", b"", b""),
+                    verify(&u(), a, b"", b"", b""),
                     Err(CryptoError::Unavailable(Algorithm::Signature(a)))
                 );
                 continue;
             }
-            let k = KeyPair::generate(a).unwrap();
+            let k = KeyPair::generate(&u(), a).unwrap();
             assert_eq!(rcgen::PublicKeyData::der_bytes(&k), k.public_key(), "{a}");
             assert_eq!(
                 rcgen::PublicKeyData::algorithm(&k),
                 rcgen_alg(a).unwrap(),
                 "{a}"
             );
+            if a.tls_scheme().is_none() {
+                assert_eq!(
+                    rcgen::SigningKey::sign(&k, b"m"),
+                    Err(rcgen::Error::UnsupportedSignatureAlgorithm),
+                    "{a}"
+                );
+                assert_eq!(rcgen_alg(a).unwrap(), &rcgen::PKCS_RSA_SHA384, "{a}");
+                continue;
+            }
             let sig = rcgen::SigningKey::sign(&k, b"m").unwrap();
-            assert_eq!(verify(a, k.public_key(), b"m", &sig), Ok(()), "{a}");
+            assert_eq!(verify(&u(), a, k.public_key(), b"m", &sig), Ok(()), "{a}");
         }
     }
 
@@ -449,6 +658,24 @@ mod tests {
             (S::Rsa2048Sha384, ID_RSA_ENCRYPTION, SpkiParams::Null, 270),
             (S::Rsa3072Sha384, ID_RSA_ENCRYPTION, SpkiParams::Null, 398),
             (S::Rsa4096Sha384, ID_RSA_ENCRYPTION, SpkiParams::Null, 526),
+            (
+                S::Rsa2048Sha384Pss,
+                ID_RSA_ENCRYPTION,
+                SpkiParams::Null,
+                270,
+            ),
+            (
+                S::Rsa3072Sha384Pss,
+                ID_RSA_ENCRYPTION,
+                SpkiParams::Null,
+                398,
+            ),
+            (
+                S::Rsa4096Sha384Pss,
+                ID_RSA_ENCRYPTION,
+                SpkiParams::Null,
+                526,
+            ),
         ];
         assert_eq!(cases.len(), S::ALL.len());
         for (a, oid, params, len) in &cases {
@@ -462,13 +689,13 @@ mod tests {
             assert!(!matches_spki(*a, "1.2.3", params, *len, 0), "{a} oid");
             if crate::capability(crate::MODULE, Algorithm::Signature(*a)).available {
                 assert_eq!(
-                    KeyPair::generate(*a).unwrap().public_key().len(),
+                    KeyPair::generate(&u(), *a).unwrap().public_key().len(),
                     *len,
                     "{a} generated length"
                 );
             } else {
                 assert_eq!(
-                    KeyPair::generate(*a).err(),
+                    KeyPair::generate(&u(), *a).err(),
                     Some(CryptoError::Unavailable(Algorithm::Signature(*a)))
                 );
             }
@@ -544,8 +771,10 @@ mod tests {
             let k = sig::RsaKeyPair::from_pkcs8(&der(h)).unwrap();
             assert_eq!(k.public_modulus_len(), 256);
             assert_eq!(
-                KeyPair::from_pkcs8_der(S::Rsa2048Sha384, &der(h)).err(),
-                Some(CryptoError::PrivateKey)
+                KeyPair::from_pkcs8_der(&u(), S::Rsa2048Sha384, &der(h)).err(),
+                Some(CryptoError::SignaturePrivateKey {
+                    algorithm: S::Rsa2048Sha384
+                })
             );
         }
     }
@@ -569,8 +798,10 @@ mod tests {
             Ok(())
         );
         assert_eq!(
-            verify(S::Rsa2048Sha384, public, b"m", &signature),
-            Err(CryptoError::Verify)
+            verify(&u(), S::Rsa2048Sha384, public, b"m", &signature),
+            Err(CryptoError::SignaturePublicKey {
+                algorithm: S::Rsa2048Sha384
+            })
         );
     }
 
@@ -809,8 +1040,8 @@ mod tests {
                 Ok(bits)
             );
             assert_eq!(
-                KeyPair::from_pkcs8_der(a, &der(h)).err(),
-                Some(CryptoError::PrivateKey),
+                KeyPair::from_pkcs8_der(&u(), a, &der(h)).err(),
+                Some(CryptoError::SignaturePrivateKey { algorithm: a }),
                 "{bits}"
             );
         }
@@ -836,16 +1067,498 @@ mod tests {
                 "{bits}"
             );
             assert_eq!(
-                verify(a, public, b"m", &signature),
-                Err(CryptoError::Verify),
+                verify(&u(), a, public, b"m", &signature),
+                Err(CryptoError::SignaturePublicKey { algorithm: a }),
                 "{bits}"
             );
         }
     }
 
     #[test]
+    fn an_rsa_pss_key_signs_pss_and_a_pkcs1_key_does_not() {
+        for (pkcs1, pss) in [
+            (S::Rsa2048Sha384, S::Rsa2048Sha384Pss),
+            (S::Rsa3072Sha384, S::Rsa3072Sha384Pss),
+            (S::Rsa4096Sha384, S::Rsa4096Sha384Pss),
+        ] {
+            let k = KeyPair::generate(&u(), pss).unwrap();
+            let signature = k.sign(b"m").unwrap();
+            assert_eq!(verify(&u(), pss, k.public_key(), b"m", &signature), Ok(()));
+            assert_eq!(
+                verify(&u(), pkcs1, k.public_key(), b"m", &signature),
+                Err(CryptoError::Verify)
+            );
+            let v15 = KeyPair::from_pkcs8_der(&u(), pkcs1, &k.to_pkcs8_der().unwrap()).unwrap();
+            let signature = v15.sign(b"m").unwrap();
+            assert_eq!(
+                verify(&u(), pkcs1, k.public_key(), b"m", &signature),
+                Ok(())
+            );
+            assert_eq!(
+                verify(&u(), pss, k.public_key(), b"m", &signature),
+                Err(CryptoError::Verify)
+            );
+        }
+    }
+
+    #[test]
+    fn only_the_pss_variants_pad_pss_and_rcgen_signs_none_of_them() {
+        for &a in S::ALL {
+            let pss = a.to_string().ends_with("-pss");
+            assert_eq!(is_pss(a), pss, "{a}");
+            let want = if pss {
+                Err(rcgen::Error::UnsupportedSignatureAlgorithm)
+            } else {
+                Ok(())
+            };
+            assert_eq!(rcgen_signs(a), want, "{a}");
+        }
+    }
+
+    #[test]
+    fn only_a_tls_key_algorithm_makes_a_tls_key() {
+        for &a in S::ALL {
+            let want = match a.tls_scheme() {
+                None => Err(CryptoError::NotTlsKey { algorithm: a }),
+                Some(_) if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available => {
+                    Err(CryptoError::Unavailable(Algorithm::Signature(a)))
+                }
+                Some(_) => Ok(()),
+            };
+            assert_eq!(tls_key(a), want, "{a}");
+        }
+        for a in [
+            S::Rsa2048Sha384Pss,
+            S::Rsa3072Sha384Pss,
+            S::Rsa4096Sha384Pss,
+        ] {
+            assert_eq!(
+                KeyPair::generate_tls_key(a).err(),
+                Some(CryptoError::NotTlsKey { algorithm: a })
+            );
+        }
+        assert_eq!(
+            KeyPair::generate_tls_key(S::EcdsaP384Sha384)
+                .unwrap()
+                .algorithm(),
+            S::EcdsaP384Sha384
+        );
+    }
+
+    fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+        let n = u16::try_from(value.len()).unwrap();
+        let [hi, lo] = n.to_be_bytes();
+        let len = match n {
+            0..=0x7f => vec![lo],
+            0x80..=0xff => vec![0x81, lo],
+            _ => vec![0x82, hi, lo],
+        };
+        [&[tag][..], &len, value].concat()
+    }
+
+    fn fields(der: &[u8]) -> Vec<Vec<u8>> {
+        let (_, mut rest, _) = pkcs8::split_tlv(der).unwrap();
+        let mut out = Vec::new();
+        while let Some((tag, value, next)) = pkcs8::split_tlv(rest).filter(|_| out.len() < 16) {
+            out.push(tlv(tag, value));
+            rest = next;
+        }
+        out
+    }
+
+    fn sequence(fields: &[Vec<u8>]) -> Vec<u8> {
+        tlv(0x30, &fields.concat())
+    }
+
+    fn attribute(last: u8) -> Vec<u8> {
+        sequence(&[
+            tlv(
+                0x06,
+                &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x09, last],
+            ),
+            tlv(0x31, &[]),
+        ])
+    }
+
+    // `openssl ecparam -name prime256v1 -param_enc explicit -genkey` then `pkcs8 -topk8` 3.5.8: a
+    // P-256 key whose privateKeyAlgorithm carries specifiedCurve parameters.
+    const P256_EXPLICIT: &str = concat!(
+        "308201790201003082010306072a8648ce3d02013081f7020101302c06072a8648ce3d0101022100ffffffff00000001",
+        "000000000000000000000000ffffffffffffffffffffffff305b0420ffffffff00000001000000000000000000000000",
+        "fffffffffffffffffffffffc04205ac635d8aa3a93e7b3ebbd55769886bc651d06b0cc53b0f63bce3c3e27d2604b0315",
+        "00c49d360886e704936a6678e1139d26b7819f7e900441046b17d1f2e12c4247f8bce6e563a440f277037d812deb33a0",
+        "f4a13945d898c2964fe342e2fe1a7f9b8ee7eb4a7c0f9e162bce33576b315ececbb6406837bf51f5022100ffffffff00",
+        "000000ffffffffffffffffbce6faada7179e84f3b9cac2fc632551020101046d306b0201010420617d0b135c946088a2",
+        "661b42bba5782d40778604ff3c432e40ead3783c8af66ea144034200040099d65941cdf0ae4cb4800777f6082b191aa0",
+        "42d5cf60dcc568fa5554b4acbc0b7582198a01f11bb4433551f8f8de23bfc73137d57a0be9f5c6edaf9eedf155",
+    );
+
+    // `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -pkeyopt rsa_keygen_primes:3`
+    // then `pkcs8 -topk8` 3.5.8: a three-prime RSAPrivateKey, version 1.
+    const RSA_THREE_PRIMES: &str = concat!(
+        "308204f4020100300d06092a864886f70d0101010500048204de308204da0201010282010100a5d99d7f00407eaa2bc2",
+        "6cc2eb41855f182ada9401f2b49e0e7a9b28ca0a38e50483edebd4acfc4ac23af22455a09c062732519f3a518db12afb",
+        "c8b1b4ef2b76a4dfef78a3c4ff627c0714ecd9a725cfa41f760bf39b9be4634bb840f0bd7de8eab1dfe6e47802aa79ee",
+        "9da4876acbf2364610031e67e04d93bab45b88120db193d9884fc2cc62eb6372211dce733ea9dfdb105f7e716d162f93",
+        "db42ed0777c877aad9b260d28c037336f77d7cb2493e94a06a8131d6a796ec48463ce9e5f4a2c866dd0a9bca327d12fa",
+        "e358c28ef73de04e85683541c70af6d29cc01c6a99288abe8520505776b6a0ab01a9d80534707e00e354fdfb414804df",
+        "f018c585199b0203010001028201010094a2fe9ae6afe6953e58a63edeb6bf0025d9aa4181a972244157b29d10cdae85",
+        "d9d11f36ff48f5674ec1a367daf1f1433677cb5d07d83543b60127b1d435915f688e65c15a0ce0d0f3d528f4c8701bdc",
+        "06fc47409882523c386ee63b6ff5f42eaed2fdc1f6699170e563e10e6a1f51c95f3637c9bafe073110e792182e2982af",
+        "3490062208b2dc3bf05499e6750ab0e47deb7541cc37018b1cb6fd63f42a6f0ebf404a3a5eb305455ee1d138b9c74559",
+        "8dae48774aed702223882c914f3527f6ca324b1edfcc7d7d04efc801af336ab97a9d13e2baa77682589b04c503a46c07",
+        "b1e59f42957420785c8ae70c2b17d2a3003c89d0219b95337650664a8346fd41025606ee2379bdc33b8c3afec348931a",
+        "1509c21795fcc4f0b451924269c51e70ec69e18face041b823f7c8be9ccdfbd404996a1e5f364c1870c73bf2adeb9b40",
+        "adc38989e8ea666ebf1756fe7aacd0f2aa12204455fcf607025606eb6fa14c74f6e461aec524e5b3f2395824243d9e99",
+        "1999b77ec0b66e6da0b8eda9405b4913dde7018e17623ea281f06879d1a3df71ba122094786da09da7acf805c948a4c8",
+        "c2de58fb4ce312c75524b34ae466d0a5025604cde159ebeb03c4dac0f1afc60a36bb6509e4b82dee8f925cca1d78c0f9",
+        "976a6f2ba2b473daab54829d61268a85180b223d9bd3903d01319ca5475c256c59094cb785f7b8badd4dd8c8e1521c27",
+        "9d2ea39fbbdc78d1025605a53e4d2e10db81d7047d09ae72d2b3e06a943ac5d3892475a5ef5aa7dbbf5e41606e064c27",
+        "ee4a536577448b6f906df0ff3a7fe58466d7f546ccbe3c6583f0c5e60aa3bef5a0af418fbdda216f09d3488858b25d95",
+        "02560436175ca40195f67bfcad439daade4c34b5bb601136948a3e44b5d21b51022e71eb254dfba2ea00acfd041e5136",
+        "9d3c188eb0a45370628f6ad9c3fdb565deaab29c841e9fc006c4b6b7bdcd3375c1f666fdbb6f54943082010c30820108",
+        "025603755d85dd4bbf38aa2937751a3c788bccf04f1dd3d298607103e777be5d1e1e8afeb2089edf7fb1b2a0384ccf32",
+        "2663c11b879ff21d70680022e68bf3c6dfaa2b6b2c9adfc843272dcbca17cafa2c26699e779cc10902560174a4a8733c",
+        "2e7feb1eedf89bd257ea7f97a5b52832bb6fdc21888b1dd49398c767ec0734d75d27adc741eb124a495e3329232c6efb",
+        "751450fa5f8f084bec57f36e6897c718c32afa5b8bf3f7bad45a569a1c3e1e0102560132972e87c19397cdda2841e181",
+        "2086b4dee4eee3ea78b1cd7a95afe00a44f4ec63903dd0cb9d06a81bbd2ce4e3339b04099c24569cca75487bebd52a52",
+        "fcdf20a00bd8988b89082d35c64d6c49ccf8fbc22cbd526e",
+    );
+
+    fn assert_refused(a: S, why: &str, der: &[u8]) {
+        let refused = Some(CryptoError::SignaturePrivateKey { algorithm: a });
+        assert_eq!(
+            checked_private_key(a, kind(a).unwrap(), der).err(),
+            refused,
+            "validator: {a} {why}"
+        );
+        assert_eq!(
+            KeyPair::from_pkcs8_der(&u(), a, der).err(),
+            refused,
+            "import: {a} {why}"
+        );
+    }
+
+    fn with_field(der: &[u8], at: usize, field: Vec<u8>) -> Vec<u8> {
+        let mut f = fields(der);
+        f[at] = field;
+        sequence(&f)
+    }
+
+    #[test]
+    fn a_private_key_the_rfcs_do_not_define_is_refused() {
+        for a in [
+            S::EcdsaP256Sha256,
+            S::EcdsaP384Sha384,
+            S::EcdsaP521Sha512,
+            S::Ed25519,
+            S::Rsa2048Sha384,
+            S::Rsa3072Sha384Pss,
+        ] {
+            let der = KeyPair::generate(&u(), a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+                .to_vec();
+            let other = KeyPair::generate(&u(), a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+                .to_vec();
+            let f = fields(&der);
+            let misordered = tlv(0xa0, &[attribute(0x15), attribute(0x14)].concat());
+            let mut cases = vec![
+                ("trailing junk", [der.clone(), vec![0xde, 0xad]].concat()),
+                ("two keys", [der.clone(), other.clone()].concat()),
+                (
+                    "v2 without [1]",
+                    with_field(&sequence(&f[..3]), 0, vec![2, 1, 1]),
+                ),
+                (
+                    "attributes out of order",
+                    sequence(&[&f[..3], &[misordered], &f[3..]].concat()),
+                ),
+                (
+                    "an undefined field",
+                    sequence(&[&f[..], &[vec![0x02, 0x01, 0x05]]].concat()),
+                ),
+            ];
+            if a != S::Ed25519 {
+                let own = KeyPair::from_pkcs8_der(&u(), a, &der).unwrap();
+                let carried = tlv(0x81, &[&[0][..], own.public_key()].concat());
+                let v2 = sequence(&[&f[..3], &[carried]].concat());
+                cases.push(("v2 with its own [1]", with_field(&v2, 0, vec![2, 1, 1])));
+            }
+            match a {
+                S::EcdsaP256Sha256 => cases.push(("explicit curve", der_hex(P256_EXPLICIT))),
+                S::Ed25519 => {
+                    let swapped = with_field(&der, 3, fields(&other)[3].clone());
+                    let carried = pkcs8::split_tlv(&fields(&other)[3]).unwrap().1[1..].to_vec();
+                    assert_eq!(
+                        checked_private_key(a, kind(a).unwrap(), &swapped),
+                        Ok(pkcs8::Carried {
+                            public_key: Some(&carried[..]),
+                            expanded_key: None
+                        })
+                    );
+                    assert_eq!(
+                        KeyPair::from_pkcs8_der(&u(), a, &swapped).err(),
+                        Some(CryptoError::SignaturePrivateKey { algorithm: a })
+                    );
+                    assert!(tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())));
+                    assert!(!tls_loads(PrivateKeyDer::Pkcs8(swapped.into())));
+                }
+                S::Rsa2048Sha384 | S::Rsa3072Sha384Pss => {
+                    let no_null = sequence(&[fields(&f[1])[0].clone()]);
+                    cases.push(("rsaEncryption without NULL", with_field(&der, 1, no_null)));
+                    let (_, inner, _) = pkcs8::split_tlv(&f[2]).unwrap();
+                    let mut stripped = fields(inner);
+                    for at in [2, 4, 5, 6, 7, 8] {
+                        stripped[at] = vec![0x02, 0x01, 0x00];
+                    }
+                    let stripped = tlv(0x04, &sequence(&stripped));
+                    cases.push(("stripped", with_field(&der, 2, stripped)));
+                    assert!(tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())));
+                    assert!(tls_loads(PrivateKeyDer::Pkcs1(inner.to_vec().into())));
+                    for (why, at) in [("privateExponent", 3), ("coefficient", 8)] {
+                        let mut altered = fields(inner);
+                        *altered[at].last_mut().unwrap() ^= 0x02;
+                        let pkcs1 = sequence(&altered);
+                        let altered = with_field(&der, 2, tlv(0x04, &pkcs1));
+                        assert!(checked_private_key(a, kind(a).unwrap(), &altered).is_ok());
+                        assert_eq!(
+                            KeyPair::from_pkcs8_der(&u(), a, &altered).err(),
+                            Some(CryptoError::SignaturePrivateKey { algorithm: a }),
+                            "{a} {why} altered"
+                        );
+                        assert!(
+                            !tls_loads(PrivateKeyDer::Pkcs8(altered.into())),
+                            "{a} {why}"
+                        );
+                        assert!(!tls_loads(PrivateKeyDer::Pkcs1(pkcs1.into())), "{a} {why}");
+                    }
+                    if a == S::Rsa2048Sha384 {
+                        cases.push(("three primes", der_hex(RSA_THREE_PRIMES)));
+                    }
+                }
+                _ => {}
+            }
+            for (why, der) in cases {
+                assert_refused(a, why, &der);
+            }
+        }
+    }
+
+    fn tls_loads(der: PrivateKeyDer<'static>) -> bool {
+        let policy = crate::resolve(crate::Profile::Unrestricted, crate::Options::default())
+            .unwrap()
+            .tls;
+        super::super::tls::load_private_key(&policy, der).is_ok()
+    }
+
+    fn der_hex(h: &str) -> Vec<u8> {
+        hex::decode(h).unwrap()
+    }
+
+    #[test]
+    fn the_crates_own_keys_and_every_rfc_form_are_taken() {
+        let attributes = tlv(0xa0, &[attribute(0x14), attribute(0x15)].concat());
+        for &a in S::ALL {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                continue;
+            }
+            let k = KeyPair::generate(&u(), a).unwrap();
+            let der = k.to_pkcs8_der().unwrap().to_vec();
+            let f = fields(&der);
+            for form in [
+                der.clone(),
+                sequence(&[&f[..3], std::slice::from_ref(&attributes), &f[3..]].concat()),
+                sequence(&[&f[..3], &[tlv(0xa0, &[])], &f[3..]].concat()),
+            ] {
+                let imported = KeyPair::from_pkcs8_der(&u(), a, &form).unwrap();
+                assert_eq!(imported.public_key(), k.public_key(), "{a}");
+            }
+        }
+        let ed = sig::Ed25519KeyPair::generate().unwrap();
+        let v1: Pkcs8V1Der<'static> = ed.as_der().unwrap();
+        assert_eq!(fields(v1.as_ref()).len(), 3);
+        assert_eq!(
+            KeyPair::from_pkcs8_der(&u(), S::Ed25519, v1.as_ref())
+                .unwrap()
+                .public_key(),
+            ed.public_key().as_ref()
+        );
+        let p384 = KeyPair::generate(&u(), S::EcdsaP384Sha384).unwrap();
+        let der = p384.to_pkcs8_der().unwrap().to_vec();
+        let f = fields(&der);
+        let (_, inner, _) = pkcs8::split_tlv(&f[2]).unwrap();
+        let ec = fields(inner);
+        let parameters = tlv(0xa0, &tlv(0x06, &[0x2b, 0x81, 0x04, 0x00, 0x22]));
+        let with_parameters = sequence(&[&ec[..2], &[parameters], &ec[2..]].concat());
+        let der = with_field(&der, 2, tlv(0x04, &with_parameters));
+        assert_eq!(
+            KeyPair::from_pkcs8_der(&u(), S::EcdsaP384Sha384, &der)
+                .unwrap()
+                .public_key(),
+            p384.public_key()
+        );
+        assert_refused(S::EcdsaP384Sha384, "bare ECPrivateKey", &with_parameters);
+    }
+
+    #[test]
+    fn a_carried_public_key_is_the_keys_own() {
+        let refused = Err(CryptoError::SignaturePrivateKey {
+            algorithm: S::Ed25519,
+        });
+        assert_eq!(matches_carried(S::Ed25519, None, b"k"), Ok(()));
+        assert_eq!(matches_carried(S::Ed25519, Some(b"k"), b"k"), Ok(()));
+        assert_eq!(matches_carried(S::Ed25519, Some(b"j"), b"k"), refused);
+        for a in [S::EcdsaP256Sha256, S::EcdsaP521Sha384] {
+            let der = KeyPair::generate(&u(), a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+                .to_vec();
+            let other = KeyPair::generate(&u(), a).unwrap();
+            let private_key = fields(&der)[2].clone();
+            let (_, inner, _) = pkcs8::split_tlv(&private_key).unwrap();
+            assert!(tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())), "{a}");
+            assert!(tls_loads(PrivateKeyDer::Sec1(inner.to_vec().into())), "{a}");
+            let mut ec = fields(inner);
+            let point = tlv(0x03, &[&[0][..], other.public_key()].concat());
+            *ec.last_mut().unwrap() = tlv(0xa1, &point);
+            let sec1 = sequence(&ec);
+            assert!(!tls_loads(PrivateKeyDer::Sec1(sec1.clone().into())), "{a}");
+            let der = with_field(&der, 2, tlv(0x04, &sec1));
+            assert!(!tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())), "{a}");
+            assert_eq!(
+                checked_private_key(a, kind(a).unwrap(), &der),
+                Ok(pkcs8::Carried {
+                    public_key: Some(other.public_key()),
+                    expanded_key: None
+                }),
+                "{a}"
+            );
+            assert_eq!(
+                KeyPair::from_pkcs8_der(&u(), a, &der).err(),
+                Some(CryptoError::SignaturePrivateKey { algorithm: a }),
+                "{a}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_key_pair_is_send_and_sync() {
+        fn shared<T: Send + Sync>() {}
+        shared::<KeyPair>();
+    }
+
+    #[test]
+    fn a_key_pair_holds_the_parsed_key_and_never_its_encoding() {
+        for &a in S::ALL {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                continue;
+            }
+            let k = KeyPair::generate(&u(), a).unwrap();
+            let KeyPair {
+                alg,
+                key,
+                public,
+                descriptor,
+            } = &k;
+            assert_eq!((*alg, *descriptor), (a, rcgen_alg(a).unwrap()), "{a}");
+            assert_eq!(public, k.public_key(), "{a}");
+            let held = match (key, kind(a).unwrap()) {
+                (Held::Ecdsa(key), Kind::Ecdsa { .. }) => key.public_key().as_ref().to_vec(),
+                (Held::Ed25519(key), Kind::Ed25519) => key.public_key().as_ref().to_vec(),
+                (Held::Rsa(key), Kind::Rsa { .. }) => key.public_key().as_ref().to_vec(),
+                (Held::MlDsa(key), Kind::MlDsa87) => key.public_key().unwrap(),
+                _ => panic!("{a}: held as another kind"),
+            };
+            assert_eq!(&held, public, "{a}");
+        }
+    }
+
+    #[test]
+    fn a_raw_public_key_has_exactly_its_algorithms_shape() {
+        let refused = |a| Err(CryptoError::SignaturePublicKey { algorithm: a });
+        for (a, len) in [
+            (S::EcdsaP256Sha256, 65),
+            (S::EcdsaP384Sha384, 97),
+            (S::EcdsaP521Sha512, 133),
+            (S::Ed25519, 32),
+            (S::MlDsa87, 2592),
+        ] {
+            let k = kind(a).unwrap();
+            let first = if len == 32 || len == 2592 { 0x11 } else { 0x04 };
+            let mut key = vec![0x11; len];
+            key[0] = first;
+            assert_eq!(checked_public_key(a, k, &key), Ok(()), "{a}");
+            for bad in [&key[..len - 1], &[&key[..], &[0]].concat(), &[]] {
+                assert_eq!(
+                    checked_public_key(a, k, bad),
+                    refused(a),
+                    "{a} {}",
+                    bad.len()
+                );
+            }
+            if first == 0x04 {
+                for prefix in [0x02, 0x03, 0x06, 0x07, 0x00] {
+                    key[0] = prefix;
+                    assert_eq!(checked_public_key(a, k, &key), refused(a), "{a} {prefix}");
+                }
+            }
+        }
+        let rsa = KeyPair::generate(&u(), S::Rsa2048Sha384Pss).unwrap();
+        for a in [S::Rsa2048Sha384, S::Rsa2048Sha384Pss] {
+            assert_eq!(
+                checked_public_key(a, kind(a).unwrap(), rsa.public_key()),
+                Ok(())
+            );
+        }
+        assert_eq!(
+            checked_public_key(
+                S::Rsa3072Sha384Pss,
+                kind(S::Rsa3072Sha384Pss).unwrap(),
+                rsa.public_key()
+            ),
+            refused(S::Rsa3072Sha384Pss)
+        );
+    }
+
+    #[test]
+    fn a_wrong_key_shape_is_refused_before_the_module_and_admission_before_both() {
+        let k = KeyPair::generate(&u(), S::EcdsaP384Sha384).unwrap();
+        let signature = k.sign(b"m").unwrap();
+        let short = &k.public_key()[..96];
+        assert_eq!(
+            verify(&u(), S::EcdsaP384Sha384, short, b"m", &signature),
+            Err(CryptoError::SignaturePublicKey {
+                algorithm: S::EcdsaP384Sha384
+            })
+        );
+        let cnsa2 = admit(Profile::Cnsa2, Options::default());
+        let refused = CryptoError::NotInProfile {
+            profile: Profile::Cnsa2,
+            algorithm: Algorithm::Signature(S::EcdsaP384Sha384),
+        };
+        assert_eq!(
+            verify(&cnsa2, S::EcdsaP384Sha384, short, b"m", &signature),
+            Err(refused)
+        );
+        assert_eq!(
+            KeyPair::from_pkcs8_der(&cnsa2, S::EcdsaP384Sha384, b"junk").err(),
+            Some(refused)
+        );
+        assert_eq!(
+            KeyPair::generate(&cnsa2, S::EcdsaP384Sha384).err(),
+            Some(refused)
+        );
+    }
+
+    #[test]
     fn debug_never_prints_key_material() {
-        let k = KeyPair::generate(S::Ed25519).unwrap();
+        let k = KeyPair::generate(&u(), S::Ed25519).unwrap();
         assert_eq!(format!("{k:?}"), "KeyPair(ed25519, ..)");
     }
 }

@@ -19,7 +19,7 @@ pub enum Family {
     KxGroup,
     /// Signature schemes.
     SignatureScheme,
-    /// Key algorithms.
+    /// Key algorithms, for TLS certificate keys.
     KeyAlgorithm,
     /// Message authentication codes, outside TLS.
     Mac,
@@ -31,6 +31,8 @@ pub enum Family {
     Aead,
     /// Hashing, outside TLS.
     Hash,
+    /// Signatures, outside TLS.
+    Signature,
 }
 
 /// Why a certificate signing request could not be produced.
@@ -156,7 +158,8 @@ pub enum CryptoError {
     NotFips,
     /// Key generation failed.
     KeyGeneration(Algorithm),
-    /// A private key was refused.
+    /// Not produced since 0.10.0: `signature::KeyPair::from_pkcs8_der` refuses with
+    /// `CryptoError::SignaturePrivateKey`. Its removal is #58.
     PrivateKey,
     /// A signature did not verify.
     Verify,
@@ -202,6 +205,24 @@ pub enum CryptoError {
         options: Options,
         /// The family left empty.
         category: Family,
+    },
+    /// A signature private key that cannot be imported: its PKCS#8 structure is not the one its
+    /// RFCs define for the algorithm, or the module refuses it.
+    SignaturePrivateKey {
+        /// The signature algorithm.
+        algorithm: SignatureAlgorithm,
+    },
+    /// A public key that is not the raw key of the signature algorithm's shape, such as a
+    /// SubjectPublicKeyInfo or a compressed point.
+    SignaturePublicKey {
+        /// The signature algorithm.
+        algorithm: SignatureAlgorithm,
+    },
+    /// A signature algorithm that is not a TLS certificate key algorithm, refused where a TLS key
+    /// or a certificate request is made: an RSA-PSS variant.
+    NotTlsKey {
+        /// The refused algorithm.
+        algorithm: SignatureAlgorithm,
     },
     /// A key algorithm the profile does not admit.
     KeyNotInProfile {
@@ -354,6 +375,15 @@ impl fmt::Display for CryptoError {
                     "the {profile} profile, with {options}, names no {category:?}"
                 )
             }
+            CryptoError::SignaturePrivateKey { algorithm } => {
+                write!(f, "the {algorithm} private key was refused")
+            }
+            CryptoError::SignaturePublicKey { algorithm } => {
+                write!(f, "the public key is not a raw {algorithm} public key")
+            }
+            CryptoError::NotTlsKey { algorithm } => {
+                write!(f, "{algorithm} is not a TLS certificate key algorithm")
+            }
             CryptoError::KeyNotInProfile { profile, algorithm } => {
                 write!(f, "the {profile} profile does not admit {algorithm} keys")
             }
@@ -464,10 +494,11 @@ mod tests {
                 Family::Kdf,
                 Family::KeyAgreement,
                 Family::Aead,
-                Family::Hash
+                Family::Hash,
+                Family::Signature
             ]
             .map(|f| format!("{f:?}")),
-            ["Mac", "Kdf", "KeyAgreement", "Aead", "Hash"]
+            ["Mac", "Kdf", "KeyAgreement", "Aead", "Hash", "Signature"]
         );
         assert_eq!(
             CryptoError::PolicyVersionUnusable {
@@ -499,7 +530,7 @@ mod tests {
             peer_certificates_match_profile: false,
             cnsa1_unclassified_nss: false,
         };
-        let table: [(CryptoError, &str); 18] = [
+        let table: [(CryptoError, &str); 21] = [
             (
                 CryptoError::EmptyProfile {
                     profile: Profile::Cnsa1,
@@ -522,6 +553,24 @@ mod tests {
                     algorithm: SignatureAlgorithm::Rsa3072Sha384,
                 },
                 "the bsi profile does not admit rsa3072-sha384 keys",
+            ),
+            (
+                CryptoError::SignaturePrivateKey {
+                    algorithm: SignatureAlgorithm::Ed25519,
+                },
+                "the ed25519 private key was refused",
+            ),
+            (
+                CryptoError::SignaturePublicKey {
+                    algorithm: SignatureAlgorithm::MlDsa87,
+                },
+                "the public key is not a raw ml-dsa-87 public key",
+            ),
+            (
+                CryptoError::NotTlsKey {
+                    algorithm: SignatureAlgorithm::Rsa3072Sha384Pss,
+                },
+                "rsa3072-sha384-pss is not a TLS certificate key algorithm",
             ),
             (
                 CryptoError::NotApproved {

@@ -263,11 +263,12 @@ macro_rules! __conformance_key_agreement_tests {
                         "{k:?} {bad:02x?}"
                     );
                 }
-                let pair = signature::KeyPair::generate(s).unwrap();
-                let key = ecdh::StaticKey::from_pkcs8_der(&a, k, pair.to_pkcs8_der()).unwrap();
+                let unrestricted = admit(Profile::Unrestricted, Options::default());
+                let pair = signature::KeyPair::generate(&unrestricted, s).unwrap();
+                let der = pair.to_pkcs8_der().unwrap();
+                let key = ecdh::StaticKey::from_pkcs8_der(&a, k, &der).unwrap();
                 assert_eq!(key.public_key(), pair.public_key(), "{k:?}");
                 assert_eq!(key.algorithm(), k);
-                let der = pair.to_pkcs8_der();
                 for bad in [&der[..der.len() - 1], b"not a key", b""] {
                     assert_eq!(
                         ecdh::StaticKey::from_pkcs8_der(&a, k, bad).map(|_| ()),
@@ -278,7 +279,7 @@ macro_rules! __conformance_key_agreement_tests {
                 for &other in KeyAgreementAlgorithm::ALL {
                     if other != k {
                         assert_eq!(
-                            ecdh::StaticKey::from_pkcs8_der(&a, other, der).map(|_| ()),
+                            ecdh::StaticKey::from_pkcs8_der(&a, other, &der).map(|_| ()),
                             Err(CryptoError::KeyAgreementPrivateKey { algorithm: other }),
                             "{k:?} as {other:?}"
                         );
@@ -294,9 +295,14 @@ macro_rules! __conformance_key_agreement_tests {
                     x_refused
                 );
             }
-            let ed = signature::KeyPair::generate(SignatureAlgorithm::Ed25519).unwrap();
+            let ed = signature::KeyPair::generate(
+                &admit(Profile::Unrestricted, Options::default()),
+                SignatureAlgorithm::Ed25519,
+            )
+            .unwrap();
             assert_eq!(
-                ecdh::StaticKey::from_pkcs8_der(&a, E::X25519, ed.to_pkcs8_der()).map(|_| ()),
+                ecdh::StaticKey::from_pkcs8_der(&a, E::X25519, &ed.to_pkcs8_der().unwrap())
+                    .map(|_| ()),
                 x_refused
             );
         }

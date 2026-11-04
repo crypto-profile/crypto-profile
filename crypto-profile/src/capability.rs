@@ -191,6 +191,17 @@ const fn gcm_scenario_2(l: Linkage) -> &'static str {
     }
 }
 
+const ED25519_5314: Approval = Approval::NotApproved {
+    source: "AWS-LC FIPS 3.1.0 Security Policy, cert #5314 (static), Table 12 (Approved Services), pp. 24-25: Signature Generation and Signature Verification list RSA and ECDSA, not EdDSA",
+};
+
+const fn ed25519_3x(l: Linkage) -> Approval {
+    match l {
+        Linkage::Static => ED25519_5314,
+        Linkage::Dynamic => Approval::Approved { source: table5(l) },
+    }
+}
+
 /// X25519, in key agreement and as a TLS group, on a module with no security policy: IG C.K
 /// settles it for every module.
 const X25519_NOT_APPROVED: Approval = Approval::NotApproved {
@@ -203,21 +214,24 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
     let (available, approval) = match a {
         Algorithm::Signature(s) => match s {
             SignatureAlgorithm::MlDsa87 => (false, no),
+            SignatureAlgorithm::Ed25519 => (true, ed25519_3x(l)),
             SignatureAlgorithm::EcdsaP256Sha256
             | SignatureAlgorithm::EcdsaP384Sha384
             | SignatureAlgorithm::EcdsaP521Sha384
             | SignatureAlgorithm::EcdsaP521Sha512
-            | SignatureAlgorithm::Ed25519
             | SignatureAlgorithm::Rsa2048Sha384
             | SignatureAlgorithm::Rsa3072Sha384
-            | SignatureAlgorithm::Rsa4096Sha384 => (true, yes),
+            | SignatureAlgorithm::Rsa4096Sha384
+            | SignatureAlgorithm::Rsa2048Sha384Pss
+            | SignatureAlgorithm::Rsa3072Sha384Pss
+            | SignatureAlgorithm::Rsa4096Sha384Pss => (true, yes),
         },
         Algorithm::Scheme(s) => match s {
             TlsSignatureScheme::MlDsa87 => (false, no),
+            TlsSignatureScheme::Ed25519 => (true, ed25519_3x(l)),
             TlsSignatureScheme::EcdsaNistp256Sha256
             | TlsSignatureScheme::EcdsaNistp384Sha384
             | TlsSignatureScheme::EcdsaNistp521Sha512
-            | TlsSignatureScheme::Ed25519
             | TlsSignatureScheme::RsaPssSha256
             | TlsSignatureScheme::RsaPssSha384
             | TlsSignatureScheme::RsaPssSha512
@@ -351,6 +365,21 @@ const fn four_x_cell(l: Linkage, a: Algorithm) -> Approval {
                 l,
                 "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
                 "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
+            ),
+            SignatureAlgorithm::Rsa2048Sha384Pss => tested_on(
+                l,
+                "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 2048, SHA2-384, salt 48)",
+                "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 2048, SHA2-384, salt 48)",
+            ),
+            SignatureAlgorithm::Rsa3072Sha384Pss => tested_on(
+                l,
+                "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 3072, SHA2-384, salt 48)",
+                "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 3072, SHA2-384, salt 48)",
+            ),
+            SignatureAlgorithm::Rsa4096Sha384Pss => tested_on(
+                l,
+                "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 4096, SHA2-384, salt 48)",
+                "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 4096, SHA2-384, salt 48)",
             ),
             SignatureAlgorithm::EcdsaP256Sha256
             | SignatureAlgorithm::EcdsaP384Sha384
@@ -767,7 +796,98 @@ mod tests {
         }
     }
 
-    fn four_x_citations() -> [(Algorithm, Option<(&'static str, &'static str)>); 60] {
+    #[test]
+    fn three_x_static_does_not_approve_ed25519_and_dynamic_does() {
+        for a in [
+            Algorithm::Signature(SignatureAlgorithm::Ed25519),
+            Algorithm::Scheme(TlsSignatureScheme::Ed25519),
+        ] {
+            assert_eq!(
+                capability(M3S, a),
+                Capability {
+                    available: true,
+                    approval: ED25519_5314
+                },
+                "{a:?}"
+            );
+            assert_eq!(
+                capability(M3D, a),
+                Capability {
+                    available: true,
+                    approval: Approval::Approved {
+                        source: table5(Linkage::Dynamic)
+                    }
+                },
+                "{a:?}"
+            );
+        }
+        let Approval::NotApproved { source } = ED25519_5314 else {
+            panic!("{ED25519_5314:?}")
+        };
+        for want in [
+            "#5314 (static)",
+            "Table 12",
+            "pp. 24-25",
+            "RSA and ECDSA",
+            "not EdDSA",
+        ] {
+            assert!(source.contains(want), "{want}");
+        }
+    }
+
+    #[test]
+    fn every_rsa_signature_cell_is_pinned_to_its_citation() {
+        use SignatureAlgorithm as S;
+        for m in [M3S, M3D] {
+            for a in [
+                S::Rsa2048Sha384,
+                S::Rsa3072Sha384,
+                S::Rsa4096Sha384,
+                S::Rsa2048Sha384Pss,
+                S::Rsa3072Sha384Pss,
+                S::Rsa4096Sha384Pss,
+            ] {
+                assert_eq!(
+                    capability(m, Algorithm::Signature(a)),
+                    Capability {
+                        available: true,
+                        approval: Approval::Approved {
+                            source: table5(m.linkage)
+                        }
+                    },
+                    "{m:?} {a}"
+                );
+            }
+        }
+        for (m, cert) in [(M4D, "A7873"), (M4S, "A7912")] {
+            for (a, padding, bits) in [
+                (S::Rsa2048Sha384, "pkcs1v1.5, pss", 2048),
+                (S::Rsa3072Sha384, "pkcs1v1.5, pss", 3072),
+                (S::Rsa4096Sha384, "pkcs1v1.5, pss", 4096),
+                (S::Rsa2048Sha384Pss, "pss, mgf1", 2048),
+                (S::Rsa3072Sha384Pss, "pss, mgf1", 3072),
+                (S::Rsa4096Sha384Pss, "pss, mgf1", 4096),
+            ] {
+                let salt = if padding.starts_with("pss") {
+                    ", salt 48"
+                } else {
+                    ""
+                };
+                let want = format!(
+                    "{cert} (RSA KeyGen, SigGen, SigVer (FIPS186-5): {padding}, {bits}, SHA2-384{salt})"
+                );
+                match capability(m, Algorithm::Signature(a)) {
+                    Capability {
+                        available: true,
+                        approval: Approval::AlgorithmTested { cavp },
+                    } => assert_eq!(cavp, want, "{m:?} {a}"),
+                    other => panic!("{m:?} {a}: {other:?}"),
+                }
+            }
+        }
+    }
+
+    fn four_x_citations() -> [(Algorithm, Option<(&'static str, &'static str)>); 63] {
         use Algorithm as A;
         use CipherSuite as C;
         use HashAlgorithm as H;
@@ -813,6 +933,27 @@ mod tests {
                 Some((
                     "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
                     "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pkcs1v1.5, pss, 4096, SHA2-384)",
+                )),
+            ),
+            (
+                A::Signature(S::Rsa2048Sha384Pss),
+                Some((
+                    "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 2048, SHA2-384, salt 48)",
+                    "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 2048, SHA2-384, salt 48)",
+                )),
+            ),
+            (
+                A::Signature(S::Rsa3072Sha384Pss),
+                Some((
+                    "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 3072, SHA2-384, salt 48)",
+                    "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 3072, SHA2-384, salt 48)",
+                )),
+            ),
+            (
+                A::Signature(S::Rsa4096Sha384Pss),
+                Some((
+                    "A7873 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 4096, SHA2-384, salt 48)",
+                    "A7912 (RSA KeyGen, SigGen, SigVer (FIPS186-5): pss, mgf1, 4096, SHA2-384, salt 48)",
                 )),
             ),
             (
@@ -1063,7 +1204,7 @@ mod tests {
                 .iter()
                 .all(|a| expected.iter().any(|(b, _)| b == a))
         );
-        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 39);
+        assert_eq!(expected.iter().filter(|(_, c)| c.is_some()).count(), 42);
         for (a, cavp) in expected {
             let approval = match (cavp, m.linkage) {
                 (Some((cavp, _)), Linkage::Dynamic) | (Some((_, cavp)), Linkage::Static) => {
@@ -1132,8 +1273,8 @@ mod tests {
     fn three_x_approval_matches_table_5() {
         use Algorithm as A;
         let approved = |a| capability(M3S, a).approval.is_approved();
-        assert!(approved(A::Signature(SignatureAlgorithm::Ed25519)));
         assert!(approved(A::Signature(SignatureAlgorithm::Rsa2048Sha384)));
+        assert!(approved(A::Signature(SignatureAlgorithm::Rsa4096Sha384Pss)));
         assert!(approved(A::Signature(SignatureAlgorithm::EcdsaP521Sha384)));
         assert!(approved(A::Kx(KxGroup::MlKem1024)));
         assert!(approved(A::Kx(KxGroup::Secp384r1)));
@@ -1193,22 +1334,26 @@ mod tests {
             Approved,
             NotApproved,
             Unverified,
+            StaticNotApproved,
         }
-        use K::{Approved as Y, NotApproved as N, Unverified as U};
-        let expected: [(Algorithm, bool, K); 60] = [
+        use K::{Approved as Y, NotApproved as N, StaticNotApproved as E, Unverified as U};
+        let expected: [(Algorithm, bool, K); 63] = [
             (A::Signature(S::MlDsa87), false, N),
             (A::Signature(S::EcdsaP256Sha256), true, Y),
             (A::Signature(S::EcdsaP384Sha384), true, Y),
             (A::Signature(S::EcdsaP521Sha384), true, Y),
             (A::Signature(S::EcdsaP521Sha512), true, Y),
-            (A::Signature(S::Ed25519), true, Y),
+            (A::Signature(S::Ed25519), true, E),
             (A::Signature(S::Rsa2048Sha384), true, Y),
             (A::Signature(S::Rsa3072Sha384), true, Y),
             (A::Signature(S::Rsa4096Sha384), true, Y),
+            (A::Signature(S::Rsa2048Sha384Pss), true, Y),
+            (A::Signature(S::Rsa3072Sha384Pss), true, Y),
+            (A::Signature(S::Rsa4096Sha384Pss), true, Y),
             (A::Scheme(T::EcdsaNistp256Sha256), true, Y),
             (A::Scheme(T::EcdsaNistp384Sha384), true, Y),
             (A::Scheme(T::EcdsaNistp521Sha512), true, Y),
-            (A::Scheme(T::Ed25519), true, Y),
+            (A::Scheme(T::Ed25519), true, E),
             (A::Scheme(T::RsaPssSha256), true, Y),
             (A::Scheme(T::RsaPssSha384), true, Y),
             (A::Scheme(T::RsaPssSha512), true, Y),
@@ -1291,7 +1436,12 @@ mod tests {
                     Approval::Unverified => K::Unverified,
                     Approval::AlgorithmTested { cavp } => panic!("{m:?} {a:?}: 3.x cites {cavp}"),
                 };
-                assert_eq!((c.available, got), (*available, *kind), "{m:?} {a:?}");
+                let want = match (kind, m.linkage) {
+                    (K::StaticNotApproved, Linkage::Static) => K::NotApproved,
+                    (K::StaticNotApproved, Linkage::Dynamic) => K::Approved,
+                    (other, _) => *other,
+                };
+                assert_eq!((c.available, got), (*available, want), "{m:?} {a:?}");
             }
         }
     }

@@ -1,34 +1,28 @@
 use crate::{Algorithm, CryptoError, SignatureAlgorithm};
+use aws_lc_rs::encoding::{AsRawBytes, PqdsaPrivateKeyRaw};
 use aws_lc_rs::signature::{self as sig, KeyPair as _};
 use zeroize::Zeroizing;
 
 pub(crate) struct MlDsa;
 
+pub(crate) struct MlDsaKey(sig::PqdsaKeyPair);
+
 impl MlDsa {
-    pub(crate) fn generate() -> Result<Zeroizing<Vec<u8>>, CryptoError> {
-        let doc = sig::PqdsaKeyPair::generate(&sig::ML_DSA_87_SIGNING)
-            .and_then(|k| k.to_pkcs8v1())
-            .map_err(|_| {
-                CryptoError::KeyGeneration(Algorithm::Signature(SignatureAlgorithm::MlDsa87))
-            })?;
-        Ok(Zeroizing::new(doc.as_ref().to_vec()))
+    pub(crate) fn generate() -> Result<MlDsaKey, CryptoError> {
+        let key = sig::PqdsaKeyPair::generate(&sig::ML_DSA_87_SIGNING).map_err(|_| {
+            CryptoError::KeyGeneration(Algorithm::Signature(SignatureAlgorithm::MlDsa87))
+        })?;
+        Ok(MlDsaKey(key))
     }
 
-    pub(crate) fn public_key(der: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        Ok(sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der)
-            .map_err(|_| CryptoError::PrivateKey)?
-            .public_key()
-            .as_ref()
-            .to_vec())
-    }
-
-    pub(crate) fn sign(der: &[u8], msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
-        let key = sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der)
-            .map_err(|_| CryptoError::PrivateKey)?;
-        let mut out = vec![0u8; sig::ML_DSA_87_SIGNING.signature_len()];
-        let n = key.sign(msg, &mut out).map_err(|_| CryptoError::Sign)?;
-        out.truncate(n);
-        Ok(out)
+    /// The key the 32-byte `seed` expands to (FIPS 204 Algorithm 6, `ML-DSA.KeyGen_internal`).
+    pub(crate) fn from_seed(seed: &[u8]) -> Result<MlDsaKey, CryptoError> {
+        let key = sig::PqdsaKeyPair::from_seed(&sig::ML_DSA_87_SIGNING, seed).map_err(|_| {
+            CryptoError::SignaturePrivateKey {
+                algorithm: SignatureAlgorithm::MlDsa87,
+            }
+        })?;
+        Ok(MlDsaKey(key))
     }
 
     pub(crate) fn verifier() -> Result<&'static dyn sig::VerificationAlgorithm, CryptoError> {
@@ -58,6 +52,38 @@ impl MlDsa {
     }
 }
 
+impl MlDsaKey {
+    pub(crate) fn public_key(&self) -> Result<Vec<u8>, CryptoError> {
+        Ok(self.0.public_key().as_ref().to_vec())
+    }
+
+    pub(crate) fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, CryptoError> {
+        let mut out = vec![0u8; sig::ML_DSA_87_SIGNING.signature_len()];
+        let n = self.0.sign(msg, &mut out).map_err(|_| CryptoError::Sign)?;
+        out.truncate(n);
+        Ok(out)
+    }
+
+    pub(crate) fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        let doc = self.0.to_pkcs8v1().map_err(|_| CryptoError::Primitive)?;
+        Ok(Zeroizing::new(doc.as_ref().to_vec()))
+    }
+
+    pub(crate) fn into_pair(self) -> sig::PqdsaKeyPair {
+        self.0
+    }
+
+    /// FIPS 204's expanded private key (§7.2 `skEncode`), RFC 9881 §6's expandedKey.
+    pub(crate) fn expanded_key(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        let raw: PqdsaPrivateKeyRaw<'static> = self
+            .0
+            .private_key()
+            .as_raw_bytes()
+            .map_err(|_| CryptoError::Primitive)?;
+        Ok(Zeroizing::new(raw.as_ref().to_vec()))
+    }
+}
+
 #[cfg(test)]
 pub(crate) fn csr_oracle(
     a: SignatureAlgorithm,
@@ -82,19 +108,219 @@ mod tests {
 
     #[test]
     fn facade_roundtrip_and_refusals() {
-        let der = MlDsa::generate().unwrap();
-        let public = MlDsa::public_key(&der).unwrap();
-        let signature = MlDsa::sign(&der, b"message").unwrap();
+        let key = MlDsa::generate().unwrap();
+        let signature = key.sign(b"message").unwrap();
         assert_eq!(signature.len(), 4627);
-        let verifier = sig::UnparsedPublicKey::new(MlDsa::verifier().unwrap(), public);
+        let public = key.public_key().unwrap();
+        assert_eq!(public.len(), 2592);
+        let verifier = sig::UnparsedPublicKey::new(MlDsa::verifier().unwrap(), &public);
         assert!(verifier.verify(b"message", &signature).is_ok());
         assert!(verifier.verify(b"different", &signature).is_err());
-        assert_eq!(MlDsa::public_key(b"invalid"), Err(CryptoError::PrivateKey));
+        let der = key.to_pkcs8_der().unwrap();
+        assert_eq!(der.len(), 54);
+        assert_eq!(&der[..22], ML_DSA_87_SEED_PREFIX);
         assert_eq!(
-            MlDsa::sign(b"invalid", b"message"),
-            Err(CryptoError::PrivateKey)
+            MlDsa::from_seed(&der[22..]).unwrap().public_key(),
+            Ok(public)
         );
+        for seed in [&der[23..], &[0; 33]] {
+            assert_eq!(
+                MlDsa::from_seed(seed).err(),
+                Some(CryptoError::SignaturePrivateKey {
+                    algorithm: SignatureAlgorithm::MlDsa87
+                })
+            );
+        }
         assert_eq!(MlDsa::rcgen_alg().unwrap(), &rcgen::PKCS_ML_DSA_87);
+    }
+
+    fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
+        let n = u16::try_from(value.len()).unwrap();
+        let [hi, lo] = n.to_be_bytes();
+        let len = match n {
+            0..=0x7f => vec![lo],
+            0x80..=0xff => vec![0x81, lo],
+            _ => vec![0x82, hi, lo],
+        };
+        [&[tag][..], &len, value].concat()
+    }
+
+    // RFC 9881 §6 forms of one ML-DSA-87 key, rebuilt around the crate's own seed-form PKCS#8.
+    struct Forms {
+        public: Vec<u8>,
+        seed: Vec<u8>,
+        expanded: Vec<u8>,
+    }
+
+    impl Forms {
+        fn of(der: &[u8]) -> Self {
+            let key = sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der).unwrap();
+            let raw: PqdsaPrivateKeyRaw<'static> = key.private_key().as_raw_bytes().unwrap();
+            assert_eq!(&der[..22], ML_DSA_87_SEED_PREFIX);
+            Self {
+                public: key.public_key().as_ref().to_vec(),
+                seed: der[22..].to_vec(),
+                expanded: raw.as_ref().to_vec(),
+            }
+        }
+
+        fn key(&self, private_key: &[u8], public_key: Option<&[u8]>) -> Vec<u8> {
+            let version = [0x02, 0x01, u8::from(public_key.is_some())];
+            let algorithm = tlv(0x30, &tlv(0x06, &ML_DSA_87_OID));
+            let public = public_key.map_or(Vec::new(), |k| tlv(0x81, &[&[0][..], k].concat()));
+            tlv(
+                0x30,
+                &[&version[..], &algorithm, &tlv(0x04, private_key), &public].concat(),
+            )
+        }
+    }
+
+    const ML_DSA_87_OID: [u8; 9] = [0x60, 0x86, 0x48, 0x01, 0x65, 0x03, 0x04, 0x03, 0x13];
+    const ML_DSA_87_SEED_PREFIX: &[u8] = &[
+        0x30, 0x34, 0x02, 0x01, 0x00, 0x30, 0x0b, 0x06, 0x09, 0x60, 0x86, 0x48, 0x01, 0x65, 0x03,
+        0x04, 0x03, 0x13, 0x04, 0x22, 0x80, 0x20,
+    ];
+
+    #[test]
+    fn an_ml_dsa_key_outside_rfc_9881_is_refused_and_every_form_it_defines_is_taken() {
+        use crate::signature::KeyPair;
+        let a = SignatureAlgorithm::MlDsa87;
+        let refused = Some(CryptoError::SignaturePrivateKey { algorithm: a });
+        let unrestricted = crate::admit(crate::Profile::Unrestricted, crate::Options::default());
+        let generated = KeyPair::generate(&unrestricted, a).unwrap();
+        let f = Forms::of(&generated.to_pkcs8_der().unwrap());
+        let other = Forms::of(
+            &KeyPair::generate(&unrestricted, a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap(),
+        );
+        let seed = tlv(0x80, &f.seed);
+        let both = tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, &f.expanded)].concat());
+        for der in [
+            f.key(&seed, None),
+            f.key(&both, None),
+            f.key(&seed, Some(&f.public)),
+            f.key(&both, Some(&f.public)),
+        ] {
+            let k = KeyPair::from_pkcs8_der(&unrestricted, a, &der).unwrap();
+            assert_eq!(k.public_key(), generated.public_key());
+        }
+        for (why, der) in [
+            ("expandedKey alone", f.key(&tlv(0x04, &f.expanded), None)),
+            (
+                "seed then 05 00",
+                f.key(&[&seed[..], &[0x05, 0x00]].concat(), None),
+            ),
+            (
+                "both then 05 00",
+                f.key(&[&both[..], &[0x05, 0x00]].concat(), None),
+            ),
+            (
+                "publicKey of another key",
+                f.key(&seed, Some(&other.public)),
+            ),
+            (
+                "both, expandedKey of another key",
+                f.key(
+                    &tlv(
+                        0x30,
+                        &[tlv(0x04, &f.seed), tlv(0x04, &other.expanded)].concat(),
+                    ),
+                    None,
+                ),
+            ),
+        ] {
+            assert_eq!(
+                KeyPair::from_pkcs8_der(&unrestricted, a, &der).err(),
+                refused,
+                "{why}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_ml_dsa_key_whose_expanded_key_is_not_its_seeds_is_refused() {
+        use crate::signature::KeyPair;
+        let a = SignatureAlgorithm::MlDsa87;
+        let unrestricted = crate::admit(crate::Profile::Unrestricted, crate::Options::default());
+        let f = Forms::of(
+            &KeyPair::generate(&unrestricted, a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap(),
+        );
+        // FIPS 204 §7.2 skEncode: rho 0..32, K 32..64, tr 64..128, then s1, s2 and t0 (1568..).
+        for (field, at) in [("K", 40), ("tr", 100), ("t0", 4890)] {
+            let mut expanded = f.expanded.clone();
+            expanded[at] ^= 0x01;
+            let both = tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, &expanded)].concat());
+            for public in [None, Some(&f.public[..])] {
+                assert_eq!(
+                    KeyPair::from_pkcs8_der(&unrestricted, a, &f.key(&both, public)).err(),
+                    Some(CryptoError::SignaturePrivateKey { algorithm: a }),
+                    "{field}, publicKey {}",
+                    public.is_some()
+                );
+            }
+        }
+        let both = tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, &f.expanded)].concat());
+        let held = crate::signature::ml_dsa_87_key(&f.key(&both, None)).unwrap();
+        assert_eq!(*held.expanded_key().unwrap(), f.expanded);
+        assert_eq!(
+            *held.to_pkcs8_der().unwrap(),
+            [ML_DSA_87_SEED_PREFIX, &f.seed].concat()
+        );
+    }
+
+    #[test]
+    fn the_tls_key_provider_holds_an_ml_dsa_key_to_rfc_9881_too() {
+        use crate::rustls::pki_types::{PrivateKeyDer, alg_id};
+        let unrestricted = crate::admit(crate::Profile::Unrestricted, crate::Options::default());
+        let generate = || {
+            crate::signature::KeyPair::generate(&unrestricted, SignatureAlgorithm::MlDsa87)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+        };
+        let f = Forms::of(&generate());
+        let other = Forms::of(&generate());
+        let policy = crate::resolve(crate::Profile::Cnsa2, crate::Options::default())
+            .unwrap()
+            .tls;
+        let load = |der: &[u8]| {
+            crate::tls::load_private_key(&policy, PrivateKeyDer::Pkcs8(der.to_vec().into()))
+        };
+        let both = |expanded: &[u8]| tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, expanded)].concat());
+        let spki = crate::rustls::sign::public_key_to_spki(&alg_id::ML_DSA_87, &f.public);
+        for der in [
+            f.key(&tlv(0x80, &f.seed), None),
+            f.key(&both(&f.expanded), None),
+            f.key(&both(&f.expanded), Some(&f.public)),
+        ] {
+            assert_eq!(load(&der).unwrap().public_key(), Some(spki.clone()));
+        }
+        let flipped = |at: usize| {
+            let mut expanded = f.expanded.clone();
+            expanded[at] ^= 0x01;
+            both(&expanded)
+        };
+        for (why, der) in [
+            ("K", f.key(&flipped(40), None)),
+            ("t0", f.key(&flipped(4890), None)),
+            ("t0, own publicKey", f.key(&flipped(4890), Some(&f.public))),
+            ("expandedKey alone", f.key(&tlv(0x04, &f.expanded), None)),
+            (
+                "publicKey of another key",
+                f.key(&tlv(0x80, &f.seed), Some(&other.public)),
+            ),
+        ] {
+            assert_eq!(
+                load(&der).err(),
+                Some(CryptoError::Tls(crate::TlsError::PrivateKey)),
+                "{why}"
+            );
+        }
     }
 
     #[test]

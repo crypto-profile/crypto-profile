@@ -640,7 +640,7 @@ macro_rules! __conformance_profile_tests {
         #[test]
         fn certified_key_refuses_a_key_the_profile_does_not_admit() -> Result<(), CryptoError> {
             let d = Options::default();
-            let key = KeyPair::generate(S::EcdsaP384Sha384)?;
+            let key = KeyPair::generate(&admit(Profile::Unrestricted, d), S::EcdsaP384Sha384)?;
             let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
                 .unwrap()
                 .self_signed(&key)
@@ -657,7 +657,8 @@ macro_rules! __conformance_profile_tests {
             }
             if let Some(one) = admitted(Profile::Cnsa1, d) {
                 assert!(one.certified_key(chain.clone(), &key).is_ok());
-                let other = KeyPair::generate(S::EcdsaP384Sha384)?;
+                let other =
+                    KeyPair::generate(&admit(Profile::Unrestricted, d), S::EcdsaP384Sha384)?;
                 for c in [chain, vec![]] {
                     assert_eq!(
                         one.certified_key(c, &other).err(),
@@ -665,6 +666,56 @@ macro_rules! __conformance_profile_tests {
                     );
                 }
             }
+            Ok(())
+        }
+
+        #[test]
+        fn every_tls_key_has_a_public_route_to_certified_key() -> Result<(), CryptoError> {
+            let d = Options::default();
+            let mut outside = Vec::new();
+            for &p in Profile::ALL {
+                let Some(r) = admitted(p, d) else { continue };
+                let own = admit(p, d);
+                for &k in &r.keys {
+                    let key = if own.signatures().contains(&k) {
+                        KeyPair::generate(&own, k)?
+                    } else {
+                        outside.push((p, k));
+                        assert_eq!(
+                            KeyPair::generate(&own, k).err(),
+                            Some(CryptoError::NotInProfile {
+                                profile: p,
+                                algorithm: Algorithm::Signature(k)
+                            })
+                        );
+                        let (csr_key, _) = csr::generate_csr(k, &csr::CsrParams::default())?;
+                        let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+                            .unwrap()
+                            .self_signed(&csr_key)
+                            .unwrap();
+                        assert!(r.certified_key(vec![cert.der().clone()], &csr_key).is_ok());
+                        KeyPair::generate(&admit(Profile::Unrestricted, d), k)?
+                    };
+                    let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+                        .unwrap()
+                        .self_signed(&key)
+                        .unwrap();
+                    assert!(
+                        r.certified_key(vec![cert.der().clone()], &key).is_ok(),
+                        "{p} {k}"
+                    );
+                }
+            }
+            assert_eq!(
+                outside,
+                [
+                    (Profile::Preferred, S::EcdsaP521Sha384),
+                    (Profile::Bsi, S::EcdsaP384Sha384),
+                    (Profile::Bsi, S::EcdsaP256Sha256),
+                    (Profile::Bsi, S::EcdsaP521Sha512),
+                    (Profile::Fips1403, S::EcdsaP521Sha384),
+                ]
+            );
             Ok(())
         }
     };

@@ -415,6 +415,42 @@ pub const HASH_GOLDEN: &[(Profile, &[HashAlgorithm], &[HashAlgorithm])] = &{
     ]
 };
 
+/// Each profile's signature algorithms outside TLS with the `cnsa1_unclassified_nss` option off
+/// and on, in preference order, on a module that has every one; a 3.x module lacks ML-DSA-87, and
+/// `select_admitted` records it in `excluded`.
+#[doc(hidden)]
+pub const SIGNATURE_GOLDEN: &[(Profile, &[SignatureAlgorithm], &[SignatureAlgorithm])] = &{
+    use SignatureAlgorithm::{
+        EcdsaP256Sha256 as P256, EcdsaP384Sha384 as P384, EcdsaP521Sha384 as P521_384,
+        EcdsaP521Sha512 as P521_512, Ed25519 as Ed, MlDsa87 as Ml, Rsa2048Sha384 as R2048,
+        Rsa2048Sha384Pss as P2048, Rsa3072Sha384 as R3072, Rsa3072Sha384Pss as P3072,
+        Rsa4096Sha384 as R4096, Rsa4096Sha384Pss as P4096,
+    };
+    const ALL: &[SignatureAlgorithm] = &[
+        Ml, P384, P521_512, P521_384, P256, Ed, P4096, P3072, P2048, R4096, R3072, R2048,
+    ];
+    const PREFERRED: &[SignatureAlgorithm] =
+        &[Ml, P384, P521_512, P256, P4096, P3072, R4096, R3072];
+    const CNSA1: &[SignatureAlgorithm] = &[P384, P4096, P3072, R4096, R3072];
+    const CNSA1_UNCLASSIFIED: &[SignatureAlgorithm] =
+        &[P384, P4096, P3072, R4096, R3072, P2048, R2048];
+    const FIPS1403: &[SignatureAlgorithm] = &[
+        Ml, P384, P521_512, P256, Ed, P4096, P3072, P2048, R4096, R3072, R2048,
+    ];
+    const FIPS1402: &[SignatureAlgorithm] = &[
+        P384, P521_512, P521_384, P256, P4096, P3072, P2048, R4096, R3072, R2048,
+    ];
+    [
+        (Profile::Unrestricted, ALL, ALL),
+        (Profile::Preferred, PREFERRED, PREFERRED),
+        (Profile::Cnsa2, &[Ml], &[Ml]),
+        (Profile::Cnsa1, CNSA1, CNSA1_UNCLASSIFIED),
+        (Profile::Bsi, &[P4096, P3072], &[P4096, P3072]),
+        (Profile::Fips1403, FIPS1403, FIPS1403),
+        (Profile::Fips1402, FIPS1402, FIPS1402),
+    ]
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -440,6 +476,56 @@ mod tests {
         linkage: Linkage::Dynamic,
     };
 
+    fn admitted_excluded(m: Module, p: Profile) -> Vec<Algorithm> {
+        let ml_dsa = Algorithm::Signature(SignatureAlgorithm::MlDsa87);
+        match m.line {
+            ModuleLine::AwsLcFips3
+                if p.spec().signatures.contains(&SignatureAlgorithm::MlDsa87) =>
+            {
+                vec![ml_dsa]
+            }
+            ModuleLine::AwsLcFips3 | ModuleLine::AwsLcFips4 => vec![],
+        }
+    }
+
+    #[test]
+    fn select_admitted_agrees_with_the_signature_golden_rows_on_every_module() {
+        assert_eq!(SIGNATURE_GOLDEN.len(), Profile::ALL.len());
+        for (i, p) in Profile::ALL.iter().copied().enumerate() {
+            assert_eq!(SIGNATURE_GOLDEN[i].0, p);
+        }
+        for m in [M3S, M3D, M4S, M4D] {
+            for &(p, off, on) in SIGNATURE_GOLDEN {
+                for (unclassified, golden) in [(false, off), (true, on)] {
+                    let o = Options {
+                        cnsa1_unclassified_nss: unclassified,
+                        ..Options::default()
+                    };
+                    let s = crate::profile::select_admitted(p, o, m);
+                    let want: Vec<SignatureAlgorithm> = golden
+                        .iter()
+                        .copied()
+                        .filter(|a| {
+                            m.line == ModuleLine::AwsLcFips4 || *a != SignatureAlgorithm::MlDsa87
+                        })
+                        .collect();
+                    assert_eq!(s.signatures, want, "{m:?} {p} {unclassified}");
+                    assert_eq!(
+                        s.excluded,
+                        admitted_excluded(m, p),
+                        "{m:?} {p} {unclassified}"
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            admitted_excluded(M3D, Profile::Cnsa2),
+            [Algorithm::Signature(SignatureAlgorithm::MlDsa87)]
+        );
+        assert_eq!(admitted_excluded(M3S, Profile::Bsi), []);
+        assert_eq!(admitted_excluded(M4S, Profile::Unrestricted), []);
+    }
+
     #[test]
     fn select_admitted_agrees_with_the_mac_golden_rows_on_every_module() {
         assert_eq!(MAC_GOLDEN.len(), Profile::ALL.len());
@@ -455,7 +541,11 @@ mod tests {
                     };
                     let s = crate::profile::select_admitted(p, o, m);
                     assert_eq!(s.macs, want, "{m:?} {p} {unclassified}");
-                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                    assert_eq!(
+                        s.excluded,
+                        admitted_excluded(m, p),
+                        "{m:?} {p} {unclassified}"
+                    );
                 }
             }
         }
@@ -476,7 +566,11 @@ mod tests {
                     };
                     let s = crate::profile::select_admitted(p, o, m);
                     assert_eq!(s.kdfs, want, "{m:?} {p} {unclassified}");
-                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                    assert_eq!(
+                        s.excluded,
+                        admitted_excluded(m, p),
+                        "{m:?} {p} {unclassified}"
+                    );
                 }
             }
         }
@@ -497,7 +591,11 @@ mod tests {
                     };
                     let s = crate::profile::select_admitted(p, o, m);
                     assert_eq!(s.key_agreements, want, "{m:?} {p} {unclassified}");
-                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                    assert_eq!(
+                        s.excluded,
+                        admitted_excluded(m, p),
+                        "{m:?} {p} {unclassified}"
+                    );
                 }
             }
         }
@@ -518,7 +616,11 @@ mod tests {
                     };
                     let s = crate::profile::select_admitted(p, o, m);
                     assert_eq!(s.aeads, want, "{m:?} {p} {unclassified}");
-                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                    assert_eq!(
+                        s.excluded,
+                        admitted_excluded(m, p),
+                        "{m:?} {p} {unclassified}"
+                    );
                 }
             }
         }
@@ -539,7 +641,11 @@ mod tests {
                     };
                     let s = crate::profile::select_admitted(p, o, m);
                     assert_eq!(s.hashes, want, "{m:?} {p} {unclassified}");
-                    assert_eq!(s.excluded, [], "{m:?} {p} {unclassified}");
+                    assert_eq!(
+                        s.excluded,
+                        admitted_excluded(m, p),
+                        "{m:?} {p} {unclassified}"
+                    );
                 }
             }
         }

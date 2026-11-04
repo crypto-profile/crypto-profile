@@ -172,6 +172,24 @@ fn child_declaration_text_in_strings_is_refused() {
 }
 
 #[test]
+fn body_index_accepts_the_private_pkcs8_module_only_as_private() {
+    let fixture = Fixture::new();
+    fixture.write("pkcs8.rs", "pub(crate) const VALUE: u8 = 1;\n");
+    fixture.write("mod.rs", "mod pkcs8;\n");
+    let (output, _) = modules(&fixture.0, true);
+    assert!(output.contains("mod pkcs8 {"), "{output}");
+    assert!(!output.contains("pub mod pkcs8"), "{output}");
+    for index in [
+        "pub mod pkcs8;\n",
+        "#[cfg(any(test, feature = \"test-support\"))]\nmod pkcs8;\n",
+    ] {
+        fixture.write("mod.rs", index);
+        let message = refusal(|| modules(&fixture.0, true));
+        assert!(message.contains("invalid index line"), "{index}: {message}");
+    }
+}
+
+#[test]
 fn body_index_accepts_the_hmac_module() {
     let fixture = Fixture::new();
     fixture.write("hmac.rs", "pub const VALUE: u8 = 1;\n");
