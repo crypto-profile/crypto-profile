@@ -126,26 +126,7 @@ Set `Options::peer_certificates_match_profile` to `true` when resolving a profil
 
 The old `tls::client_builder` and `tls::server_builder` refuse a rule-bearing policy with `TlsError::StrictBuilderRequired`. A strict builder refuses an opaque or incompatible handle with `TlsError::IncompatiblePeerVerifier`: both its rule and canonical handshake-scheme set must match the policy. A certificate rule refusal carries `TlsError::PeerCertificate` with the profile and violation.
 
-**Application identity checks.** When the peer is not identified by DNS name, pass a `tls::PeerIdentity` to `with_peer_identity` on either verifier builder ([decision 0009](decisions/0009-peer-identity-check.md)). It runs after the path, EKU, revocation and the policy's peer-certificate rule pass. On the client verifier it can only refuse. On the server verifier it replaces the name check, so it is the only identity decision: its `Ok` admits the peer whatever server name the client connected with. The check does not see the server name the client connected with, so a verifier handle, and the client configuration built on it, expect one identity; use one per expected peer. The strict builders accept the handle exactly as they accept one without a check. `PeerLeaf::uri_names` returns the leaf's URIs, refusing a leaf whose subjectAltName rustls-webpki cannot read in full, or whose URI entries the two parsers count differently. Compare the whole identity, and refuse more than one when your scheme allows one:
-
-```rust
-#[derive(Debug)]
-struct Workload(&'static str);
-
-impl tls::PeerIdentity for Workload {
-    fn check(&self, leaf: &tls::PeerLeaf<'_>) -> Result<(), rustls::Error> {
-        match leaf.uri_names()?.as_slice() {
-            [one] if *one == self.0 => Ok(()),
-            _ => Err(rustls::Error::General("peer is not the expected workload".into())),
-        }
-    }
-}
-
-let verifier = tls::server_cert_verifier_builder(roots, &policy)?
-    .with_peer_identity(Arc::new(Workload("spiffe://example.org/payments")))
-    .build()
-    .expect("roots are not empty");
-```
+**Application identity checks.** When the peer is not identified by DNS name, pass a `tls::PeerIdentity` to `with_peer_identity` on either verifier builder ([decision 0009](decisions/0009-peer-identity-check.md)). It runs after the path, EKU, revocation and the policy's peer-certificate rule pass. On the client verifier it can only refuse. On the server verifier it replaces the name check, so it is the only identity decision: its `Ok` admits the peer whatever server name the client connected with. The check does not see the server name the client connected with, so a verifier handle, and the client configuration built on it, expect one identity; use one per expected peer. The strict builders accept the handle exactly as they accept one without a check. `PeerLeaf::uri_names` returns the leaf's URIs, refusing a leaf whose subjectAltName rustls-webpki cannot read in full, or whose URI entries the two parsers count differently. Compare the whole identity, and refuse more than one when your scheme allows one; the compiled example on [`tls::PeerIdentity`](https://docs.rs/crypto-profile-awslc4/latest/crypto_profile_awslc4/tls/trait.PeerIdentity.html) admits one workload's URI.
 
 `cnsa1` accepts exactly P-384 or RSA-3072/4096 leaves; `cnsa2` accepts only ML-DSA-87. The other profiles use minimum RSA sizes: 3072 for `preferred`, 3000 for `bsi`, and 2048 for `unrestricted`, `fips1403` and `fips1402`; `fips1403` also requires an even RSA bit length. Their allowed key families and chain rules are in [profiles](profiles.md#9-impact-of-peer-certificate-enforcement).
 

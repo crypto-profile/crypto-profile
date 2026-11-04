@@ -556,6 +556,35 @@ impl<'a> PeerLeaf<'a> {
 /// A resumed session does not call it again: rustls reuses the earlier decision. A check whose
 /// answer can change needs a new verifier and configuration when it changes, or resumption
 /// disabled.
+///
+/// A check for one workload's URI, which compares the whole identity and refuses a leaf that
+/// carries more than one:
+///
+#[doc = concat!("```no_run\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, resolve, rustls, tls};")]
+/// use std::sync::Arc;
+///
+/// #[derive(Debug)]
+/// struct Workload(&'static str);
+///
+/// impl tls::PeerIdentity for Workload {
+///     fn check(&self, leaf: &tls::PeerLeaf<'_>) -> Result<(), rustls::Error> {
+///         match leaf.uri_names()?.as_slice() {
+///             [one] if *one == self.0 => Ok(()),
+///             _ => Err(rustls::Error::General("peer is not the expected workload".into())),
+///         }
+///     }
+/// }
+///
+/// # fn roots() -> Arc<rustls::RootCertStore> { unimplemented!() }
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let policy = resolve(Profile::Fips1403, Options::default())?.tls;
+/// let verifier = tls::server_cert_verifier_builder(roots(), &policy)?
+///     .with_peer_identity(Arc::new(Workload("spiffe://example.org/payments")))
+///     .build()?;
+/// # let _ = verifier;
+/// # Ok(())
+/// # }
+/// ```
 pub trait PeerIdentity: std::fmt::Debug + Send + Sync {
     /// Refuses `leaf` unless it carries the expected identity.
     fn check(&self, leaf: &PeerLeaf<'_>) -> Result<(), rustls::Error>;
