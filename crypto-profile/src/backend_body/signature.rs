@@ -202,20 +202,20 @@ impl KeyPair {
     /// outside TLS, or its module line lacks (`Admitted::admit_signature`).
     pub fn generate(admitted: &Admitted, a: S) -> Result<KeyPair, CryptoError> {
         check(admitted, a)?;
-        let k = kind(a)?;
-        KeyPair::generated(a, k)
+        KeyPair::generated(a)
     }
 
     /// A new TLS certificate key of algorithm `a`, for `csr` and the TLS tests: refuses an
     /// algorithm that is not a TLS key algorithm, then one the module line lacks.
     pub(crate) fn generate_tls_key(a: S) -> Result<KeyPair, CryptoError> {
         tls_key(a)?;
-        KeyPair::generated(a, kind(a)?)
+        KeyPair::generated(a)
     }
 
-    fn generated(a: S, k: Kind) -> Result<KeyPair, CryptoError> {
+    /// A new key pair of algorithm `a`, once a caller has admitted `a`.
+    pub(crate) fn generated(a: S) -> Result<KeyPair, CryptoError> {
         let fail = |_| CryptoError::KeyGeneration(Algorithm::Signature(a));
-        let key = match k {
+        let key = match kind(a)? {
             Kind::Ecdsa { signing, .. } => {
                 Held::Ecdsa(sig::EcdsaKeyPair::generate(signing).map_err(fail)?)
             }
@@ -250,6 +250,12 @@ impl KeyPair {
     /// is held parsed; [`KeyPair::to_pkcs8_der`] encodes it again.
     pub fn from_pkcs8_der(admitted: &Admitted, a: S, der: &[u8]) -> Result<KeyPair, CryptoError> {
         check(admitted, a)?;
+        KeyPair::imported(a, der)
+    }
+
+    /// The key pair `der` holds, once a caller has admitted `a`: [`KeyPair::from_pkcs8_der`]'s
+    /// structure and consistency checks.
+    pub(crate) fn imported(a: S, der: &[u8]) -> Result<KeyPair, CryptoError> {
         let k = kind(a)?;
         let carried = checked_private_key(a, k, der)?;
         let bad = |_| CryptoError::SignaturePrivateKey { algorithm: a };
@@ -1319,6 +1325,14 @@ mod tests {
             !tls_loads(PrivateKeyDer::Pkcs8(der.to_vec().into())),
             "tls: {a} {why}"
         );
+        let r = crate::resolve(Profile::Unrestricted, Options::default()).unwrap();
+        if r.keys.contains(&a) {
+            assert_eq!(
+                crate::tls::CertificateKey::from_pkcs8_der(&r, a, der).err(),
+                refused,
+                "certificate key: {a} {why}"
+            );
+        }
     }
 
     fn with_field(der: &[u8], at: usize, field: Vec<u8>) -> Vec<u8> {

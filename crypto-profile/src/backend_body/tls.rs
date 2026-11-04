@@ -2,15 +2,18 @@
 // MIT license. See LICENSE-THIRD-PARTY.
 //! TLS configuration from a [`Policy`]: which versions, cipher suites, key-exchange groups and
 //! handshake signature schemes a provider carries, in preference order.
+use crate::signature::KeyPair;
 use crate::{
-    Algorithm, CipherSuite as C, CryptoError, Family, KxGroup as K, TlsError,
-    TlsSignatureScheme as T, TlsVersion as V, ensure,
+    Algorithm, CipherSuite as C, CryptoError, Family, KxGroup as K, Resolved, SignatureAlgorithm,
+    TlsError, TlsSignatureScheme as T, TlsVersion as V, ensure,
 };
 use rustls::crypto::{CryptoProvider, KeyProvider, WebPkiSupportedAlgorithms};
 use rustls::pki_types::{PrivateKeyDer, SubjectPublicKeyInfoDer};
 use rustls::sign::{Signer, SigningKey};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::{Arc, Mutex, OnceLock};
+use zeroize::Zeroizing;
 
 /// What a TLS configuration may use: versions, suites and groups in preference order, and a set
 /// of signature schemes. No list may name an entry twice.
@@ -425,6 +428,128 @@ pub fn load_private_key(
         .load_private_key(der)
         .map_err(|_| CryptoError::Tls(TlsError::PrivateKey))
 }
+
+/// A TLS certificate key: a key of one of the profile's TLS key algorithms (`Resolved::keys`),
+/// for a certificate request (`csr::generate_csr`) and this side's certificate
+/// (`Resolved::certified_key`). It is held once, as the module's parsed key (decision 0012), and
+/// is not `Clone`; its `Debug` prints the algorithm only. It has no `sign`; it signs through the
+/// TLS key provider with the policy's TLS schemes, and that signer signs whatever bytes it is
+/// given (decision 0016, residual 2). Its PKCS#8 export goes back in only through
+/// [`CertificateKey::from_pkcs8_der`], [`load_private_key`], or
+/// `signature::KeyPair::from_pkcs8_der` only under an `Admitted` whose signatures admit it
+/// (decision 0016).
+///
+#[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, tls};")]
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let r = resolve(Profile::Fips1403, Options::default())?;
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384)?;
+/// let der = key.to_pkcs8_der()?;
+/// let again = tls::CertificateKey::from_pkcs8_der(&r, SignatureAlgorithm::EcdsaP384Sha384, &der)?;
+/// assert_eq!(again.public_key(), key.public_key());
+/// # Ok(())
+/// # }
+/// ```
+pub struct CertificateKey(KeyPair);
+
+impl fmt::Debug for CertificateKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "CertificateKey({}, ..)", self.0.algorithm())
+    }
+}
+
+impl CertificateKey {
+    /// A new key of algorithm `a`. Refuses, in this order, an algorithm not in `r.keys`
+    /// (`CryptoError::KeyNotInProfile`), then one the module line lacks
+    /// (`CryptoError::Unavailable`).
+    pub fn generate(r: &Resolved, a: SignatureAlgorithm) -> Result<CertificateKey, CryptoError> {
+        admit_certificate_key(r, a)?;
+        KeyPair::generated(a).map(CertificateKey)
+    }
+
+    /// Imports a DER RFC 5958 §2 OneAsymmetricKey of algorithm `a`. Refuses as
+    /// [`CertificateKey::generate`] does, then any structure or key
+    /// `signature::KeyPair::from_pkcs8_der` refuses, with `CryptoError::SignaturePrivateKey`.
+    pub fn from_pkcs8_der(
+        r: &Resolved,
+        a: SignatureAlgorithm,
+        der: &[u8],
+    ) -> Result<CertificateKey, CryptoError> {
+        admit_certificate_key(r, a)?;
+        KeyPair::imported(a, der).map(CertificateKey)
+    }
+
+    /// The key's algorithm.
+    pub fn algorithm(&self) -> SignatureAlgorithm {
+        self.0.algorithm()
+    }
+
+    /// The raw public key: the bytes of the SubjectPublicKeyInfo `subjectPublicKey` BIT STRING.
+    pub fn public_key(&self) -> &[u8] {
+        self.0.public_key()
+    }
+
+    /// The key's PKCS#8 encoding, made by the module on each call into a buffer the caller owns and
+    /// that is wiped on drop, as `signature::KeyPair::to_pkcs8_der` makes it.
+    pub fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        self.0.to_pkcs8_der()
+    }
+}
+
+fn admit_certificate_key(r: &Resolved, a: SignatureAlgorithm) -> Result<(), CryptoError> {
+    r.admit_key(a)?;
+    ensure(Algorithm::Signature(a))
+}
+
+/// A `CertificateKey` does not sign, is not a `signature::KeyPair`, does not convert into one and
+/// is not `Clone`. This block compiles, and holds every import, path and call the `compile_fail`
+/// blocks below make before their last line:
+///
+#[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, admit, resolve, signature, tls};")]
+/// fn signer<T: rcgen::SigningKey>(_: &T) {}
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let a = admit(Profile::Fips1403, Options::default());
+/// let pair = signature::KeyPair::generate(&a, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// signer(&pair);
+/// let _: &signature::KeyPair = &pair;
+/// ```
+///
+#[doc = concat!("```compile_fail,E0599\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, tls};")]
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let signature = key.sign(b"message");
+/// ```
+///
+#[doc = concat!("```compile_fail,E0277\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, tls};")]
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let signature = rcgen::SigningKey::sign(&key, b"message");
+/// ```
+///
+#[doc = concat!("```compile_fail,E0308\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, signature, tls};")]
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let pair: &signature::KeyPair = &key;
+/// ```
+///
+#[doc = concat!("```compile_fail,E0599\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, signature, tls};")]
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let pair: &signature::KeyPair = key.as_ref();
+/// ```
+///
+#[doc = concat!("```compile_fail,E0277\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, signature, tls};")]
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let pair: signature::KeyPair = key.into();
+/// ```
+///
+#[doc = concat!("```compile_fail,E0599\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, resolve, tls};")]
+/// let r = resolve(Profile::Fips1403, Options::default()).unwrap();
+/// let key = tls::CertificateKey::generate(&r, SignatureAlgorithm::EcdsaP384Sha384).unwrap();
+/// let copy = key.clone();
+/// ```
+mod certificate_keys_do_not_sign {}
 
 use crate::{PeerCertificateRuleId, PeerVerifierIdentity};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
@@ -3695,5 +3820,101 @@ mod tests {
         let base = base_provider();
         assert_eq!(format!("{:?}", base.secure_random), "Rng");
         assert_eq!(format!("{:?}", base.key_provider), "Keys");
+    }
+
+    fn resolved_or_absent(p: crate::Profile) -> Option<Resolved> {
+        match crate::resolve(p, crate::Options::default()) {
+            Ok(r) => Some(r),
+            Err(e) => {
+                assert_eq!(
+                    (p, crate::MODULE.line),
+                    (crate::Profile::Cnsa2, crate::ModuleLine::AwsLcFips3),
+                    "{e:?}"
+                );
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn a_certificate_key_is_admitted_against_the_profiles_tls_key_list() {
+        let u = crate::admit(crate::Profile::Unrestricted, crate::Options::default());
+        for &p in crate::Profile::ALL {
+            let Some(r) = resolved_or_absent(p) else {
+                continue;
+            };
+            for &a in S::ALL {
+                if !r.keys.contains(&a) {
+                    let refused = Some(CryptoError::KeyNotInProfile {
+                        profile: p,
+                        algorithm: a,
+                    });
+                    assert_eq!(CertificateKey::generate(&r, a).err(), refused, "{p} {a}");
+                    assert_eq!(
+                        CertificateKey::from_pkcs8_der(&r, a, b"junk").err(),
+                        refused,
+                        "{p} {a}"
+                    );
+                    continue;
+                }
+                let key = CertificateKey::generate(&r, a).unwrap();
+                assert_eq!(key.algorithm(), a, "{p} {a}");
+                let der = key.to_pkcs8_der().unwrap();
+                let again = CertificateKey::from_pkcs8_der(&r, a, &der).unwrap();
+                assert_eq!(again.algorithm(), a, "{p} {a}");
+                let pair = crate::signature::KeyPair::from_pkcs8_der(&u, a, &der).unwrap();
+                assert_eq!(key.public_key(), pair.public_key(), "{p} {a}");
+                assert_eq!(again.public_key(), pair.public_key(), "{p} {a}");
+            }
+        }
+    }
+
+    #[test]
+    fn under_cnsa2_a_p256_certificate_key_is_refused() {
+        for p in [crate::Profile::Cnsa2, crate::Profile::Cnsa1] {
+            let Some(r) = resolved_or_absent(p) else {
+                continue;
+            };
+            assert_eq!(
+                CertificateKey::generate(&r, S::EcdsaP256Sha256).err(),
+                Some(CryptoError::KeyNotInProfile {
+                    profile: p,
+                    algorithm: S::EcdsaP256Sha256
+                })
+            );
+        }
+    }
+
+    #[test]
+    fn a_certificate_key_the_module_line_lacks_is_unavailable_after_admission() {
+        let mut r =
+            crate::resolve(crate::Profile::Unrestricted, crate::Options::default()).unwrap();
+        r.keys = S::ALL.to_vec();
+        for &a in S::ALL {
+            if crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                assert_eq!(CertificateKey::generate(&r, a).unwrap().algorithm(), a);
+                assert_eq!(
+                    CertificateKey::from_pkcs8_der(&r, a, b"junk").err(),
+                    Some(CryptoError::SignaturePrivateKey { algorithm: a })
+                );
+            } else {
+                let unavailable = Some(CryptoError::Unavailable(Algorithm::Signature(a)));
+                assert_eq!(CertificateKey::generate(&r, a).err(), unavailable, "{a}");
+                assert_eq!(
+                    CertificateKey::from_pkcs8_der(&r, a, b"junk").err(),
+                    unavailable,
+                    "{a}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_certificate_key_is_send_and_sync_and_debug_prints_its_algorithm_only() {
+        fn shared<T: Send + Sync>() {}
+        shared::<CertificateKey>();
+        let r = crate::resolve(crate::Profile::Unrestricted, crate::Options::default()).unwrap();
+        let key = CertificateKey::generate(&r, S::Ed25519).unwrap();
+        assert_eq!(format!("{key:?}"), "CertificateKey(ed25519, ..)");
     }
 }
