@@ -434,10 +434,9 @@ pub fn load_private_key(
 /// (`Resolved::certified_key`). It is held once, as the module's parsed key (decision 0012), and
 /// is not `Clone`; its `Debug` prints the algorithm only. It has no `sign`; it signs through the
 /// TLS key provider with the policy's TLS schemes, and that signer signs whatever bytes it is
-/// given (decision 0016, residual 2). Outside TLS its PKCS#8 export signs only as a
-/// `signature::KeyPair`, which imports only under an `Admitted` whose signatures admit the
-/// algorithm. The export is the private key: a library that holds it signs with it under no
-/// profile (decision 0016, residuals 2 and 4).
+/// given (decision 0016, residual 2). Its PKCS#8 export is the private key, which imports as a
+/// `signature::KeyPair` only under an `Admitted` whose signatures admit the algorithm; what else
+/// takes it is decision 0016, residuals 2 and 4.
 ///
 #[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, csr, resolve, tls};")]
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
