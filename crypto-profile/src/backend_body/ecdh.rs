@@ -702,6 +702,7 @@ mod tests {
                 Vec::new(),
                 local_key_id(),
                 [friendly_name(), local_key_id()].concat(),
+                attribute(&[0x2a], &[]),
             ] {
                 assert_taken(
                     &a,
@@ -817,6 +818,18 @@ mod tests {
                 (
                     "attribute with an empty OID",
                     attributes(&sequence(&[tlv(0x06, &[]), tlv(0x31, &[])])),
+                ),
+                (
+                    "attribute with an OID starting with 0x80",
+                    attributes(&sequence(&[tlv(0x06, &[0x80, 0x01]), tlv(0x31, &[])])),
+                ),
+                (
+                    "attribute with an unterminated OID",
+                    attributes(&sequence(&[tlv(0x06, &[0x2a, 0x86]), tlv(0x31, &[])])),
+                ),
+                (
+                    "attribute with a padded OID arc",
+                    attributes(&sequence(&[tlv(0x06, &[0x2a, 0x80, 0x01]), tlv(0x31, &[])])),
                 ),
                 (
                     "attribute without values",

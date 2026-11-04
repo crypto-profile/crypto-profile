@@ -41,12 +41,11 @@ fn optional(tag: u8, der: &[u8]) -> (Option<&[u8]>, &[u8]) {
 // X.690 §11.6: `next` does not precede `prev`, compared as octet strings with the shorter padded
 // at its end with 0-octets.
 fn not_after(prev: &[u8], next: &[u8]) -> bool {
-    let padded = |s: &[u8]| {
-        (0..prev.len().max(next.len()))
-            .map(|i| s.get(i).copied().unwrap_or(0))
-            .collect::<Vec<_>>()
-    };
-    padded(prev) <= padded(next)
+    fn padded(s: &[u8], len: usize) -> impl Iterator<Item = u8> + '_ {
+        s.iter().copied().chain(std::iter::repeat(0)).take(len)
+    }
+    let len = prev.len().max(next.len());
+    padded(prev, len).le(padded(next, len))
 }
 
 // The elements of a SET OF in `der`, each passing `element(tag, value)`, in ascending order of their
@@ -70,14 +69,27 @@ fn set_of(mut der: &[u8], element: impl Fn(u8, &[u8]) -> bool) -> bool {
     false
 }
 
+// X.690 §8.19: base-128 subidentifiers, minimal (none starts with 0x80), the last one terminated.
+fn is_oid(contents: &[u8]) -> bool {
+    let mut starts = true;
+    for &octet in contents {
+        if starts && octet == 0x80 {
+            return false;
+        }
+        starts = octet & 0x80 == 0;
+    }
+    starts && !contents.is_empty()
+}
+
 // RFC 5958 §2 Attributes, IMPLICIT: Attribute ::= SEQUENCE { type OBJECT IDENTIFIER, values SET },
 // a SET OF Attribute whose attrValues is a SET OF ANY.
 fn are_attributes(der: &[u8]) -> bool {
     set_of(der, |tag, attribute| {
-        let Some((0x06, [_, ..], values)) = split_tlv(attribute) else {
+        let Some((0x06, oid, values)) = split_tlv(attribute) else {
             return false;
         };
         tag == 0x30
+            && is_oid(oid)
             && matches!(split_tlv(values), Some((0x31, set, [])) if set_of(set, |_, _| true))
     })
 }
@@ -393,6 +405,34 @@ mod tests {
         assert!(!not_after(&[1, 3], &[1, 2, 9]));
         assert!(!not_after(&[2], &[1, 9, 9]));
         assert!(not_after(&[1, 9, 9], &[2]));
+        assert!(not_after(&[0x31], &[0x31, 0x00]));
+        assert!(not_after(&[0x31, 0x00], &[0x31]));
+        assert!(!not_after(&[0x31, 0x01], &[0x31]));
+        assert!(not_after(&[0x31], &[0x31, 0x01]));
+    }
+
+    #[test]
+    fn an_object_identifier_is_non_empty_minimal_arcs_the_last_terminated() {
+        for good in [
+            &[0x2a][..],
+            &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d],
+            &[0x00],
+            &[0x81, 0x00],
+            &[0x2a, 0x81, 0x80, 0x01],
+        ] {
+            assert!(is_oid(good), "{good:02x?}");
+        }
+        for bad in [
+            &[][..],
+            &[0x80],
+            &[0x80, 0x01],
+            &[0x2a, 0x86],
+            &[0x2a, 0x80, 0x01],
+            &[0x2a, 0x7f, 0x80, 0x01],
+            &[0x81],
+        ] {
+            assert!(!is_oid(bad), "{bad:02x?}");
+        }
     }
 
     fn tlv(tag: u8, value: &[u8]) -> Vec<u8> {
@@ -418,6 +458,10 @@ mod tests {
             ),
             tlv(0x31, &[]),
         ])
+    }
+
+    fn attribute_of(oid: &[u8]) -> Vec<u8> {
+        tlv(0xa0, &sequence(&[tlv(0x06, oid), tlv(0x31, &[])]))
     }
 
     const V1: [u8; 3] = [0x02, 0x01, 0x00];
@@ -446,6 +490,18 @@ mod tests {
     ) -> Vec<(&'static str, Vec<u8>)> {
         let attributes = tlv(0xa0, &[attribute(0x14), attribute(0x15)].concat());
         let mut bad = vec![
+            (
+                "an attribute OID starting with 0x80",
+                key(&V1, algorithm, inner, &[attribute_of(&[0x80, 0x01])]),
+            ),
+            (
+                "an attribute OID with an unterminated last arc",
+                key(&V1, algorithm, inner, &[attribute_of(&[0x2a, 0x86])]),
+            ),
+            (
+                "an attribute OID with a padded arc",
+                key(&V1, algorithm, inner, &[attribute_of(&[0x2a, 0x80, 0x01])]),
+            ),
             (
                 "trailing byte",
                 [key(&V1, algorithm, inner, &[]), vec![0]].concat(),
@@ -615,6 +671,12 @@ mod tests {
                 check(&key(&V1, algorithm, inner, &[tlv(0xa0, &[])])),
                 "{name}"
             );
+            for oid in [&[0x2a][..], &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d]] {
+                assert!(
+                    check(&key(&V1, algorithm, inner, &[attribute_of(oid)])),
+                    "{name}: {oid:02x?}"
+                );
+            }
             if let Some(public) = &public {
                 assert!(
                     check(&key(&V2, algorithm, inner, &[bits(public)])),

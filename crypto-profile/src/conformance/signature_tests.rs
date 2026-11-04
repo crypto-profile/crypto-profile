@@ -326,6 +326,30 @@ macro_rules! __conformance_signature_tests {
         }
 
         #[test]
+        fn conformance_an_attribute_must_name_a_well_formed_object_identifier() {
+            let u = unrestricted();
+            for f in fixtures() {
+                let a = f.algorithm;
+                let fs = fields(&f.pkcs8);
+                let import = |oid: &[u8]| {
+                    let attribute = sequence(&[tlv(0x06, oid), tlv(0x31, &[])]);
+                    let der = sequence(&[&fs[..3], &[tlv(0xa0, &attribute)], &fs[3..]].concat());
+                    signature::KeyPair::from_pkcs8_der(&u, a, &der).map(|k| k.public_key().to_vec())
+                };
+                for oid in [&[0x2a][..], &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d]] {
+                    assert_eq!(import(oid), Ok(f.public.clone()), "{a}: {oid:02x?}");
+                }
+                for oid in [&[0x80, 0x01][..], &[0x2a, 0x86], &[0x2a, 0x80, 0x01]] {
+                    assert_eq!(
+                        import(oid),
+                        Err(CryptoError::SignaturePrivateKey { algorithm: a }),
+                        "{a}: {oid:02x?}"
+                    );
+                }
+            }
+        }
+
+        #[test]
         fn conformance_key_pairs_print_no_key_material() {
             for f in fixtures() {
                 let k = signature::KeyPair::from_pkcs8_der(&unrestricted(), f.algorithm, &f.pkcs8)
