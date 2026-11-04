@@ -20,8 +20,8 @@ One reviewed place for an application's cryptographic choices:
   - key derivation (HKDF and the one-step KDF) under a profile, admitted with `admit` and derived through `kdf::derive`;
   - ECDH key agreement under a profile, through `ecdh::EphemeralKey` and `ecdh::StaticKey`, each completing into `kdf` (HKDF, the one-step KDF, or RFC 9180's DHKEM) so the shared secret never leaves the crate;
   - a sealed box under a profile;
-  - signing and verification (ML-DSA-87, ECDSA, Ed25519, RSA with PKCS#1 v1.5 or PSS), under a profile for keys made through `signature::KeyPair::generate` or `KeyPair::from_pkcs8_der` and for `signature::verify` (the key `csr::generate_csr` returns is not governed, #57), with private keys taken only in the PKCS#8 structure their RFCs define and public keys only raw;
-  - certificate-request generation.
+  - signing and verification (ML-DSA-87, ECDSA, Ed25519, RSA with PKCS#1 v1.5 or PSS), under a profile for keys made through `signature::KeyPair::generate` or `KeyPair::from_pkcs8_der` and for `signature::verify`, with private keys taken only in the PKCS#8 structure their RFCs define and public keys only raw;
+  - certificate requests for a `tls::CertificateKey`, a key of the profile's TLS key list that has no `sign`; it signs through the TLS key provider with the policy's TLS schemes, and its export imports as a `KeyPair` only under an `Admitted` whose signatures admit it.
 - **A capability table** that records, for each certified or submitted module and each algorithm, whether the backend implements it and what the published evidence says about it: the module's security policy, cited by table for every sourced cell, or, for a module with no published security policy, one CAVP certificate, which is never an approval ([decision 0004](docs/decisions/0004-algorithm-tested.md)).
 
 ## What it is not

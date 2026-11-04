@@ -66,6 +66,8 @@ impl KeyPair {
 
 **The PSS variants stay outside TLS.** No TLS `key_algorithms` list holds them. `SignatureAlgorithm::tls_scheme()` returns `Option<TlsSignatureScheme>`, `None` for them. `csr::generate_csr` generates its key through a crate-private constructor that refuses a variant with no TLS scheme with `CryptoError::NotTlsKey`, then one the module line lacks, so a certificate request keeps the TLS key rules; `Resolved::admit_key` and `Resolved::certified_key` refuse them with `KeyNotInProfile`. rcgen has no RSA-PSS descriptor, so a PSS `KeyPair` refuses to sign for rcgen (`rcgen::Error::UnsupportedSignatureAlgorithm`) rather than sign under a PKCS#1 v1.5 label.
 
+*(Amended 2026-11-04, #57: `csr::generate_csr` no longer generates a key, and the crate-private constructor and `CryptoError::NotTlsKey` are removed. A certificate request is for a `tls::CertificateKey`, which `CertificateKey::generate` and `CertificateKey::from_pkcs8_der` admit against the profile's TLS key list, so they refuse the PSS variants with `KeyNotInProfile`, as `Resolved::admit_key` and `Resolved::certified_key` do; [decision 0016](0016-tls-certificate-keys.md).)*
+
 **Fixed-width ECDSA (maintainer, 2026-11-03)** for JOSE (RFC 7518 §3.4) is not in this decision: it is #56, a 0.10.x addition. ECDSA signatures are DER `Ecdsa-Sig-Value`.
 
 **Profiles (maintainer, 2026-11-03).** Each profile admits from its own text (decision 0008), separately from its TLS keys:
@@ -112,6 +114,7 @@ The ECDSA order is the order of each profile's key agreement curves (P-384, P-52
 6. **No FIPS 204 context strings.** aws-lc-rs passes none, so ML-DSA-87 signs with the empty context.
 7. **Fixed-width ECDSA** (JOSE) is #56.
 8. **The key `csr::generate_csr` returns** is a `signature::KeyPair` made without an `Admitted`: it signs and exports under no profile (#57). The `signature` family governs keys made through `KeyPair::generate` and `KeyPair::from_pkcs8_der`, and `signature::verify`.
+   *(Amended 2026-11-04, #57: closed. `csr::generate_csr` takes a `tls::CertificateKey`, made under a `Resolved` and admitted against its TLS key list, which has no `sign`; it signs through the TLS key provider with the policy's TLS schemes, and its export imports as a `KeyPair` only under an `Admitted` whose signatures admit it; [decision 0016](0016-tls-certificate-keys.md).)*
 9. **One RSA key, one scheme.** The RSA-PSS variants use `rsaEncryption` keys (RFC 4055 §1.2's `id-RSASSA-PSS` key is not used), so `from_pkcs8_der` takes one key under either padding of its size. RFC 8017 §6 (pp. 17-18) does not recommend using one RSA key pair in more than one scheme, and RFC 4055 §8 (p. 22) says a key that signs RSASSA-PSS should not be used for other purposes; keeping a key to one variant is the caller's (#59).
 
 ## Consequences
