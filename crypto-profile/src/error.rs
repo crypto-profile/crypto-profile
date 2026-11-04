@@ -158,9 +158,6 @@ pub enum CryptoError {
     NotFips,
     /// Key generation failed.
     KeyGeneration(Algorithm),
-    /// Not produced since 0.10.0: `signature::KeyPair::from_pkcs8_der` refuses with
-    /// `CryptoError::SignaturePrivateKey`. Its removal is #58.
-    PrivateKey,
     /// A signature did not verify.
     Verify,
     /// Signing failed.
@@ -339,7 +336,6 @@ impl fmt::Display for CryptoError {
                 f.write_str("the AWS-LC FIPS module is not active, or the provider is not FIPS")
             }
             CryptoError::KeyGeneration(a) => write!(f, "key generation for {a:?} failed"),
-            CryptoError::PrivateKey => f.write_str("the private key was refused"),
             CryptoError::Verify => f.write_str("the signature does not verify"),
             CryptoError::Sign => f.write_str("signing failed"),
             CryptoError::Csr(e) => write!(f, "the certificate signing request failed: {e:?}"),
@@ -680,7 +676,7 @@ mod tests {
 
     #[test]
     fn every_other_display_text_is_pinned() {
-        let table: [(CryptoError, &str); 17] = [
+        let table: [(CryptoError, &str); 16] = [
             (
                 CryptoError::PolicyDrift,
                 "the provider does not carry exactly the policy's algorithms",
@@ -689,7 +685,6 @@ mod tests {
                 CryptoError::KeyGeneration(Algorithm::Signature(SignatureAlgorithm::Ed25519)),
                 "key generation for Signature(Ed25519) failed",
             ),
-            (CryptoError::PrivateKey, "the private key was refused"),
             (CryptoError::Verify, "the signature does not verify"),
             (CryptoError::Sign, "signing failed"),
             (CryptoError::AeadKey, "the AEAD key was refused"),
