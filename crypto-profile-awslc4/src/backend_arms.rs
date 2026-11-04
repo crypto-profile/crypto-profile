@@ -15,16 +15,13 @@ impl MlDsa {
         Ok(MlDsaKey(key))
     }
 
-    /// The key `der`'s seed expands to. The module keeps a `both` form's expandedKey as given, so
-    /// the key is imported again from the seed it exports.
-    pub(crate) fn from_pkcs8(der: &[u8]) -> Result<MlDsaKey, CryptoError> {
-        let import = |der: &[u8]| sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der).ok();
-        let key = import(der)
-            .and_then(|given| given.to_pkcs8v1().ok())
-            .and_then(|seed| import(seed.as_ref()))
-            .ok_or(CryptoError::SignaturePrivateKey {
+    /// The key the 32-byte `seed` expands to (FIPS 204 Algorithm 6, `ML-DSA.KeyGen_internal`).
+    pub(crate) fn from_seed(seed: &[u8]) -> Result<MlDsaKey, CryptoError> {
+        let key = sig::PqdsaKeyPair::from_seed(&sig::ML_DSA_87_SIGNING, seed).map_err(|_| {
+            CryptoError::SignaturePrivateKey {
                 algorithm: SignatureAlgorithm::MlDsa87,
-            })?;
+            }
+        })?;
         Ok(MlDsaKey(key))
     }
 
@@ -72,6 +69,10 @@ impl MlDsaKey {
         Ok(Zeroizing::new(doc.as_ref().to_vec()))
     }
 
+    pub(crate) fn into_pair(self) -> sig::PqdsaKeyPair {
+        self.0
+    }
+
     /// FIPS 204's expanded private key (§7.2 `skEncode`), RFC 9881 §6's expandedKey.
     pub(crate) fn expanded_key(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
         let raw: PqdsaPrivateKeyRaw<'static> = self
@@ -117,13 +118,19 @@ mod tests {
         assert!(verifier.verify(b"different", &signature).is_err());
         let der = key.to_pkcs8_der().unwrap();
         assert_eq!(der.len(), 54);
-        assert_eq!(MlDsa::from_pkcs8(&der).unwrap().public_key(), Ok(public));
+        assert_eq!(&der[..22], ML_DSA_87_SEED_PREFIX);
         assert_eq!(
-            MlDsa::from_pkcs8(b"invalid").err(),
-            Some(CryptoError::SignaturePrivateKey {
-                algorithm: SignatureAlgorithm::MlDsa87
-            })
+            MlDsa::from_seed(&der[22..]).unwrap().public_key(),
+            Ok(public)
         );
+        for seed in [&der[23..], &[0; 33]] {
+            assert_eq!(
+                MlDsa::from_seed(seed).err(),
+                Some(CryptoError::SignaturePrivateKey {
+                    algorithm: SignatureAlgorithm::MlDsa87
+                })
+            );
+        }
         assert_eq!(MlDsa::rcgen_alg().unwrap(), &rcgen::PKCS_ML_DSA_87);
     }
 
@@ -258,12 +265,62 @@ mod tests {
             }
         }
         let both = tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, &f.expanded)].concat());
-        let held = MlDsa::from_pkcs8(&f.key(&both, None)).unwrap();
+        let held = crate::signature::ml_dsa_87_key(&f.key(&both, None)).unwrap();
         assert_eq!(*held.expanded_key().unwrap(), f.expanded);
         assert_eq!(
             *held.to_pkcs8_der().unwrap(),
             [ML_DSA_87_SEED_PREFIX, &f.seed].concat()
         );
+    }
+
+    #[test]
+    fn the_tls_key_provider_holds_an_ml_dsa_key_to_rfc_9881_too() {
+        use crate::rustls::pki_types::{PrivateKeyDer, alg_id};
+        let unrestricted = crate::admit(crate::Profile::Unrestricted, crate::Options::default());
+        let generate = || {
+            crate::signature::KeyPair::generate(&unrestricted, SignatureAlgorithm::MlDsa87)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+        };
+        let f = Forms::of(&generate());
+        let other = Forms::of(&generate());
+        let policy = crate::resolve(crate::Profile::Cnsa2, crate::Options::default())
+            .unwrap()
+            .tls;
+        let load = |der: &[u8]| {
+            crate::tls::load_private_key(&policy, PrivateKeyDer::Pkcs8(der.to_vec().into()))
+        };
+        let both = |expanded: &[u8]| tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, expanded)].concat());
+        let spki = crate::rustls::sign::public_key_to_spki(&alg_id::ML_DSA_87, &f.public);
+        for der in [
+            f.key(&tlv(0x80, &f.seed), None),
+            f.key(&both(&f.expanded), None),
+            f.key(&both(&f.expanded), Some(&f.public)),
+        ] {
+            assert_eq!(load(&der).unwrap().public_key(), Some(spki.clone()));
+        }
+        let flipped = |at: usize| {
+            let mut expanded = f.expanded.clone();
+            expanded[at] ^= 0x01;
+            both(&expanded)
+        };
+        for (why, der) in [
+            ("K", f.key(&flipped(40), None)),
+            ("t0", f.key(&flipped(4890), None)),
+            ("t0, own publicKey", f.key(&flipped(4890), Some(&f.public))),
+            ("expandedKey alone", f.key(&tlv(0x04, &f.expanded), None)),
+            (
+                "publicKey of another key",
+                f.key(&tlv(0x80, &f.seed), Some(&other.public)),
+            ),
+        ] {
+            assert_eq!(
+                load(&der).err(),
+                Some(CryptoError::Tls(crate::TlsError::PrivateKey)),
+                "{why}"
+            );
+        }
     }
 
     #[test]

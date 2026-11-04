@@ -17,7 +17,7 @@ impl MlDsa {
     pub(crate) fn generate() -> Result<MlDsaKey, CryptoError> {
         unavailable().map(MlDsaKey)
     }
-    pub(crate) fn from_pkcs8(_: &[u8]) -> Result<MlDsaKey, CryptoError> {
+    pub(crate) fn from_seed(_: &[u8]) -> Result<MlDsaKey, CryptoError> {
         unavailable().map(MlDsaKey)
     }
     pub(crate) fn verifier() -> Result<&'static dyn sig::VerificationAlgorithm, CryptoError> {
@@ -78,7 +78,7 @@ mod tests {
         let unavailable =
             CryptoError::Unavailable(Algorithm::Signature(SignatureAlgorithm::MlDsa87));
         assert_eq!(MlDsa::generate().err(), Some(unavailable));
-        assert_eq!(MlDsa::from_pkcs8(b"invalid").err(), Some(unavailable));
+        assert_eq!(MlDsa::from_seed(&[0; 32]).err(), Some(unavailable));
         assert_eq!(MlDsa::verifier().err(), Some(unavailable));
         assert_eq!(MlDsa::rcgen_alg().err(), Some(unavailable));
         assert_eq!(

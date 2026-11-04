@@ -1,7 +1,7 @@
 // Ported from rustls 0.23.46 (src/crypto/aws_lc_rs/sign.rs lines 322-448), Copyright (c) 2016
 // Joseph Birr-Pixton, used under the MIT license. See LICENSE-THIRD-PARTY.
 use crate::provider::verify::Verifier;
-use aws_lc_rs::signature::{self, KeyPair as _, PqdsaKeyPair, PqdsaSigningAlgorithm};
+use aws_lc_rs::signature::{self, KeyPair as _, PqdsaKeyPair};
 use rustls::pki_types::{
     AlgorithmIdentifier, PrivatePkcs8KeyDer, SignatureVerificationAlgorithm,
     SubjectPublicKeyInfoDer, alg_id,
@@ -44,12 +44,10 @@ struct PqdsaSigningKey {
 impl PqdsaSigningKey {
     fn from_pkcs8(pkcs8: &PrivatePkcs8KeyDer<'_>) -> Option<Self> {
         PqdsaKeyKind::iter().find_map(|kind| {
-            PqdsaKeyPair::from_pkcs8(kind.to_alg(), pkcs8.secret_pkcs8_der())
-                .ok()
-                .map(|key_pair| Self {
-                    kind,
-                    inner: Arc::new(key_pair),
-                })
+            kind.load(pkcs8.secret_pkcs8_der()).map(|key_pair| Self {
+                kind,
+                inner: Arc::new(key_pair),
+            })
         })
     }
 }
@@ -132,11 +130,14 @@ impl PqdsaKeyKind {
         [Self::MlDsa44, Self::MlDsa65, Self::MlDsa87].into_iter()
     }
 
-    fn to_alg(self) -> &'static PqdsaSigningAlgorithm {
+    fn load(self, der: &[u8]) -> Option<PqdsaKeyPair> {
+        let module = |alg| PqdsaKeyPair::from_pkcs8(alg, der).ok();
         match self {
-            Self::MlDsa44 => &signature::ML_DSA_44_SIGNING,
-            Self::MlDsa65 => &signature::ML_DSA_65_SIGNING,
-            Self::MlDsa87 => &signature::ML_DSA_87_SIGNING,
+            Self::MlDsa44 => module(&signature::ML_DSA_44_SIGNING),
+            Self::MlDsa65 => module(&signature::ML_DSA_65_SIGNING),
+            Self::MlDsa87 => crate::backend_body::signature::ml_dsa_87_key(der)
+                .ok()
+                .map(crate::backend_arms::MlDsaKey::into_pair),
         }
     }
 
@@ -160,6 +161,7 @@ impl PqdsaKeyKind {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_lc_rs::signature::PqdsaSigningAlgorithm;
 
     fn pkcs8(alg: &'static PqdsaSigningAlgorithm) -> PrivatePkcs8KeyDer<'static> {
         PrivatePkcs8KeyDer::from(

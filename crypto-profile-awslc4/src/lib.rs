@@ -193,7 +193,7 @@ mod shared_body_tests {
         .unwrap();
         let der = key.to_pkcs8_der().unwrap();
         assert_eq!(
-            crate::backend_arms::MlDsa::from_pkcs8(&der)
+            crate::backend_arms::MlDsa::from_seed(&der[22..])
                 .unwrap()
                 .public_key()
                 .unwrap(),

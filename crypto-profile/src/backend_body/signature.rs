@@ -258,11 +258,7 @@ impl KeyPair {
             }
             Kind::Ed25519 => Held::Ed25519(sig::Ed25519KeyPair::from_pkcs8(der).map_err(bad)?),
             Kind::Rsa { .. } => Held::Rsa(sig::RsaKeyPair::from_pkcs8(der).map_err(bad)?),
-            Kind::MlDsa87 => {
-                let key = MlDsa::from_pkcs8(der)?;
-                matches_carried(a, carried.expanded_key, &key.expanded_key()?)?;
-                Held::MlDsa(key)
-            }
+            Kind::MlDsa87 => Held::MlDsa(ml_dsa_87_key(der)?),
         };
         let key = KeyPair::held(a, key)?;
         matches_carried(a, carried.public_key, &key.public)?;
@@ -387,9 +383,23 @@ fn checked_private_key(a: S, k: Kind, der: &[u8]) -> Result<pkcs8::Carried<'_>, 
         Kind::Ecdsa { key, .. } => pkcs8::ec(key, der, false).map(public),
         Kind::Ed25519 => pkcs8::ed25519(der).map(public),
         Kind::Rsa { bits, .. } => pkcs8::rsa(der, bits as usize).then(pkcs8::Carried::default),
-        Kind::MlDsa87 => pkcs8::ml_dsa_87(der),
+        Kind::MlDsa87 => pkcs8::ml_dsa_87(der).map(|(_, carried)| carried),
     };
     checked.ok_or(CryptoError::SignaturePrivateKey { algorithm: a })
+}
+
+/// The key an ML-DSA-87 `der` holds, refused as [`KeyPair::from_pkcs8_der`] refuses it: the key its
+/// seed expands to, once the publicKey and expandedKey it carries are that key's. The TLS key
+/// provider loads ML-DSA-87 keys through it.
+pub(crate) fn ml_dsa_87_key(der: &[u8]) -> Result<MlDsaKey, CryptoError> {
+    let a = S::MlDsa87;
+    let refused = || CryptoError::SignaturePrivateKey { algorithm: a };
+    let (seed, carried) = pkcs8::ml_dsa_87(der).ok_or_else(refused)?;
+    let key = MlDsa::from_seed(seed)?;
+    let expanded = key.expanded_key().map_err(|_| refused())?;
+    matches_carried(a, carried.expanded_key, &expanded)?;
+    matches_carried(a, carried.public_key, &key.public_key()?)?;
+    Ok(key)
 }
 
 // RFC 5915 §3, RFC 8410 §7, RFC 9881 §6 and §8.2: a carried publicKey or expandedKey that is not
@@ -466,6 +476,7 @@ mod tests {
     use super::*;
     use crate::{Options, Profile, admit};
     use crypto_profile::SignatureAlgorithm as S;
+    use rustls::pki_types::PrivateKeyDer;
 
     fn u() -> Admitted {
         admit(Profile::Unrestricted, Options::default())
@@ -1286,6 +1297,8 @@ mod tests {
                         KeyPair::from_pkcs8_der(&u(), a, &swapped).err(),
                         Some(CryptoError::SignaturePrivateKey { algorithm: a })
                     );
+                    assert!(tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())));
+                    assert!(!tls_loads(PrivateKeyDer::Pkcs8(swapped.into())));
                 }
                 S::Rsa2048Sha384 | S::Rsa3072Sha384Pss => {
                     let no_null = sequence(&[fields(&f[1])[0].clone()]);
@@ -1297,16 +1310,24 @@ mod tests {
                     }
                     let stripped = tlv(0x04, &sequence(&stripped));
                     cases.push(("stripped", with_field(&der, 2, stripped)));
+                    assert!(tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())));
+                    assert!(tls_loads(PrivateKeyDer::Pkcs1(inner.to_vec().into())));
                     for (why, at) in [("privateExponent", 3), ("coefficient", 8)] {
                         let mut altered = fields(inner);
                         *altered[at].last_mut().unwrap() ^= 0x02;
-                        let altered = with_field(&der, 2, tlv(0x04, &sequence(&altered)));
+                        let pkcs1 = sequence(&altered);
+                        let altered = with_field(&der, 2, tlv(0x04, &pkcs1));
                         assert!(checked_private_key(a, kind(a).unwrap(), &altered).is_ok());
                         assert_eq!(
                             KeyPair::from_pkcs8_der(&u(), a, &altered).err(),
                             Some(CryptoError::SignaturePrivateKey { algorithm: a }),
                             "{a} {why} altered"
                         );
+                        assert!(
+                            !tls_loads(PrivateKeyDer::Pkcs8(altered.into())),
+                            "{a} {why}"
+                        );
+                        assert!(!tls_loads(PrivateKeyDer::Pkcs1(pkcs1.into())), "{a} {why}");
                     }
                     if a == S::Rsa2048Sha384 {
                         cases.push(("three primes", der_hex(RSA_THREE_PRIMES)));
@@ -1318,6 +1339,13 @@ mod tests {
                 assert_refused(a, why, &der);
             }
         }
+    }
+
+    fn tls_loads(der: PrivateKeyDer<'static>) -> bool {
+        let policy = crate::resolve(crate::Profile::Unrestricted, crate::Options::default())
+            .unwrap()
+            .tls;
+        super::super::tls::load_private_key(&policy, der).is_ok()
     }
 
     fn der_hex(h: &str) -> Vec<u8> {
@@ -1386,10 +1414,15 @@ mod tests {
             let other = KeyPair::generate(&u(), a).unwrap();
             let private_key = fields(&der)[2].clone();
             let (_, inner, _) = pkcs8::split_tlv(&private_key).unwrap();
+            assert!(tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())), "{a}");
+            assert!(tls_loads(PrivateKeyDer::Sec1(inner.to_vec().into())), "{a}");
             let mut ec = fields(inner);
             let point = tlv(0x03, &[&[0][..], other.public_key()].concat());
             *ec.last_mut().unwrap() = tlv(0xa1, &point);
-            let der = with_field(&der, 2, tlv(0x04, &sequence(&ec)));
+            let sec1 = sequence(&ec);
+            assert!(!tls_loads(PrivateKeyDer::Sec1(sec1.clone().into())), "{a}");
+            let der = with_field(&der, 2, tlv(0x04, &sec1));
+            assert!(!tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())), "{a}");
             assert_eq!(
                 checked_private_key(a, kind(a).unwrap(), &der),
                 Ok(pkcs8::Carried {
