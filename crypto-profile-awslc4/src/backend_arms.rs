@@ -1,4 +1,5 @@
 use crate::{Algorithm, CryptoError, SignatureAlgorithm};
+use aws_lc_rs::encoding::{AsRawBytes, PqdsaPrivateKeyRaw};
 use aws_lc_rs::signature::{self as sig, KeyPair as _};
 use zeroize::Zeroizing;
 
@@ -14,12 +15,16 @@ impl MlDsa {
         Ok(MlDsaKey(key))
     }
 
+    /// The key `der`'s seed expands to. The module keeps a `both` form's expandedKey as given, so
+    /// the key is imported again from the seed it exports.
     pub(crate) fn from_pkcs8(der: &[u8]) -> Result<MlDsaKey, CryptoError> {
-        let key = sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der).map_err(|_| {
-            CryptoError::SignaturePrivateKey {
+        let import = |der: &[u8]| sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der).ok();
+        let key = import(der)
+            .and_then(|given| given.to_pkcs8v1().ok())
+            .and_then(|seed| import(seed.as_ref()))
+            .ok_or(CryptoError::SignaturePrivateKey {
                 algorithm: SignatureAlgorithm::MlDsa87,
-            }
-        })?;
+            })?;
         Ok(MlDsaKey(key))
     }
 
@@ -65,6 +70,16 @@ impl MlDsaKey {
     pub(crate) fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
         let doc = self.0.to_pkcs8v1().map_err(|_| CryptoError::Primitive)?;
         Ok(Zeroizing::new(doc.as_ref().to_vec()))
+    }
+
+    /// FIPS 204's expanded private key (§7.2 `skEncode`), RFC 9881 §6's expandedKey.
+    pub(crate) fn expanded_key(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        let raw: PqdsaPrivateKeyRaw<'static> = self
+            .0
+            .private_key()
+            .as_raw_bytes()
+            .map_err(|_| CryptoError::Primitive)?;
+        Ok(Zeroizing::new(raw.as_ref().to_vec()))
     }
 }
 
@@ -132,7 +147,6 @@ mod tests {
 
     impl Forms {
         fn of(der: &[u8]) -> Self {
-            use aws_lc_rs::encoding::{AsRawBytes, PqdsaPrivateKeyRaw};
             let key = sig::PqdsaKeyPair::from_pkcs8(&sig::ML_DSA_87_SIGNING, der).unwrap();
             let raw: PqdsaPrivateKeyRaw<'static> = key.private_key().as_raw_bytes().unwrap();
             assert_eq!(&der[..22], ML_DSA_87_SEED_PREFIX);
@@ -216,6 +230,40 @@ mod tests {
                 "{why}"
             );
         }
+    }
+
+    #[test]
+    fn an_ml_dsa_key_whose_expanded_key_is_not_its_seeds_is_refused() {
+        use crate::signature::KeyPair;
+        let a = SignatureAlgorithm::MlDsa87;
+        let unrestricted = crate::admit(crate::Profile::Unrestricted, crate::Options::default());
+        let f = Forms::of(
+            &KeyPair::generate(&unrestricted, a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap(),
+        );
+        // FIPS 204 §7.2 skEncode: rho 0..32, K 32..64, tr 64..128, then s1, s2 and t0 (1568..).
+        for (field, at) in [("K", 40), ("tr", 100), ("t0", 4890)] {
+            let mut expanded = f.expanded.clone();
+            expanded[at] ^= 0x01;
+            let both = tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, &expanded)].concat());
+            for public in [None, Some(&f.public[..])] {
+                assert_eq!(
+                    KeyPair::from_pkcs8_der(&unrestricted, a, &f.key(&both, public)).err(),
+                    Some(CryptoError::SignaturePrivateKey { algorithm: a }),
+                    "{field}, publicKey {}",
+                    public.is_some()
+                );
+            }
+        }
+        let both = tlv(0x30, &[tlv(0x04, &f.seed), tlv(0x04, &f.expanded)].concat());
+        let held = MlDsa::from_pkcs8(&f.key(&both, None)).unwrap();
+        assert_eq!(*held.expanded_key().unwrap(), f.expanded);
+        assert_eq!(
+            *held.to_pkcs8_der().unwrap(),
+            [ML_DSA_87_SEED_PREFIX, &f.seed].concat()
+        );
     }
 
     #[test]

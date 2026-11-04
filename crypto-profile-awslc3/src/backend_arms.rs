@@ -46,6 +46,9 @@ impl MlDsaKey {
     pub(crate) fn to_pkcs8_der(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
         unavailable()
     }
+    pub(crate) fn expanded_key(&self) -> Result<Zeroizing<Vec<u8>>, CryptoError> {
+        unavailable()
+    }
 }
 
 #[cfg(test)]
@@ -88,5 +91,6 @@ mod tests {
         assert_eq!(key.public_key(), Err(unavailable));
         assert_eq!(key.sign(b"message"), Err(unavailable));
         assert_eq!(key.to_pkcs8_der(), Err(unavailable));
+        assert_eq!(key.expanded_key(), Err(unavailable));
     }
 }

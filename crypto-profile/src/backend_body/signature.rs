@@ -228,8 +228,8 @@ impl KeyPair {
     /// Imports a DER RFC 5958 §2 OneAsymmetricKey of algorithm `a`. Refuses, in this order, an
     /// algorithm `admitted`'s profile does not admit outside TLS, or its module line lacks
     /// (`Admitted::admit_signature`); then any structure its RFCs do not define, before the module
-    /// parses the key; then a key the module refuses, or one whose carried publicKey is not its own
-    /// (`CryptoError::SignaturePrivateKey`). The structure:
+    /// parses the key; then a key the module refuses, or one whose carried publicKey or
+    /// expandedKey is not its own (`CryptoError::SignaturePrivateKey`). The structure:
     ///
     /// - ECDSA: version v1, `id-ecPublicKey` with `a`'s namedCurve (RFC 5480 §2.1.1), privateKey an
     ///   RFC 5915 §3 `ECPrivateKey` with a scalar of the curve's length, optional parameters naming
@@ -241,7 +241,9 @@ impl KeyPair {
     ///   exactly `a`'s bit length and the public exponent 65537;
     /// - ML-DSA-87: `id-ml-dsa-87` without parameters, privateKey the seed or both the seed and the
     ///   expanded key (RFC 9881 §6), version v1, or v2 with the 2,592-byte publicKey. The expanded
-    ///   key alone is refused: the module cannot export such a key again.
+    ///   key alone is refused: the module cannot export such a key again. In the `both` form the
+    ///   expanded key must be byte for byte the seed's (RFC 9881 §8.2), and the key held is the
+    ///   seed's.
     ///
     /// Each takes optional `[0]` attributes in X.690 §11.6 order, and nothing after the key. The key
     /// is held parsed; [`KeyPair::to_pkcs8_der`] encodes it again.
@@ -256,10 +258,14 @@ impl KeyPair {
             }
             Kind::Ed25519 => Held::Ed25519(sig::Ed25519KeyPair::from_pkcs8(der).map_err(bad)?),
             Kind::Rsa { .. } => Held::Rsa(sig::RsaKeyPair::from_pkcs8(der).map_err(bad)?),
-            Kind::MlDsa87 => Held::MlDsa(MlDsa::from_pkcs8(der)?),
+            Kind::MlDsa87 => {
+                let key = MlDsa::from_pkcs8(der)?;
+                matches_carried(a, carried.expanded_key, &key.expanded_key()?)?;
+                Held::MlDsa(key)
+            }
         };
         let key = KeyPair::held(a, key)?;
-        matches_carried(a, carried, &key.public)?;
+        matches_carried(a, carried.public_key, &key.public)?;
         Ok(key)
     }
 
@@ -371,22 +377,26 @@ fn check(admitted: &Admitted, a: S) -> Result<(), CryptoError> {
     admitted.admit_signature(a)
 }
 
-/// The publicKey `der` carries, if any, once its structure is `a`'s (`KeyPair::from_pkcs8_der`).
-fn checked_private_key(a: S, k: Kind, der: &[u8]) -> Result<Option<&[u8]>, CryptoError> {
+/// What `der` carries besides the key, once its structure is `a`'s (`KeyPair::from_pkcs8_der`).
+fn checked_private_key(a: S, k: Kind, der: &[u8]) -> Result<pkcs8::Carried<'_>, CryptoError> {
+    let public = |public_key| pkcs8::Carried {
+        public_key,
+        expanded_key: None,
+    };
     let checked = match k {
-        Kind::Ecdsa { key, .. } => pkcs8::ec(key, der, false),
-        Kind::Ed25519 => pkcs8::ed25519(der),
-        Kind::Rsa { bits, .. } => pkcs8::rsa(der, bits as usize).then_some(None),
+        Kind::Ecdsa { key, .. } => pkcs8::ec(key, der, false).map(public),
+        Kind::Ed25519 => pkcs8::ed25519(der).map(public),
+        Kind::Rsa { bits, .. } => pkcs8::rsa(der, bits as usize).then(pkcs8::Carried::default),
         Kind::MlDsa87 => pkcs8::ml_dsa_87(der),
     };
     checked.ok_or(CryptoError::SignaturePrivateKey { algorithm: a })
 }
 
-// RFC 5915 §3, RFC 8410 §7, RFC 9881 §6: a carried publicKey that is not the key's own marks a
-// corrupt key.
-fn matches_carried(a: S, carried: Option<&[u8]>, public: &[u8]) -> Result<(), CryptoError> {
+// RFC 5915 §3, RFC 8410 §7, RFC 9881 §6 and §8.2: a carried publicKey or expandedKey that is not
+// the key's own marks a corrupt key.
+fn matches_carried(a: S, carried: Option<&[u8]>, own: &[u8]) -> Result<(), CryptoError> {
     match carried {
-        Some(key) if key != public => Err(CryptoError::SignaturePrivateKey { algorithm: a }),
+        Some(key) if key != own => Err(CryptoError::SignaturePrivateKey { algorithm: a }),
         _ => Ok(()),
     }
 }
@@ -1050,6 +1060,7 @@ mod tests {
         for (pkcs1, pss) in [
             (S::Rsa2048Sha384, S::Rsa2048Sha384Pss),
             (S::Rsa3072Sha384, S::Rsa3072Sha384Pss),
+            (S::Rsa4096Sha384, S::Rsa4096Sha384Pss),
         ] {
             let k = KeyPair::generate(&u(), pss).unwrap();
             let signature = k.sign(b"m").unwrap();
@@ -1253,6 +1264,12 @@ mod tests {
                     sequence(&[&f[..], &[vec![0x02, 0x01, 0x05]]].concat()),
                 ),
             ];
+            if a != S::Ed25519 {
+                let own = KeyPair::from_pkcs8_der(&u(), a, &der).unwrap();
+                let carried = tlv(0x81, &[&[0][..], own.public_key()].concat());
+                let v2 = sequence(&[&f[..3], &[carried]].concat());
+                cases.push(("v2 with its own [1]", with_field(&v2, 0, vec![2, 1, 1])));
+            }
             match a {
                 S::EcdsaP256Sha256 => cases.push(("explicit curve", der_hex(P256_EXPLICIT))),
                 S::Ed25519 => {
@@ -1260,7 +1277,10 @@ mod tests {
                     let carried = pkcs8::split_tlv(&fields(&other)[3]).unwrap().1[1..].to_vec();
                     assert_eq!(
                         checked_private_key(a, kind(a).unwrap(), &swapped),
-                        Ok(Some(&carried[..]))
+                        Ok(pkcs8::Carried {
+                            public_key: Some(&carried[..]),
+                            expanded_key: None
+                        })
                     );
                     assert_eq!(
                         KeyPair::from_pkcs8_der(&u(), a, &swapped).err(),
@@ -1277,6 +1297,17 @@ mod tests {
                     }
                     let stripped = tlv(0x04, &sequence(&stripped));
                     cases.push(("stripped", with_field(&der, 2, stripped)));
+                    for (why, at) in [("privateExponent", 3), ("coefficient", 8)] {
+                        let mut altered = fields(inner);
+                        *altered[at].last_mut().unwrap() ^= 0x02;
+                        let altered = with_field(&der, 2, tlv(0x04, &sequence(&altered)));
+                        assert!(checked_private_key(a, kind(a).unwrap(), &altered).is_ok());
+                        assert_eq!(
+                            KeyPair::from_pkcs8_der(&u(), a, &altered).err(),
+                            Some(CryptoError::SignaturePrivateKey { algorithm: a }),
+                            "{a} {why} altered"
+                        );
+                    }
                     if a == S::Rsa2048Sha384 {
                         cases.push(("three primes", der_hex(RSA_THREE_PRIMES)));
                     }
@@ -1361,7 +1392,10 @@ mod tests {
             let der = with_field(&der, 2, tlv(0x04, &sequence(&ec)));
             assert_eq!(
                 checked_private_key(a, kind(a).unwrap(), &der),
-                Ok(Some(other.public_key())),
+                Ok(pkcs8::Carried {
+                    public_key: Some(other.public_key()),
+                    expanded_key: None
+                }),
                 "{a}"
             );
             assert_eq!(

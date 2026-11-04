@@ -272,31 +272,38 @@ const ML_DSA_87_ALGORITHM: &[u8] = &[
 const ML_DSA_87_EXPANDED_KEY: usize = 4896;
 const ML_DSA_87_PUBLIC_KEY: usize = 2592;
 
-/// The publicKey an ML-DSA-87 private key carries, if any, once `der` is an RFC 5958 §2
-/// OneAsymmetricKey with RFC 9881 §2's id-ml-dsa-87 and no parameters, its privateKey one RFC 9881
-/// §6 ML-DSA-87-PrivateKey: the 32-byte seed, or both the seed and the 4,896-byte expandedKey.
-/// The expandedKey form alone is refused: the module cannot export such a key again. Version v1,
-/// or v2 with a 2,592-byte publicKey.
-pub(crate) fn ml_dsa_87(der: &[u8]) -> Option<Option<&[u8]>> {
+/// What a private key carries besides the key, each of which must be the imported key's own: the
+/// publicKey, and for ML-DSA-87 the expandedKey of RFC 9881 §6's `both` form.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub(crate) struct Carried<'a> {
+    pub(crate) public_key: Option<&'a [u8]>,
+    pub(crate) expanded_key: Option<&'a [u8]>,
+}
+
+/// What an ML-DSA-87 private key carries, once `der` is an RFC 5958 §2 OneAsymmetricKey with RFC
+/// 9881 §2's id-ml-dsa-87 and no parameters, its privateKey one RFC 9881 §6 ML-DSA-87-PrivateKey:
+/// the 32-byte seed, or both the seed and the 4,896-byte expandedKey. The expandedKey form alone is
+/// refused: the module cannot export such a key again. Version v1, or v2 with a 2,592-byte
+/// publicKey.
+pub(crate) fn ml_dsa_87(der: &[u8]) -> Option<Carried<'_>> {
     let (private_key, public_key) = one_asymmetric_key(der, ML_DSA_87_ALGORITHM, true)?;
-    let form = match split_tlv(private_key)? {
-        (0x80, seed, []) => seed.len() == 32,
+    let expanded_key = match split_tlv(private_key)? {
+        (0x80, seed, []) if seed.len() == 32 => None,
         (0x30, both, []) => match split_tlv(both)? {
-            (0x04, seed, expanded) => {
-                seed.len() == 32
-                    && matches!(
-                        split_tlv(expanded),
-                        Some((0x04, key, [])) if key.len() == ML_DSA_87_EXPANDED_KEY
-                    )
-            }
-            _ => false,
+            (0x04, seed, expanded) if seed.len() == 32 => match split_tlv(expanded)? {
+                (0x04, key, []) if key.len() == ML_DSA_87_EXPANDED_KEY => Some(key),
+                _ => return None,
+            },
+            _ => return None,
         },
-        _ => false,
+        _ => return None,
     };
     match public_key {
-        None if form => Some(None),
-        Some(key) if form && key.len() == ML_DSA_87_PUBLIC_KEY => Some(Some(key)),
-        _ => None,
+        Some(key) if key.len() != ML_DSA_87_PUBLIC_KEY => None,
+        _ => Some(Carried {
+            public_key,
+            expanded_key,
+        }),
     }
 }
 
@@ -801,15 +808,22 @@ mod tests {
         let expanded = tlv(0x04, &[6; 4896]);
         let both = sequence(&[tlv(0x04, &[5; 32]), expanded.clone()]);
         let public = vec![4; 2592];
-        assert_eq!(ml_dsa_87(&pki(&seed, &[])), Some(None));
-        assert_eq!(ml_dsa_87(&pki(&both, &[])), Some(None));
+        let carried = |public_key, expanded_key| {
+            Some(Carried {
+                public_key,
+                expanded_key,
+            })
+        };
+        let expanded_key = Some(&[6; 4896][..]);
+        assert_eq!(ml_dsa_87(&pki(&seed, &[])), carried(None, None));
+        assert_eq!(ml_dsa_87(&pki(&both, &[])), carried(None, expanded_key));
         assert_eq!(
             ml_dsa_87(&pki(&seed, &[bits(&public)])),
-            Some(Some(&public[..]))
+            carried(Some(&public[..]), None)
         );
         assert_eq!(
             ml_dsa_87(&pki(&both, &[bits(&public)])),
-            Some(Some(&public[..]))
+            carried(Some(&public[..]), expanded_key)
         );
         for (why, inner) in [
             ("expandedKey alone", expanded.clone()),
