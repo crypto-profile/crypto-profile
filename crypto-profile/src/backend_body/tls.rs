@@ -403,6 +403,12 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
 /// Loads a private key into a signing key that signs only with a scheme in
 /// `p.signature_schemes`. The key's algorithm is not checked against any profile;
 /// `Resolved::certified_key` checks it.
+///
+/// Each form is taken only in the structure its RFC defines (decision 0015): `Pkcs8` as
+/// [`signature::KeyPair::from_pkcs8_der`](crate::signature::KeyPair::from_pkcs8_der) takes it,
+/// `Sec1` as one RFC 5915 `ECPrivateKey` with parameters naming its curve, `Pkcs1` as one RFC 8017
+/// `RSAPrivateKey`. An RSA key is 2048, 3072 or 4096 bits with public exponent 65537. Anything
+/// else is refused with `CryptoError::Tls(TlsError::PrivateKey)`.
 #[expect(clippy::disallowed_methods)]
 pub fn load_private_key(
     p: &Policy,
@@ -2627,6 +2633,38 @@ mod tests {
             select_schemes(&without, &[T::EcdsaNistp384Sha384, T::Ed25519]).err(),
             Some(CryptoError::Unavailable(Algorithm::Scheme(T::Ed25519)))
         );
+    }
+
+    #[test]
+    fn every_builder_route_refuses_a_key_with_a_byte_after_it() {
+        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let p = one13(K::Secp384r1);
+        let good = key.to_pkcs8_der().unwrap().to_vec();
+        let refused = Err(rustls::Error::General(
+            "failed to parse private key as RSA, ECDSA, or EdDSA".into(),
+        ));
+        for (der, want) in [(good.clone(), Ok(())), ([good, vec![0]].concat(), refused)] {
+            let der = || rustls::pki_types::PrivateKeyDer::Pkcs8(der.clone().into());
+            let server = server_builder(&p)
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert.der().clone()], der());
+            assert_eq!(server.map(|_| ()), want);
+            let client = client_builder(&p)
+                .unwrap()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_client_auth_cert(vec![cert.der().clone()], der());
+            assert_eq!(client.map(|_| ()), want);
+            assert_eq!(
+                load_private_key(&p, der()).map(|_| ()),
+                want.clone()
+                    .map_err(|_| CryptoError::Tls(TlsError::PrivateKey))
+            );
+        }
     }
 
     #[test]

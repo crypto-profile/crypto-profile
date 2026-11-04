@@ -535,3 +535,157 @@ fn peer_certificate_cnsa1_p256_client_tls12_sha384() -> Result<(), String> {
     drop(scratch);
     Ok(())
 }
+
+#[test]
+#[ignore = "needs OpenSSL 3.5 or later: ci/openssl-interop.sh"]
+fn openssl_keys_load_in_every_form_it_writes() -> Result<(), String> {
+    use crypto_profile_awslc3::tls::load_private_key;
+    use crypto_profile_awslc3::{Options, Profile, resolve};
+    use rustls::pki_types::PrivateKeyDer;
+    use rustls::pki_types::pem::PemObject;
+    let bin = openssl()?;
+    let dir = Scratch(std::env::temp_dir().join(format!(
+        "crypto-profile-interop-keys-{}",
+        std::process::id()
+    )));
+    std::fs::create_dir_all(&dir.0).map_err(e)?;
+    let run = |args: &[&str]| -> Result<(), String> {
+        let out = Command::new(&bin)
+            .args(args)
+            .current_dir(&dir.0)
+            .output()
+            .map_err(e)?;
+        if out.status.success() {
+            Ok(())
+        } else {
+            Err(format!(
+                "{args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            ))
+        }
+    };
+    let policy = resolve(Profile::Unrestricted, Options::default())
+        .map_err(e)?
+        .tls;
+    let rsa = |bits| ["-algorithm", "RSA", "-pkeyopt", bits];
+    let ec = |curve| ["-algorithm", "EC", "-pkeyopt", curve];
+    let cases: [(&str, &str, &[&str]); 16] = [
+        ("pkcs8", "genpkey", &rsa("rsa_keygen_bits:2048")),
+        ("pkcs8", "genpkey", &rsa("rsa_keygen_bits:3072")),
+        ("pkcs8", "genpkey", &rsa("rsa_keygen_bits:4096")),
+        ("pkcs8", "genpkey", &ec("ec_paramgen_curve:P-256")),
+        ("pkcs8", "genpkey", &ec("ec_paramgen_curve:P-384")),
+        ("pkcs8", "genpkey", &ec("ec_paramgen_curve:P-521")),
+        ("pkcs8", "genpkey", &["-algorithm", "Ed25519"]),
+        ("pkcs1", "genrsa", &["-traditional", "2048"]),
+        ("pkcs1", "genrsa", &["-traditional", "3072"]),
+        ("pkcs1", "genrsa", &["-traditional", "4096"]),
+        (
+            "sec1",
+            "ecparam",
+            &["-genkey", "-name", "prime256v1", "-noout"],
+        ),
+        (
+            "sec1",
+            "ecparam",
+            &["-genkey", "-name", "secp384r1", "-noout"],
+        ),
+        (
+            "sec1",
+            "ecparam",
+            &["-genkey", "-name", "secp521r1", "-noout"],
+        ),
+        ("sec1", "ecparam", &["-genkey", "-name", "prime256v1"]),
+        ("sec1", "ecparam", &["-genkey", "-name", "secp384r1"]),
+        ("sec1", "ecparam", &["-genkey", "-name", "secp521r1"]),
+    ];
+    for (i, (form, command, args)) in cases.into_iter().enumerate() {
+        let key = format!("key{i}.pem");
+        let spki = format!("key{i}.spki");
+        run(&[&[command, "-out", &key][..], args].concat())?;
+        run(&[
+            "pkey", "-in", &key, "-pubout", "-outform", "DER", "-out", &spki,
+        ])?;
+        let pem = std::fs::read(dir.0.join(&key)).map_err(e)?;
+        let der = PrivateKeyDer::from_pem_slice(&pem).map_err(e)?;
+        let read = match &der {
+            PrivateKeyDer::Pkcs8(_) => "pkcs8",
+            PrivateKeyDer::Sec1(_) => "sec1",
+            PrivateKeyDer::Pkcs1(_) => "pkcs1",
+            _ => "another form",
+        };
+        assert_eq!(read, form, "{command} {args:?}");
+        let loaded = load_private_key(&policy, der).map_err(|x| format!("{args:?}: {x}"))?;
+        let want = std::fs::read(dir.0.join(&spki)).map_err(e)?;
+        assert_eq!(
+            loaded.public_key().map(|k| k.as_ref().to_vec()),
+            Some(want),
+            "{command} {args:?}"
+        );
+    }
+    let loads = |name: &str| -> Result<bool, String> {
+        let pem = std::fs::read(dir.0.join(name)).map_err(e)?;
+        let der = PrivateKeyDer::from_pem_slice(&pem).map_err(e)?;
+        Ok(load_private_key(&policy, der).is_ok())
+    };
+    for curve in ["prime256v1", "secp384r1", "secp521r1"] {
+        run(&[
+            "ecparam", "-genkey", "-name", curve, "-noout", "-out", "ec.pem",
+        ])?;
+        run(&[
+            "ec",
+            "-in",
+            "ec.pem",
+            "-conv_form",
+            "compressed",
+            "-out",
+            "compressed.pem",
+        ])?;
+        run(&[
+            "pkcs8",
+            "-topk8",
+            "-nocrypt",
+            "-in",
+            "compressed.pem",
+            "-out",
+            "compressed8.pem",
+        ])?;
+        run(&[
+            "ec",
+            "-in",
+            "compressed.pem",
+            "-conv_form",
+            "uncompressed",
+            "-out",
+            "fixed.pem",
+        ])?;
+        assert!(!loads("compressed.pem")?, "{curve}: compressed SEC 1");
+        assert!(!loads("compressed8.pem")?, "{curve}: compressed PKCS#8");
+        assert!(loads("fixed.pem")?, "{curve}: re-encoded uncompressed");
+        run(&[
+            "ec",
+            "-in",
+            "compressed8.pem",
+            "-conv_form",
+            "uncompressed",
+            "-out",
+            "fixed1.pem",
+        ])?;
+        run(&[
+            "pkcs8",
+            "-topk8",
+            "-nocrypt",
+            "-in",
+            "fixed1.pem",
+            "-out",
+            "fixed8.pem",
+        ])?;
+        let pem = std::fs::read(dir.0.join("fixed8.pem")).map_err(e)?;
+        let fixed8 = rustls::pki_types::PrivatePkcs8KeyDer::from_pem_slice(&pem).map_err(e)?;
+        assert!(
+            load_private_key(&policy, PrivateKeyDer::Pkcs8(fixed8)).is_ok(),
+            "{curve}: re-encoded uncompressed, then PKCS#8"
+        );
+    }
+    Ok(())
+}
