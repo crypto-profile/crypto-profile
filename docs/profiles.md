@@ -271,6 +271,7 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 34. **No FIPS 204 context strings.** aws-lc-rs passes none, so ML-DSA-87 signs and verifies with the empty context, as RFC 9881 §3 and RFC 9882 §3.2 require.
 35. **Fixed-width ECDSA**, which JOSE needs (RFC 7518 §3.4), is not offered; ECDSA signatures are DER (#56).
 36. **The key `csr::generate_csr` returns** signs and exports under no profile (#57); section 5.
+37. **One RSA key, one scheme.** An RSA-PSS key is an `rsaEncryption` key, not RFC 4055 §1.2's `id-RSASSA-PSS` key, so `signature::KeyPair::from_pkcs8_der` takes it under either padding of its size. RFC 8017 §6 (pp. 17-18) does not recommend using one RSA key pair in more than one scheme, and RFC 4055 §8 (p. 22) says a key that signs RSASSA-PSS should not be used for other purposes; keeping a key to one variant is the caller's (#59; [decision 0015](decisions/0015-signatures.md)).
 
 ## 5. What a profile does not restrict
 

@@ -47,7 +47,6 @@ enum Kind {
         size: KeySize,
         bits: u32,
         public_len: usize,
-        pss: bool,
     },
     MlDsa87,
 }
@@ -88,37 +87,31 @@ fn kind(a: S) -> Result<Kind, CryptoError> {
             size: KeySize::Rsa2048,
             bits: 2048,
             public_len: 270,
-            pss: false,
         },
         S::Rsa2048Sha384Pss => Kind::Rsa {
             size: KeySize::Rsa2048,
             bits: 2048,
             public_len: 270,
-            pss: true,
         },
         S::Rsa3072Sha384 => Kind::Rsa {
             size: KeySize::Rsa3072,
             bits: 3072,
             public_len: 398,
-            pss: false,
         },
         S::Rsa3072Sha384Pss => Kind::Rsa {
             size: KeySize::Rsa3072,
             bits: 3072,
             public_len: 398,
-            pss: true,
         },
         S::Rsa4096Sha384 => Kind::Rsa {
             size: KeySize::Rsa4096,
             bits: 4096,
             public_len: 526,
-            pss: false,
         },
         S::Rsa4096Sha384Pss => Kind::Rsa {
             size: KeySize::Rsa4096,
             bits: 4096,
             public_len: 526,
-            pss: true,
         },
         _ => return Err(CryptoError::Unavailable(Algorithm::Signature(a))),
     })
@@ -184,7 +177,7 @@ pub fn matches_spki(
 enum Held {
     Ecdsa(sig::EcdsaKeyPair),
     Ed25519(sig::Ed25519KeyPair),
-    Rsa(sig::RsaKeyPair, bool),
+    Rsa(sig::RsaKeyPair),
     MlDsa(MlDsaKey),
 }
 
@@ -226,9 +219,7 @@ impl KeyPair {
                 Held::Ecdsa(sig::EcdsaKeyPair::generate(signing).map_err(fail)?)
             }
             Kind::Ed25519 => Held::Ed25519(sig::Ed25519KeyPair::generate().map_err(fail)?),
-            Kind::Rsa { size, pss, .. } => {
-                Held::Rsa(sig::RsaKeyPair::generate(size).map_err(fail)?, pss)
-            }
+            Kind::Rsa { size, .. } => Held::Rsa(sig::RsaKeyPair::generate(size).map_err(fail)?),
             Kind::MlDsa87 => Held::MlDsa(MlDsa::generate()?),
         };
         KeyPair::held(a, key)
@@ -264,7 +255,7 @@ impl KeyPair {
                 Held::Ecdsa(sig::EcdsaKeyPair::from_pkcs8(signing, der).map_err(bad)?)
             }
             Kind::Ed25519 => Held::Ed25519(sig::Ed25519KeyPair::from_pkcs8(der).map_err(bad)?),
-            Kind::Rsa { pss, .. } => Held::Rsa(sig::RsaKeyPair::from_pkcs8(der).map_err(bad)?, pss),
+            Kind::Rsa { .. } => Held::Rsa(sig::RsaKeyPair::from_pkcs8(der).map_err(bad)?),
             Kind::MlDsa87 => Held::MlDsa(MlDsa::from_pkcs8(der)?),
         };
         let key = KeyPair::held(a, key)?;
@@ -276,7 +267,7 @@ impl KeyPair {
         let public = match &key {
             Held::Ecdsa(k) => k.public_key().as_ref().to_vec(),
             Held::Ed25519(k) => k.public_key().as_ref().to_vec(),
-            Held::Rsa(k, _) => k.public_key().as_ref().to_vec(),
+            Held::Rsa(k) => k.public_key().as_ref().to_vec(),
             Held::MlDsa(k) => k.public_key()?,
         };
         Ok(KeyPair {
@@ -301,7 +292,7 @@ impl KeyPair {
         Ok(Zeroizing::new(match &self.key {
             Held::Ecdsa(k) => k.to_pkcs8v1().map_err(fail)?.as_ref().to_vec(),
             Held::Ed25519(k) => k.to_pkcs8().map_err(fail)?.as_ref().to_vec(),
-            Held::Rsa(k, _) => {
+            Held::Rsa(k) => {
                 let der: Pkcs8V1Der<'static> = k.as_der().map_err(fail)?;
                 der.as_ref().to_vec()
             }
@@ -325,9 +316,9 @@ impl KeyPair {
                 .as_ref()
                 .to_vec()),
             Held::Ed25519(k) => Ok(k.try_sign(msg).map_err(fail)?.as_ref().to_vec()),
-            Held::Rsa(k, pss) => {
+            Held::Rsa(k) => {
                 let mut out = vec![0u8; k.public_modulus_len()];
-                k.sign(rsa_encoding(*pss), &SystemRandom::new(), msg, &mut out)
+                k.sign(rsa_encoding(self.alg), &SystemRandom::new(), msg, &mut out)
                     .map_err(fail)?;
                 Ok(out)
             }
@@ -349,15 +340,27 @@ impl rcgen::PublicKeyData for KeyPair {
 // rcgen labels what it signs with `PublicKeyData::algorithm`, which has no RSA-PSS descriptor.
 impl rcgen::SigningKey for KeyPair {
     fn sign(&self, msg: &[u8]) -> Result<Vec<u8>, rcgen::Error> {
-        if self.alg.tls_scheme().is_none() {
-            return Err(rcgen::Error::UnsupportedSignatureAlgorithm);
-        }
+        rcgen_signs(self.alg)?;
         KeyPair::sign(self, msg).map_err(|_| rcgen::Error::RingUnspecified)
     }
 }
 
-fn rsa_encoding(pss: bool) -> &'static dyn sig::RsaEncoding {
-    if pss {
+fn rcgen_signs(a: S) -> Result<(), rcgen::Error> {
+    match a.tls_scheme() {
+        Some(_) => Ok(()),
+        None => Err(rcgen::Error::UnsupportedSignatureAlgorithm),
+    }
+}
+
+fn is_pss(a: S) -> bool {
+    matches!(
+        a,
+        S::Rsa2048Sha384Pss | S::Rsa3072Sha384Pss | S::Rsa4096Sha384Pss
+    )
+}
+
+fn rsa_encoding(a: S) -> &'static dyn sig::RsaEncoding {
+    if is_pss(a) {
         &sig::RSA_PSS_SHA384
     } else {
         &sig::RSA_PKCS1_SHA384
@@ -439,8 +442,8 @@ pub fn verify(
     let v: &dyn sig::VerificationAlgorithm = match k {
         Kind::Ecdsa { verifying, .. } => verifying,
         Kind::Ed25519 => &sig::ED25519,
-        Kind::Rsa { pss: true, .. } => &sig::RSA_PSS_2048_8192_SHA384,
-        Kind::Rsa { pss: false, .. } => &sig::RSA_PKCS1_2048_8192_SHA384,
+        Kind::Rsa { .. } if is_pss(a) => &sig::RSA_PSS_2048_8192_SHA384,
+        Kind::Rsa { .. } => &sig::RSA_PKCS1_2048_8192_SHA384,
         Kind::MlDsa87 => MlDsa::verifier()?,
     };
     sig::UnparsedPublicKey::new(v, public_key)
@@ -1069,6 +1072,20 @@ mod tests {
     }
 
     #[test]
+    fn only_the_pss_variants_pad_pss_and_rcgen_signs_none_of_them() {
+        for &a in S::ALL {
+            let pss = a.to_string().ends_with("-pss");
+            assert_eq!(is_pss(a), pss, "{a}");
+            let want = if pss {
+                Err(rcgen::Error::UnsupportedSignatureAlgorithm)
+            } else {
+                Ok(())
+            };
+            assert_eq!(rcgen_signs(a), want, "{a}");
+        }
+    }
+
+    #[test]
     fn only_a_tls_key_algorithm_makes_a_tls_key() {
         for &a in S::ALL {
             let want = match a.tls_scheme() {
@@ -1379,10 +1396,7 @@ mod tests {
             let held = match (key, kind(a).unwrap()) {
                 (Held::Ecdsa(key), Kind::Ecdsa { .. }) => key.public_key().as_ref().to_vec(),
                 (Held::Ed25519(key), Kind::Ed25519) => key.public_key().as_ref().to_vec(),
-                (Held::Rsa(key, held_pss), Kind::Rsa { pss, .. }) => {
-                    assert_eq!(*held_pss, pss, "{a}");
-                    key.public_key().as_ref().to_vec()
-                }
+                (Held::Rsa(key), Kind::Rsa { .. }) => key.public_key().as_ref().to_vec(),
                 (Held::MlDsa(key), Kind::MlDsa87) => key.public_key().unwrap(),
                 _ => panic!("{a}: held as another kind"),
             };

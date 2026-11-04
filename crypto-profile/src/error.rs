@@ -158,7 +158,8 @@ pub enum CryptoError {
     NotFips,
     /// Key generation failed.
     KeyGeneration(Algorithm),
-    /// A private key was refused.
+    /// Not produced since 0.10.0: `signature::KeyPair::from_pkcs8_der` refuses with
+    /// `CryptoError::SignaturePrivateKey`. Its removal is #58.
     PrivateKey,
     /// A signature did not verify.
     Verify,

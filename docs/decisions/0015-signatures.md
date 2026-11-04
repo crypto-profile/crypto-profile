@@ -85,6 +85,7 @@ The ECDSA order is the order of each profile's key agreement curves (P-384, P-52
 6. **No FIPS 204 context strings.** aws-lc-rs passes none, so ML-DSA-87 signs with the empty context.
 7. **Fixed-width ECDSA** (JOSE) is #56.
 8. **The key `csr::generate_csr` returns** is a `signature::KeyPair` made without an `Admitted`: it signs and exports under no profile (#57). The `signature` family governs keys made through `KeyPair::generate` and `KeyPair::from_pkcs8_der`, and `signature::verify`.
+9. **One RSA key, one scheme.** The RSA-PSS variants use `rsaEncryption` keys (RFC 4055 §1.2's `id-RSASSA-PSS` key is not used), so `from_pkcs8_der` takes one key under either padding of its size. RFC 8017 §6 (pp. 17-18) does not recommend using one RSA key pair in more than one scheme, and RFC 4055 §8 (p. 22) says a key that signs RSASSA-PSS should not be used for other purposes; keeping a key to one variant is the caller's (#59).
 
 ## Consequences
 
