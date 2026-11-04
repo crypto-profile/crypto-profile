@@ -403,6 +403,18 @@ pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<
 /// Loads a private key into a signing key that signs only with a scheme in
 /// `p.signature_schemes`. The key's algorithm is not checked against any profile;
 /// `Resolved::certified_key` checks it.
+///
+/// A key is taken only when it is one of these, with nothing after it (decision 0015):
+/// - `Pkcs8`: an RFC 5958 PrivateKeyInfo in the structure
+///   [`signature::KeyPair::from_pkcs8_der`](crate::signature::KeyPair::from_pkcs8_der) takes,
+///   holding an ECDSA key on P-256, P-384 or P-521 (its scalar and point as for `Sec1`), an
+///   Ed25519 key, an RSA key as below, or, on the 4.x line, an ML-DSA-87 key;
+/// - `Sec1`: one RFC 5915 `ECPrivateKey` on P-256, P-384 or P-521, with its parameters, a scalar
+///   of the curve's length and, if it carries a public key, an uncompressed point;
+/// - `Pkcs1`: one two-prime RFC 8017 `RSAPrivateKey`.
+///
+/// An RSA key is 2048, 3072 or 4096 bits with public exponent 65537. Anything else is refused
+/// with `CryptoError::Tls(TlsError::PrivateKey)`.
 #[expect(clippy::disallowed_methods)]
 pub fn load_private_key(
     p: &Policy,
@@ -546,6 +558,35 @@ impl<'a> PeerLeaf<'a> {
 /// A resumed session does not call it again: rustls reuses the earlier decision. A check whose
 /// answer can change needs a new verifier and configuration when it changes, or resumption
 /// disabled.
+///
+/// A check for one workload's URI, which compares the whole identity and refuses a leaf that
+/// carries more than one:
+///
+#[doc = concat!("```no_run\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, resolve, rustls, tls};")]
+/// use std::sync::Arc;
+///
+/// #[derive(Debug)]
+/// struct Workload(&'static str);
+///
+/// impl tls::PeerIdentity for Workload {
+///     fn check(&self, leaf: &tls::PeerLeaf<'_>) -> Result<(), rustls::Error> {
+///         match leaf.uri_names()?.as_slice() {
+///             [one] if *one == self.0 => Ok(()),
+///             _ => Err(rustls::Error::General("peer is not the expected workload".into())),
+///         }
+///     }
+/// }
+///
+/// # fn roots() -> Arc<rustls::RootCertStore> { unimplemented!() }
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
+/// let policy = resolve(Profile::Fips1403, Options::default())?.tls;
+/// let verifier = tls::server_cert_verifier_builder(roots(), &policy)?
+///     .with_peer_identity(Arc::new(Workload("spiffe://example.org/payments")))
+///     .build()?;
+/// # let _ = verifier;
+/// # Ok(())
+/// # }
+/// ```
 pub trait PeerIdentity: std::fmt::Debug + Send + Sync {
     /// Refuses `leaf` unless it carries the expected identity.
     fn check(&self, leaf: &PeerLeaf<'_>) -> Result<(), rustls::Error>;
@@ -2627,6 +2668,38 @@ mod tests {
             select_schemes(&without, &[T::EcdsaNistp384Sha384, T::Ed25519]).err(),
             Some(CryptoError::Unavailable(Algorithm::Scheme(T::Ed25519)))
         );
+    }
+
+    #[test]
+    fn every_builder_route_refuses_a_key_with_a_byte_after_it() {
+        let key = crate::signature::KeyPair::generate_tls_key(S::EcdsaP384Sha384).unwrap();
+        let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
+            .unwrap()
+            .self_signed(&key)
+            .unwrap();
+        let p = one13(K::Secp384r1);
+        let good = key.to_pkcs8_der().unwrap().to_vec();
+        let refused = Err(rustls::Error::General(
+            "failed to parse private key as RSA, ECDSA, or EdDSA".into(),
+        ));
+        for (der, want) in [(good.clone(), Ok(())), ([good, vec![0]].concat(), refused)] {
+            let der = || rustls::pki_types::PrivateKeyDer::Pkcs8(der.clone().into());
+            let server = server_builder(&p)
+                .unwrap()
+                .with_no_client_auth()
+                .with_single_cert(vec![cert.der().clone()], der());
+            assert_eq!(server.map(|_| ()), want);
+            let client = client_builder(&p)
+                .unwrap()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_client_auth_cert(vec![cert.der().clone()], der());
+            assert_eq!(client.map(|_| ()), want);
+            assert_eq!(
+                load_private_key(&p, der()).map(|_| ()),
+                want.clone()
+                    .map_err(|_| CryptoError::Tls(TlsError::PrivateKey))
+            );
+        }
     }
 
     #[test]

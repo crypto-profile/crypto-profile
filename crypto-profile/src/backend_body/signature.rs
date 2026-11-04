@@ -7,6 +7,7 @@ use aws_lc_rs::encoding::{AsDer, Pkcs8V1Der};
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::rsa::KeySize;
 use aws_lc_rs::signature::{self as sig, KeyPair as _};
+use rustls::pki_types::PrivateKeyDer;
 use std::fmt;
 use zeroize::Zeroizing;
 
@@ -402,6 +403,83 @@ pub(crate) fn ml_dsa_87_key(der: &[u8]) -> Result<MlDsaKey, CryptoError> {
         Ok(key)
     } else {
         Err(refused())
+    }
+}
+
+/// A TLS private key the module has parsed, by key type.
+pub(crate) enum TlsKeyPair {
+    EcdsaP256(sig::EcdsaKeyPair),
+    EcdsaP384(sig::EcdsaKeyPair),
+    EcdsaP521(sig::EcdsaKeyPair),
+    Ed25519(sig::Ed25519KeyPair),
+    Rsa(sig::RsaKeyPair),
+}
+
+type TlsCurve = (
+    &'static pkcs8::EcCurve,
+    &'static sig::EcdsaSigningAlgorithm,
+    fn(sig::EcdsaKeyPair) -> TlsKeyPair,
+);
+
+static TLS_CURVES: [TlsCurve; 3] = [
+    (
+        &pkcs8::P256,
+        &sig::ECDSA_P256_SHA256_ASN1_SIGNING,
+        TlsKeyPair::EcdsaP256,
+    ),
+    (
+        &pkcs8::P384,
+        &sig::ECDSA_P384_SHA384_ASN1_SIGNING,
+        TlsKeyPair::EcdsaP384,
+    ),
+    (
+        &pkcs8::P521,
+        &sig::ECDSA_P521_SHA512_ASN1_SIGNING,
+        TlsKeyPair::EcdsaP521,
+    ),
+];
+
+const TLS_RSA_BITS: [usize; 3] = [2048, 3072, 4096];
+
+/// The module's key for the TLS private key `der`, once the structure check for its form accepts
+/// it (decision 0015); the check that accepts `der` names the loader that parses it.
+pub(crate) fn tls_key_pair(der: &PrivateKeyDer<'_>) -> Option<TlsKeyPair> {
+    match der {
+        PrivateKeyDer::Pkcs8(der) => {
+            let der = der.secret_pkcs8_der();
+            if let Some((_, signing, held)) = TLS_CURVES
+                .iter()
+                .find(|(curve, ..)| pkcs8::ec(curve, der, false).is_some())
+            {
+                sig::EcdsaKeyPair::from_pkcs8(signing, der).ok().map(held)
+            } else if pkcs8::ed25519(der).is_some() {
+                sig::Ed25519KeyPair::from_pkcs8(der)
+                    .ok()
+                    .map(TlsKeyPair::Ed25519)
+            } else if TLS_RSA_BITS.iter().any(|&bits| pkcs8::rsa(der, bits)) {
+                sig::RsaKeyPair::from_pkcs8(der).ok().map(TlsKeyPair::Rsa)
+            } else {
+                None
+            }
+        }
+        PrivateKeyDer::Sec1(der) => {
+            let der = der.secret_sec1_der();
+            let (_, signing, held) = TLS_CURVES
+                .iter()
+                .find(|(curve, ..)| pkcs8::sec1(curve, der).is_some())?;
+            sig::EcdsaKeyPair::from_private_key_der(signing, der)
+                .ok()
+                .map(held)
+        }
+        PrivateKeyDer::Pkcs1(der) => {
+            let der = der.secret_pkcs1_der();
+            if TLS_RSA_BITS.iter().any(|&bits| pkcs8::pkcs1(der, bits)) {
+                sig::RsaKeyPair::from_der(der).ok().map(TlsKeyPair::Rsa)
+            } else {
+                None
+            }
+        }
+        _ => None,
     }
 }
 
@@ -1237,6 +1315,10 @@ mod tests {
             refused,
             "import: {a} {why}"
         );
+        assert!(
+            !tls_loads(PrivateKeyDer::Pkcs8(der.to_vec().into())),
+            "tls: {a} {why}"
+        );
     }
 
     fn with_field(der: &[u8], at: usize, field: Vec<u8>) -> Vec<u8> {
@@ -1267,6 +1349,7 @@ mod tests {
                 .to_vec();
             let f = fields(&der);
             let misordered = tlv(0xa0, &[attribute(0x15), attribute(0x14)].concat());
+            let bad_oid = tlv(0xa0, &sequence(&[tlv(0x06, &[0x80, 0x01]), tlv(0x31, &[])]));
             let mut cases = vec![
                 ("trailing junk", [der.clone(), vec![0xde, 0xad]].concat()),
                 ("two keys", [der.clone(), other.clone()].concat()),
@@ -1279,6 +1362,10 @@ mod tests {
                     sequence(&[&f[..3], &[misordered], &f[3..]].concat()),
                 ),
                 (
+                    "an attribute OID starting with 80",
+                    sequence(&[&f[..3], std::slice::from_ref(&bad_oid), &f[3..]].concat()),
+                ),
+                (
                     "an undefined field",
                     sequence(&[&f[..], &[vec![0x02, 0x01, 0x05]]].concat()),
                 ),
@@ -1288,6 +1375,14 @@ mod tests {
                 let carried = tlv(0x81, &[&[0][..], own.public_key()].concat());
                 let v2 = sequence(&[&f[..3], &[carried]].concat());
                 cases.push(("v2 with its own [1]", with_field(&v2, 0, vec![2, 1, 1])));
+            }
+            if matches!(
+                a,
+                S::EcdsaP256Sha256 | S::EcdsaP384Sha384 | S::EcdsaP521Sha512
+            ) {
+                for (why, ec) in lenient_ec_keys(&der) {
+                    cases.push((why, with_field(&der, 2, tlv(0x04, &sequence(&ec)))));
+                }
             }
             match a {
                 S::EcdsaP256Sha256 => cases.push(("explicit curve", der_hex(P256_EXPLICIT))),
@@ -1349,6 +1444,56 @@ mod tests {
         }
     }
 
+    fn private_key(der: &[u8]) -> Vec<u8> {
+        pkcs8::split_tlv(&fields(der)[2]).unwrap().1.to_vec()
+    }
+
+    fn bare_ec_key(der: &[u8]) -> Vec<u8> {
+        let curve = fields(&fields(der)[1])[1].clone();
+        let ec = fields(&private_key(der));
+        sequence(&[&ec[..2], &[tlv(0xa0, &curve)], &ec[2..]].concat())
+    }
+
+    fn lenient_ec_keys(der: &[u8]) -> Vec<(&'static str, Vec<Vec<u8>>)> {
+        let ec = fields(&private_key(der));
+        let (_, scalar, _) = pkcs8::split_tlv(&ec[1]).unwrap();
+        let (_, bits, _) = pkcs8::split_tlv(&ec[2]).unwrap();
+        let (_, point, _) = pkcs8::split_tlv(bits).unwrap();
+        let xy = &point[2..];
+        let odd = xy[xy.len() - 1] & 1;
+        let carried = |p: Vec<u8>| tlv(0xa1, &tlv(0x03, &[&[0][..], &p].concat()));
+        vec![
+            (
+                "a private key one byte short",
+                vec![ec[0].clone(), tlv(0x04, &scalar[1..])],
+            ),
+            (
+                "a private key one byte long",
+                vec![
+                    ec[0].clone(),
+                    tlv(0x04, &[&[0][..], scalar].concat()),
+                    ec[2].clone(),
+                ],
+            ),
+            (
+                "a compressed point",
+                vec![
+                    ec[0].clone(),
+                    ec[1].clone(),
+                    carried([&[2 | odd][..], &xy[..xy.len() / 2]].concat()),
+                ],
+            ),
+            (
+                "a hybrid point",
+                vec![
+                    ec[0].clone(),
+                    ec[1].clone(),
+                    carried([&[6 | odd][..], xy].concat()),
+                ],
+            ),
+        ]
+    }
+
     fn tls_loads(der: PrivateKeyDer<'static>) -> bool {
         let policy = crate::resolve(crate::Profile::Unrestricted, crate::Options::default())
             .unwrap()
@@ -1358,6 +1503,162 @@ mod tests {
 
     fn der_hex(h: &str) -> Vec<u8> {
         hex::decode(h).unwrap()
+    }
+
+    #[test]
+    fn a_sec1_tls_key_is_one_ec_private_key_with_its_parameters() {
+        let curves = [
+            [0x06, 0x08, 0x2a, 0x86, 0x48, 0xce, 0x3d, 0x03, 0x01, 0x07].to_vec(),
+            [0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x22].to_vec(),
+            [0x06, 0x05, 0x2b, 0x81, 0x04, 0x00, 0x23].to_vec(),
+        ];
+        for (i, a) in [S::EcdsaP256Sha256, S::EcdsaP384Sha384, S::EcdsaP521Sha512]
+            .into_iter()
+            .enumerate()
+        {
+            let pkcs8 = KeyPair::generate(&u(), a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+                .to_vec();
+            let other = KeyPair::generate(&u(), a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+                .to_vec();
+            let good = bare_ec_key(&pkcs8);
+            let ec = fields(&good);
+            assert!(tls_loads(PrivateKeyDer::Sec1(good.clone().into())), "{a}");
+            let another = tlv(0xa0, &curves[(i + 1) % 3]);
+            for (why, der) in [
+                ("no parameters", sequence(&[&ec[..2], &ec[3..]].concat())),
+                ("trailing bytes", [good.clone(), vec![0xde, 0xad]].concat()),
+                ("two keys", [good.clone(), bare_ec_key(&other)].concat()),
+                ("a PKCS#8 key", pkcs8.clone()),
+                (
+                    "an undefined field",
+                    sequence(&[&ec[..], &[vec![0x02, 0x01, 0x05]]].concat()),
+                ),
+                (
+                    "parameters naming another curve",
+                    sequence(&[&ec[..2], &[another], &ec[3..]].concat()),
+                ),
+            ] {
+                assert!(!tls_loads(PrivateKeyDer::Sec1(der.into())), "{a} {why}");
+            }
+            let curve = tlv(0xa0, &fields(&fields(&pkcs8)[1])[1]);
+            for (why, ec) in lenient_ec_keys(&pkcs8) {
+                let sec1 = sequence(&[&ec[..2], std::slice::from_ref(&curve), &ec[2..]].concat());
+                assert!(!tls_loads(PrivateKeyDer::Sec1(sec1.into())), "{a} {why}");
+            }
+            assert!(!tls_loads(PrivateKeyDer::Pkcs8(good.clone().into())), "{a}");
+            assert!(!tls_loads(PrivateKeyDer::Pkcs1(good.into())), "{a}");
+        }
+        assert!(!tls_loads(PrivateKeyDer::Sec1(
+            bare_ec_key(&der_hex(P256_EXPLICIT)).into()
+        )));
+    }
+
+    #[test]
+    fn a_pkcs1_tls_key_is_one_rsa_private_key() {
+        for a in [S::Rsa2048Sha384, S::Rsa3072Sha384, S::Rsa4096Sha384] {
+            let pkcs1 = |k: KeyPair| private_key(&k.to_pkcs8_der().unwrap());
+            let good = pkcs1(KeyPair::generate(&u(), a).unwrap());
+            let other = pkcs1(KeyPair::generate(&u(), a).unwrap());
+            let pkcs8 = KeyPair::generate(&u(), a)
+                .unwrap()
+                .to_pkcs8_der()
+                .unwrap()
+                .to_vec();
+            assert!(tls_loads(PrivateKeyDer::Pkcs1(good.clone().into())), "{a}");
+            for (why, der) in [
+                ("trailing bytes", [good.clone(), vec![0xde, 0xad]].concat()),
+                ("two keys", [good.clone(), other].concat()),
+                ("a PKCS#8 key", pkcs8),
+                (
+                    "an undefined field",
+                    sequence(&[&fields(&good)[..], &[vec![0x02, 0x01, 0x05]]].concat()),
+                ),
+            ] {
+                assert!(!tls_loads(PrivateKeyDer::Pkcs1(der.into())), "{a} {why}");
+            }
+            assert!(!tls_loads(PrivateKeyDer::Pkcs8(good.clone().into())), "{a}");
+            assert!(!tls_loads(PrivateKeyDer::Sec1(good.into())), "{a}");
+        }
+        let three = private_key(&der_hex(RSA_THREE_PRIMES));
+        assert!(!tls_loads(PrivateKeyDer::Pkcs1(three.into())));
+    }
+
+    // `openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:1024` then `pkcs8 -topk8` 3.5.8.
+    const RSA_1024: &str = concat!(
+        "30820278020100300d06092a864886f70d0101010500048202623082025e02010002818100bd2bf8409d6f4d4231241d",
+        "87bea781868e0ac32d98c15f97b71e185351129582cc7fcadbb0b6f2223dd8d1993c6fd6db87eedd0eb3ccf4df693b9f",
+        "d41aa79b9c48776ce7ccdd00e2ab776ccd12298f1945efd843285b2e6e0055378e23aba686d95bdbab777c53c3114c4e",
+        "a23b7f9fecbffd129bf6f76191ca284176f38e43d50203010001028180182ca149e8948ba3f4d1afb0642dd5c093304e",
+        "e6e9c97464d7f2d19afc164ae2ef2d39883f99f1716cc3e36d18ab1622f1c91598c6635fbb99201479af7a51c93ba3e2",
+        "037e519640285ee8310583afe6cfbfec63fe9c80804db5616ef6470aa18a794f14ed7e096186c1d75d07b1aef3c60eab",
+        "be9f71bddeda2a61b7e1e4a195024100e9f072bfe5bfa7ca4631542169c381c129da0d4f84b0db46cbcb7e9d98b452ad",
+        "e5102feea267738f52450e4767d6516b896688bd919b593fbbfc36f7c41f5c67024100cf02c8e69213078cc6c0224553",
+        "f35222b833220a424b3244d18290bbbb4aee780d9c1b4cf0610d93c0e1b612a7edb23b3ea4e94287377ec008f01a3344",
+        "b13863024100aaab24cc230d03986a452a9f85cd802830244879aed067e8ea5cf76e7a2d73f4319cf19b23185e123d6e",
+        "ebcfe44d52f125388ca1e04c797c29e50325170bda1902410093bdc40e32d09c01cfd34e623651211ca063f5f6666bee",
+        "7b891f6b1660cc50b7a3d6f6f10959eaebb9ac1d5ae138d68c4be03c8dfb9d12bc1164f2fe0617894b024100db9c275a",
+        "11ec9eaed0bc22c1048ec5a028ecfca940272666c3af125da4caed0ee8c3c3877c6a1ca2a7190068f761d5e8ef76ec7c",
+        "d0f2ded5fbaf683bb6be09a7",
+    );
+
+    #[test]
+    fn a_tls_rsa_key_is_2048_3072_or_4096_bits_with_exponent_65537() {
+        let mut cases = vec![
+            ("1,024 bits", der(RSA_1024)),
+            (
+                "8,192 bits",
+                crypto_profile::__test_data::RSA8192_PKCS8.to_vec(),
+            ),
+            ("e = 3", der(RSA_E3)),
+            ("e = 65539", der(RSA_E65539)),
+        ];
+        cases.extend(OFF_BY_ONE_BIT.map(|(_, h, _)| ("one bit off", der(h))));
+        for (why, pkcs8) in cases {
+            let pkcs1 = private_key(&pkcs8);
+            assert!(!tls_loads(PrivateKeyDer::Pkcs8(pkcs8.into())), "{why}");
+            assert!(!tls_loads(PrivateKeyDer::Pkcs1(pkcs1.into())), "{why}");
+        }
+    }
+
+    #[test]
+    fn rcgens_generated_keys_load_through_the_tls_key_provider() {
+        let mut algorithms = vec![
+            &rcgen::PKCS_ECDSA_P256_SHA256,
+            &rcgen::PKCS_ECDSA_P384_SHA384,
+            &rcgen::PKCS_ECDSA_P521_SHA512,
+            &rcgen::PKCS_ED25519,
+        ];
+        algorithms.extend(MlDsa::rcgen_alg().ok());
+        for alg in algorithms {
+            let key = rcgen::KeyPair::generate_for(alg).unwrap();
+            assert!(
+                tls_loads(PrivateKeyDer::Pkcs8(key.serialize_der().into())),
+                "{alg:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_key_the_crate_makes_loads_through_the_tls_key_provider() {
+        for &a in S::ALL {
+            if !crate::capability(crate::MODULE, Algorithm::Signature(a)).available {
+                continue;
+            }
+            let k = KeyPair::generate(&u(), a).unwrap();
+            let der = k.to_pkcs8_der().unwrap().to_vec();
+            assert!(tls_loads(PrivateKeyDer::Pkcs8(der.into())), "{a}");
+            if a.tls_scheme().is_some() {
+                let k = KeyPair::generate_tls_key(a).unwrap();
+                let der = k.to_pkcs8_der().unwrap().to_vec();
+                assert!(tls_loads(PrivateKeyDer::Pkcs8(der.into())), "{a}");
+            }
+        }
     }
 
     #[test]
@@ -1377,6 +1678,7 @@ mod tests {
             ] {
                 let imported = KeyPair::from_pkcs8_der(&u(), a, &form).unwrap();
                 assert_eq!(imported.public_key(), k.public_key(), "{a}");
+                assert!(tls_loads(PrivateKeyDer::Pkcs8(form.into())), "tls: {a}");
             }
         }
         let ed = sig::Ed25519KeyPair::generate().unwrap();
@@ -1388,6 +1690,7 @@ mod tests {
                 .public_key(),
             ed.public_key().as_ref()
         );
+        assert!(tls_loads(PrivateKeyDer::Pkcs8(v1.as_ref().to_vec().into())));
         let p384 = KeyPair::generate(&u(), S::EcdsaP384Sha384).unwrap();
         let der = p384.to_pkcs8_der().unwrap().to_vec();
         let f = fields(&der);
@@ -1402,6 +1705,7 @@ mod tests {
                 .public_key(),
             p384.public_key()
         );
+        assert!(tls_loads(PrivateKeyDer::Pkcs8(der.into())));
         assert_refused(S::EcdsaP384Sha384, "bare ECPrivateKey", &with_parameters);
     }
 
@@ -1420,11 +1724,12 @@ mod tests {
                 .unwrap()
                 .to_vec();
             let other = KeyPair::generate(&u(), a).unwrap();
-            let private_key = fields(&der)[2].clone();
-            let (_, inner, _) = pkcs8::split_tlv(&private_key).unwrap();
             assert!(tls_loads(PrivateKeyDer::Pkcs8(der.clone().into())), "{a}");
-            assert!(tls_loads(PrivateKeyDer::Sec1(inner.to_vec().into())), "{a}");
-            let mut ec = fields(inner);
+            assert!(
+                tls_loads(PrivateKeyDer::Sec1(bare_ec_key(&der).into())),
+                "{a}"
+            );
+            let mut ec = fields(&bare_ec_key(&der));
             let point = tlv(0x03, &[&[0][..], other.public_key()].concat());
             *ec.last_mut().unwrap() = tlv(0xa1, &point);
             let sec1 = sequence(&ec);

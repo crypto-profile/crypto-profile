@@ -184,8 +184,14 @@ pub(crate) fn ec<'a>(c: &EcCurve, der: &'a [u8], bare: bool) -> Option<Option<&'
         };
         return ec_private_key(c, body, false);
     }
+    if bare { sec1(c, der) } else { None }
+}
+
+/// The publicKey point an EC private key carries, if any, once `der` is one RFC 5915 §3
+/// ECPrivateKey on `c` with its parameters, and nothing else.
+pub(crate) fn sec1<'a>(c: &EcCurve, der: &'a [u8]) -> Option<Option<&'a [u8]>> {
     match split_tlv(der) {
-        Some((0x30, body, [])) if bare => ec_private_key(c, body, true),
+        Some((0x30, body, [])) => ec_private_key(c, body, true),
         _ => None,
     }
 }
@@ -247,14 +253,17 @@ fn positive(der: &[u8]) -> Option<(&[u8], &[u8])> {
 }
 
 /// Whether `der` is an RFC 5958 §2 PrivateKeyInfo, version v1, with rsaEncryption and NULL
-/// parameters, whose privateKey is one RFC 8017 A.1.2 RSAPrivateKey: version 0 (two primes), then
-/// eight positive, minimal INTEGERs and nothing after them, the modulus of exactly `bits` bits and
-/// the public exponent 65537.
+/// parameters, whose privateKey is one [`pkcs1`] RSAPrivateKey of `bits` bits.
 pub(crate) fn rsa(der: &[u8], bits: usize) -> bool {
-    let Some((private_key, _)) = one_asymmetric_key(der, RSA_ALGORITHM, false) else {
-        return false;
-    };
-    let Some((0x30, body, [])) = split_tlv(private_key) else {
+    one_asymmetric_key(der, RSA_ALGORITHM, false)
+        .is_some_and(|(private_key, _)| pkcs1(private_key, bits))
+}
+
+/// Whether `der` is one RFC 8017 A.1.2 RSAPrivateKey and nothing else: version 0 (two primes),
+/// then eight positive, minimal INTEGERs and nothing after them, the modulus of exactly `bits` bits
+/// and the public exponent 65537.
+pub(crate) fn pkcs1(der: &[u8], bits: usize) -> bool {
+    let Some((0x30, body, [])) = split_tlv(der) else {
         return false;
     };
     let Some(rest) = body.strip_prefix(&[0x02, 0x01, 0x00]) else {
@@ -844,6 +853,39 @@ mod tests {
             &[0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x0a],
         )]);
         assert!(!rsa(&key(&V1, &pss, &good, &[]), 2048), "id-RSASSA-PSS");
+    }
+
+    #[test]
+    fn pkcs1_takes_one_rsa_private_key_and_nothing_else() {
+        let good = rsa_private_key(2048, &[0x01, 0x00, 0x01]);
+        assert!(pkcs1(&good, 2048));
+        assert!(!pkcs1(&good, 3072));
+        assert!(!pkcs1(&key(&V1, RSA_ALGORITHM, &good, &[]), 2048));
+        assert!(!pkcs1(&[good.clone(), vec![0]].concat(), 2048));
+        assert!(!pkcs1(&[good.clone(), good].concat(), 2048));
+    }
+
+    #[test]
+    fn sec1_takes_one_ec_private_key_with_its_parameters_and_nothing_else() {
+        let scalar = tlv(0x04, &[7; 48]);
+        let with = |curve: &EcCurve| {
+            sequence(&[V2.to_vec(), scalar.clone(), tlv(0xa0, curve.named_curve())])
+        };
+        let bare = sequence(&[V2.to_vec(), scalar.clone()]);
+        let wrapped = key(&V1, P384.algorithm, &bare, &[]);
+        assert_eq!(sec1(&P384, &with(&P384)), Some(None));
+        assert_eq!(ec(&P384, &with(&P384), true), Some(None));
+        assert_eq!(ec(&P384, &with(&P384), false), None);
+        assert_eq!(ec(&P384, &wrapped, true), Some(None));
+        for (why, der) in [
+            ("a PrivateKeyInfo", wrapped),
+            ("no parameters", bare),
+            ("parameters naming P-521", with(&P521)),
+            ("a byte after", [with(&P384), vec![0]].concat()),
+            ("two keys", [with(&P384), with(&P384)].concat()),
+        ] {
+            assert_eq!(sec1(&P384, &der), None, "{why}");
+        }
     }
 
     #[test]

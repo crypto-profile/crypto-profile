@@ -1,32 +1,23 @@
 // Ported from rustls 0.23.46 (src/crypto/aws_lc_rs/sign.rs), Copyright (c) 2016 Joseph
 // Birr-Pixton, used under the MIT license. See LICENSE-THIRD-PARTY.
+use crate::signature::TlsKeyPair;
 use aws_lc_rs::rand::SystemRandom;
 use aws_lc_rs::signature::{self, EcdsaKeyPair, Ed25519KeyPair, KeyPair, RsaKeyPair};
-use rustls::pki_types::{
-    AlgorithmIdentifier, PrivateKeyDer, PrivatePkcs8KeyDer, SubjectPublicKeyInfoDer, alg_id,
-};
+use rustls::pki_types::{AlgorithmIdentifier, PrivateKeyDer, SubjectPublicKeyInfoDer, alg_id};
 use rustls::sign::{Signer, SigningKey, public_key_to_spki};
 use rustls::{Error, SignatureAlgorithm, SignatureScheme};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
 pub(crate) fn any_supported_type(der: &PrivateKeyDer<'_>) -> Result<Arc<dyn SigningKey>, Error> {
-    if let Ok(rsa) = RsaSigningKey::new(der) {
-        return Ok(Arc::new(rsa));
+    if let Some(key) = crate::signature::tls_key_pair(der) {
+        return Ok(signing_key(key));
     }
 
-    if let Ok(ecdsa) = any_ecdsa_type(der) {
-        return Ok(ecdsa);
-    }
-
-    if let PrivateKeyDer::Pkcs8(pkcs8) = der {
-        if let Ok(eddsa) = any_eddsa_type(pkcs8) {
-            return Ok(eddsa);
-        }
-
-        if let Some(pqdsa) = super::backend::load_pqdsa(pkcs8) {
-            return Ok(pqdsa);
-        }
+    if let PrivateKeyDer::Pkcs8(pkcs8) = der
+        && let Some(pqdsa) = super::backend::load_pqdsa(pkcs8)
+    {
+        return Ok(pqdsa);
     }
 
     Err(Error::General(
@@ -34,44 +25,36 @@ pub(crate) fn any_supported_type(der: &PrivateKeyDer<'_>) -> Result<Arc<dyn Sign
     ))
 }
 
-fn any_ecdsa_type(der: &PrivateKeyDer<'_>) -> Result<Arc<dyn SigningKey>, Error> {
-    if let Ok(ecdsa_p256) = EcdsaSigningKey::new(
-        der,
-        SignatureScheme::ECDSA_NISTP256_SHA256,
-        &signature::ECDSA_P256_SHA256_ASN1_SIGNING,
-        alg_id::ECDSA_P256,
-    ) {
-        return Ok(Arc::new(ecdsa_p256));
+fn signing_key(key: TlsKeyPair) -> Arc<dyn SigningKey> {
+    let ecdsa = |key, scheme, spki_alg| -> Arc<dyn SigningKey> {
+        Arc::new(EcdsaSigningKey {
+            key: Arc::new(key),
+            scheme,
+            spki_alg,
+        })
+    };
+    match key {
+        TlsKeyPair::EcdsaP256(key) => ecdsa(
+            key,
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            alg_id::ECDSA_P256,
+        ),
+        TlsKeyPair::EcdsaP384(key) => ecdsa(
+            key,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            alg_id::ECDSA_P384,
+        ),
+        TlsKeyPair::EcdsaP521(key) => ecdsa(
+            key,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+            alg_id::ECDSA_P521,
+        ),
+        TlsKeyPair::Ed25519(key) => Arc::new(Ed25519SigningKey {
+            key: Arc::new(key),
+            scheme: SignatureScheme::ED25519,
+        }),
+        TlsKeyPair::Rsa(key) => Arc::new(RsaSigningKey { key: Arc::new(key) }),
     }
-
-    if let Ok(ecdsa_p384) = EcdsaSigningKey::new(
-        der,
-        SignatureScheme::ECDSA_NISTP384_SHA384,
-        &signature::ECDSA_P384_SHA384_ASN1_SIGNING,
-        alg_id::ECDSA_P384,
-    ) {
-        return Ok(Arc::new(ecdsa_p384));
-    }
-
-    if let Ok(ecdsa_p521) = EcdsaSigningKey::new(
-        der,
-        SignatureScheme::ECDSA_NISTP521_SHA512,
-        &signature::ECDSA_P521_SHA512_ASN1_SIGNING,
-        alg_id::ECDSA_P521,
-    ) {
-        return Ok(Arc::new(ecdsa_p521));
-    }
-
-    Err(Error::General(
-        "failed to parse ECDSA private key as PKCS#8 or SEC1".into(),
-    ))
-}
-
-fn any_eddsa_type(der: &PrivatePkcs8KeyDer<'_>) -> Result<Arc<dyn SigningKey>, Error> {
-    Ok(Arc::new(Ed25519SigningKey::new(
-        der,
-        SignatureScheme::ED25519,
-    )?))
 }
 
 pub(crate) struct RsaSigningKey {
@@ -95,27 +78,6 @@ static RSA_SCHEMES: [(SignatureScheme, &dyn signature::RsaEncoding); 6] = [
         &signature::RSA_PKCS1_SHA256,
     ),
 ];
-
-impl RsaSigningKey {
-    pub(crate) fn new(der: &PrivateKeyDer<'_>) -> Result<Self, Error> {
-        let key_pair = match der {
-            PrivateKeyDer::Pkcs1(pkcs1) => RsaKeyPair::from_der(pkcs1.secret_pkcs1_der()),
-            PrivateKeyDer::Pkcs8(pkcs8) => RsaKeyPair::from_pkcs8(pkcs8.secret_pkcs8_der()),
-            _ => {
-                return Err(Error::General(
-                    "failed to parse RSA private key as either PKCS#1 or PKCS#8".into(),
-                ));
-            }
-        }
-        .map_err(|key_rejected| {
-            Error::General(format!("failed to parse RSA private key: {key_rejected}"))
-        })?;
-
-        Ok(Self {
-            key: Arc::new(key_pair),
-        })
-    }
-}
 
 impl SigningKey for RsaSigningKey {
     fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
@@ -187,32 +149,6 @@ struct EcdsaSigningKey {
     spki_alg: AlgorithmIdentifier,
 }
 
-impl EcdsaSigningKey {
-    fn new(
-        der: &PrivateKeyDer<'_>,
-        scheme: SignatureScheme,
-        sigalg: &'static signature::EcdsaSigningAlgorithm,
-        spki_alg: AlgorithmIdentifier,
-    ) -> Result<Self, ()> {
-        let key_pair = match der {
-            PrivateKeyDer::Sec1(sec1) => {
-                EcdsaKeyPair::from_private_key_der(sigalg, sec1.secret_sec1_der())
-                    .map_err(|_| ())?
-            }
-            PrivateKeyDer::Pkcs8(pkcs8) => {
-                EcdsaKeyPair::from_pkcs8(sigalg, pkcs8.secret_pkcs8_der()).map_err(|_| ())?
-            }
-            _ => return Err(()),
-        };
-
-        Ok(Self {
-            key: Arc::new(key_pair),
-            scheme,
-            spki_alg,
-        })
-    }
-}
-
 impl SigningKey for EcdsaSigningKey {
     fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn Signer>> {
         if offered.contains(&self.scheme) {
@@ -272,20 +208,6 @@ impl Debug for EcdsaSigner {
 struct Ed25519SigningKey {
     key: Arc<Ed25519KeyPair>,
     scheme: SignatureScheme,
-}
-
-impl Ed25519SigningKey {
-    fn new(der: &PrivatePkcs8KeyDer<'_>, scheme: SignatureScheme) -> Result<Self, Error> {
-        match Ed25519KeyPair::from_pkcs8_maybe_unchecked(der.secret_pkcs8_der()) {
-            Ok(key_pair) => Ok(Self {
-                key: Arc::new(key_pair),
-                scheme,
-            }),
-            Err(e) => Err(Error::General(format!(
-                "failed to parse Ed25519 private key: {e}"
-            ))),
-        }
-    }
 }
 
 impl SigningKey for Ed25519SigningKey {
@@ -534,16 +456,45 @@ mod tests {
     }
 
     #[test]
-    fn a_sec1_ecdsa_key_loads() {
+    fn a_sec1_ecdsa_key_signs_with_its_curves_scheme_and_reports_its_spki() {
         use aws_lc_rs::encoding::{AsDer, EcPrivateKeyRfc5915Der};
-        let pair =
-            signature::EcdsaKeyPair::generate(&signature::ECDSA_P384_SHA384_ASN1_SIGNING).unwrap();
-        let sec1: EcPrivateKeyRfc5915Der<'static> = pair.private_key().as_der().unwrap();
-        let key = any_supported_type(&PrivateKeyDer::Sec1(sec1.as_ref().to_vec().into())).unwrap();
-        assert!(
-            key.choose_scheme(&[SignatureScheme::ECDSA_NISTP384_SHA384])
-                .is_some()
-        );
+        let all = [
+            SignatureScheme::ECDSA_NISTP256_SHA256,
+            SignatureScheme::ECDSA_NISTP384_SHA384,
+            SignatureScheme::ECDSA_NISTP521_SHA512,
+        ];
+        for (signing, scheme, spki) in [
+            (
+                &signature::ECDSA_P256_SHA256_ASN1_SIGNING,
+                all[0],
+                alg_id::ECDSA_P256,
+            ),
+            (
+                &signature::ECDSA_P384_SHA384_ASN1_SIGNING,
+                all[1],
+                alg_id::ECDSA_P384,
+            ),
+            (
+                &signature::ECDSA_P521_SHA512_ASN1_SIGNING,
+                all[2],
+                alg_id::ECDSA_P521,
+            ),
+        ] {
+            let pair = signature::EcdsaKeyPair::generate(signing).unwrap();
+            let sec1: EcPrivateKeyRfc5915Der<'static> = pair.private_key().as_der().unwrap();
+            let key =
+                any_supported_type(&PrivateKeyDer::Sec1(sec1.as_ref().to_vec().into())).unwrap();
+            assert_eq!(key.algorithm(), SignatureAlgorithm::ECDSA);
+            assert_eq!(
+                key.public_key(),
+                Some(public_key_to_spki(&spki, pair.public_key()))
+            );
+            assert_eq!(
+                key.choose_scheme(&all).map(|s| s.scheme()),
+                Some(scheme),
+                "{scheme:?}"
+            );
+        }
     }
 
     #[test]

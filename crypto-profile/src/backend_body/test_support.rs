@@ -595,6 +595,10 @@ pub fn peer_certificate_configs(
 }
 
 /// Builds mutual-authentication configurations with the default session storage and ticketer.
+///
+/// The key provider refuses an RSA key above 4,096 bits, so the peer presenting the
+/// `Rsa8192Leaf` fixture signs through the module: with RSA-PSS and SHA-384 whenever its peer
+/// offers it, without the policy's scheme narrowing.
 pub fn peer_certificate_default_session_configs(
     policy: &Policy,
     server_checks_client: bool,
@@ -648,7 +652,14 @@ pub fn peer_certificate_default_session_configs(
         server_builder(sp).map_err(e)?.with_client_cert_verifier(sv)
     };
     let certified = |pki: &PeerCertificatePki| -> Result<_, String> {
-        let key = crate::tls::load_private_key(&baseline, pki.key.clone_key()).map_err(e)?;
+        let key = match &pki.key {
+            rustls::pki_types::PrivateKeyDer::Pkcs8(der)
+                if der.secret_pkcs8_der() == crypto_profile::__test_data::RSA8192_PKCS8 =>
+            {
+                rsa8192_signing_key(der.secret_pkcs8_der())?
+            }
+            key => crate::tls::load_private_key(&baseline, key.clone_key()).map_err(e)?,
+        };
         Ok(Arc::new(rustls::sign::CertifiedKey::new(
             pki.chain.clone(),
             key,
@@ -658,6 +669,50 @@ pub fn peer_certificate_default_session_configs(
         cb.with_client_cert_resolver(Arc::new(SingleCertAndKey::from(certified(client_pki)?)));
     let server = sb.with_cert_resolver(Arc::new(SingleCertAndKey::from(certified(server_pki)?)));
     Ok((client, server))
+}
+
+fn rsa8192_signing_key(der: &[u8]) -> Result<Arc<dyn rustls::sign::SigningKey>, String> {
+    let key = aws_lc_rs::signature::RsaKeyPair::from_pkcs8(der).map_err(e)?;
+    Ok(Arc::new(Rsa8192Key(Arc::new(key))))
+}
+
+struct Rsa8192Key(Arc<aws_lc_rs::signature::RsaKeyPair>);
+
+impl std::fmt::Debug for Rsa8192Key {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Rsa8192Key")
+    }
+}
+
+impl rustls::sign::SigningKey for Rsa8192Key {
+    fn choose_scheme(&self, offered: &[SignatureScheme]) -> Option<Box<dyn rustls::sign::Signer>> {
+        offered
+            .contains(&SignatureScheme::RSA_PSS_SHA384)
+            .then(|| Box::new(Rsa8192Key(self.0.clone())) as Box<dyn rustls::sign::Signer>)
+    }
+
+    fn algorithm(&self) -> rustls::SignatureAlgorithm {
+        rustls::SignatureAlgorithm::RSA
+    }
+}
+
+impl rustls::sign::Signer for Rsa8192Key {
+    fn sign(&self, message: &[u8]) -> Result<Vec<u8>, rustls::Error> {
+        let mut signature = vec![0; self.0.public_modulus_len()];
+        self.0
+            .sign(
+                &aws_lc_rs::signature::RSA_PSS_SHA384,
+                &aws_lc_rs::rand::SystemRandom::new(),
+                message,
+                &mut signature,
+            )
+            .map_err(|_| rustls::Error::General("signing failed".into()))?;
+        Ok(signature)
+    }
+
+    fn scheme(&self) -> SignatureScheme {
+        SignatureScheme::RSA_PSS_SHA384
+    }
 }
 
 /// Drives mutual authentication and retains the local detecting endpoint's typed error.
