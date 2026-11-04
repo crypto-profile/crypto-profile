@@ -434,11 +434,10 @@ pub fn load_private_key(
 /// (`Resolved::certified_key`). It is held once, as the module's parsed key (decision 0012), and
 /// is not `Clone`; its `Debug` prints the algorithm only. It has no `sign`; it signs through the
 /// TLS key provider with the policy's TLS schemes, and that signer signs whatever bytes it is
-/// given (decision 0016, residual 2). Within this crate's API, outside the `test-support`
-/// feature, its PKCS#8 export goes back in only through [`CertificateKey::from_pkcs8_der`],
-/// [`load_private_key`], or `signature::KeyPair::from_pkcs8_der` under an `Admitted` whose
-/// signatures admit it. The export is the private key: a library that holds it signs with it
-/// under no profile (decision 0016, residual 2).
+/// given (decision 0016, residual 2). Outside TLS its PKCS#8 export signs only as a
+/// `signature::KeyPair`, which imports only under an `Admitted` whose signatures admit the
+/// algorithm. The export is the private key: a library that holds it signs with it under no
+/// profile (decision 0016, residuals 2 and 4).
 ///
 #[doc = concat!("```\nuse ", env!("CARGO_CRATE_NAME"), "::{Options, Profile, SignatureAlgorithm, csr, resolve, tls};")]
 /// # fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -463,15 +462,16 @@ impl fmt::Debug for CertificateKey {
 impl CertificateKey {
     /// A new key of algorithm `a`. Refuses, in this order, an algorithm not in `r.keys`
     /// (`CryptoError::KeyNotInProfile`), then one the module line lacks
-    /// (`CryptoError::Unavailable`).
+    /// (`CryptoError::Unavailable`), then a failed generation (`CryptoError::KeyGeneration`).
     pub fn generate(r: &Resolved, a: SignatureAlgorithm) -> Result<CertificateKey, CryptoError> {
         admit_certificate_key(r, a)?;
         KeyPair::generated(a).map(CertificateKey)
     }
 
-    /// Imports a DER RFC 5958 §2 OneAsymmetricKey of algorithm `a`. Refuses as
-    /// [`CertificateKey::generate`] does, then any structure or key
-    /// `signature::KeyPair::from_pkcs8_der` refuses, with `CryptoError::SignaturePrivateKey`.
+    /// Imports a DER RFC 5958 §2 OneAsymmetricKey of algorithm `a`. Refuses, in this order, an
+    /// algorithm not in `r.keys` (`CryptoError::KeyNotInProfile`), then one the module line lacks
+    /// (`CryptoError::Unavailable`), then any structure or key `signature::KeyPair::from_pkcs8_der`
+    /// refuses (`CryptoError::SignaturePrivateKey`).
     pub fn from_pkcs8_der(
         r: &Resolved,
         a: SignatureAlgorithm,
