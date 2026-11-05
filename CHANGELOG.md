@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-05
+
 ### Added
 
 - HMAC under a profile (#31), the first family governed outside TLS (decision 0008):
@@ -85,6 +87,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 - `capability()` reports the X25519 TLS group cell (`Algorithm::Kx(KxGroup::X25519)`) on the 4.x line as `NotApproved` (FIPS 140-3 IG C.K Resolution 5) instead of `Unverified`.
 - `ParseAlgorithmError`'s `Display` reads "unknown algorithm name …"; it no longer says "signature", because `KeyAgreementAlgorithm` parses with it too.
 - `Options`' `Display` names each option set, joined with ", "; the existing strings are unchanged.
+- `crypto-profile-awslc4` pins aws-lc-rs 1.19.0, where it pinned 1.18.2 (#51), and its lockfile takes aws-lc-sys 0.47.0, which is compiled but not linked. The FIPS source is unchanged: aws-lc-rs 1.19.0 still builds `aws-lc-fips-sys` 0.14.2, which bundles AWS-LC 4.2.0. The documents and source citations that named 1.18.2 name 1.19.0, re-read against its source (#53).
+
+### Known issues
+
+- On aarch64 (Linux and macOS, both module lines), the AWS-LC FIPS module refuses two valid Wycheproof P-256/SHA-256 signatures: s = 2^128 and s = n - 2^128 ([#24](https://github.com/crypto-profile/crypto-profile/issues/24), reported as [aws/aws-lc#3715](https://github.com/aws/aws-lc/issues/3715)). The refusal fails closed, no invalid signature is accepted on any target, an honest signature takes either value with probability about 2^-255, and the conformance suite pins both refusals.
+
+### Known 0.x items
+
+- `CryptoError`'s `Display` writes algorithms, approvals and causes with their `Debug` form (for example `Protocol(Tls13)` and `AlgorithmTested { cavp: "…" }`), so operator-facing messages carry Rust syntax.
 
 ## [0.9.0] - 2026-10-30
 

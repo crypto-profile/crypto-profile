@@ -9,7 +9,7 @@ Applications that build on the AWS-LC FIPS module through aws-lc-rs, with rustls
 
 Three facts shape any shared implementation:
 
-1. **One aws-lc-rs 1.x per lockfile.** Cargo resolves a single aws-lc-rs 1.x per build, so one crate cannot carry both the 3.x module line (aws-lc-rs 1.17) and the 4.x line (aws-lc-rs 1.18), even behind separate features.
+1. **One aws-lc-rs 1.x per lockfile.** Cargo resolves a single aws-lc-rs 1.x per build, so one crate cannot carry both the 3.x module line (aws-lc-rs 1.17) and the 4.x line (aws-lc-rs 1.18), even behind separate features. *(Amended 2026-11-05, #53: the 4.x line is aws-lc-rs 1.18 and later; the 4.x backend pins 1.19.0, which still builds `aws-lc-fips-sys` 0.14.2.)*
 2. **Each linkage is a separate module.** The AWS-LC FIPS 3.1.0 module carries certificate #5314 for its static build and #5298 for its dynamic build, each with its own security policy. The 4.x module is in CMVP review as separate static and dynamic submissions (AWS-LC `crypto/fipsmodule/FIPS.md:13-14,56-60`). *(Amended 2026-11-03, #44: the CMVP Modules In Process list, last updated 11/2/2026, shows "AWS-LC 4 Cryptographic Module (dynamic)" and "AWS-LC 4 Cryptographic Module (static)", FIPS 140-3, both in "Comment Resolution - Lab (10/22/2026)". The crate's status text cites that list; neither module is validated; [decision 0013](0013-aead.md).)*
 3. **The two lines differ in what they can do.** aws-lc-rs 1.17.4 compiles ML-DSA out under `fips` (`aws-lc-rs-1.17.4/src/lib.rs:283-284`); 1.18.2 does not (`aws-lc-rs-1.18.2/src/signature.rs:1177`). *(Amended 2026-11-05, #28: the 4.x backend pins aws-lc-rs 1.19.0, which exposes `ML_DSA_87_SIGNING` at `aws-lc-rs-1.19.0/src/signature.rs:1191`; the 1.18.2 constant is at `:1188`.)*
 

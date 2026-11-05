@@ -1,7 +1,7 @@
 [package]
 name = "crypto-profile-awslc3"
 description = "The crypto-profile backend on the AWS-LC FIPS 3.x module, through aws-lc-rs 1.17"
-version = "0.9.0"
+version = "0.10.0"
 edition = "2024"
 rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
@@ -28,7 +28,7 @@ expect_used = "deny"
 test-support = []
 
 [dependencies]
-crypto-profile = { path = "../crypto-profile", version = "=0.9.0" }
+crypto-profile = { path = "../crypto-profile", version = "=0.10.0" }
 # Prevent resolution onto the 4.x module; Cargo.lock pins the 3.x sys source to 0.13.17.
 aws-lc-rs = { version = "=1.17.4", features = ["fips", "ring-io"] }
 # Pin the policy/provider API so resolution cannot change its contract.
@@ -41,7 +41,7 @@ zeroize = "1"
 
 [dev-dependencies]
 hex = "0.4"
-crypto-profile = { path = "../crypto-profile", version = "=0.9.0", features = ["conformance"] }
+crypto-profile = { path = "../crypto-profile", version = "=0.10.0", features = ["conformance"] }
 x509-parser = { version = "0.18", default-features = false }
 # Pin the policy/provider API so resolution cannot change its contract.
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "tls12"] }
