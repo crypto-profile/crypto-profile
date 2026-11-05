@@ -1,6 +1,5 @@
 //! Profiles resolved against this backend's module.
-use crate::signature::KeyPair;
-use crate::tls::{Policy, load_private_key};
+use crate::tls::{CertificateKey, Policy, load_private_key};
 use crate::{
     AeadAlgorithm, Algorithm, Approval, CryptoError, Family, HashAlgorithm, KdfAlgorithm,
     KeyAgreementAlgorithm, MacAlgorithm, Options, Profile, SignatureAlgorithm, TlsError,
@@ -49,8 +48,9 @@ pub fn resolve(profile: Profile, options: Options) -> Result<Resolved, CryptoErr
 }
 
 impl Resolved {
-    /// Refuses a TLS certificate key algorithm the profile does not admit. Call it where a TLS key is
-    /// generated or a certificate request is made; `csr::generate_csr` does not.
+    /// Refuses a TLS certificate key algorithm the profile does not admit.
+    /// `tls::CertificateKey::generate`, `CertificateKey::from_pkcs8_der` and
+    /// [`Resolved::certified_key`] call it.
     pub fn admit_key(&self, a: SignatureAlgorithm) -> Result<(), CryptoError> {
         if self.keys.contains(&a) {
             Ok(())
@@ -64,14 +64,14 @@ impl Resolved {
 
     /// The certificate chain and key for this side of a connection, for
     /// `rustls::sign::SingleCertAndKey` or a resolver of the caller's. Refuses a key the profile
-    /// does not admit, and a chain whose end-entity certificate does not carry the key. The key
-    /// signs only with a scheme in `tls.signature_schemes`. When the peer offers none of them, a
-    /// server handshake fails; a client sends an empty Certificate, which fails only if the server
-    /// requires client authentication.
+    /// does not admit, whichever `Resolved` made it, and a chain whose end-entity certificate does
+    /// not carry the key. The key signs only with a scheme in `tls.signature_schemes`. When the
+    /// peer offers none of them, a server handshake fails; a client sends an empty Certificate,
+    /// which fails only if the server requires client authentication.
     pub fn certified_key(
         &self,
         chain: Vec<CertificateDer<'static>>,
-        key: &KeyPair,
+        key: &CertificateKey,
     ) -> Result<CertifiedKey, CryptoError> {
         self.admit_key(key.algorithm())?;
         let der = PrivateKeyDer::Pkcs8(key.to_pkcs8_der()?.to_vec().into());

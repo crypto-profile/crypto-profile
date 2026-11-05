@@ -1,6 +1,6 @@
-//! Certificate signing requests for a fresh key.
-use crate::signature::KeyPair;
-use crate::{CryptoError, CsrError, SignatureAlgorithm};
+//! Certificate signing requests for a TLS certificate key.
+use crate::tls::CertificateKey;
+use crate::{CryptoError, CsrError};
 use std::net::IpAddr;
 
 /// An extended key usage.
@@ -47,15 +47,10 @@ pub struct CsrParams {
     pub key_usage: Vec<KeyUsage>,
 }
 
-/// A new key of algorithm `a` and a PEM PKCS#10 request for it, signed by that key. Refuses, in
-/// this order, an algorithm that is not a TLS certificate key algorithm, an RSA-PSS variant
-/// (`CryptoError::NotTlsKey`); one the module line lacks (`CryptoError::Unavailable`); then the
-/// request's names and parameters.
-pub fn generate_csr(
-    a: SignatureAlgorithm,
-    p: &CsrParams,
-) -> Result<(KeyPair, String), CryptoError> {
-    let key = KeyPair::generate_tls_key(a)?;
+/// A PEM PKCS#10 request for `key`, signed by it; keep the key to request again for it. Refuses
+/// the request's names and parameters (`CryptoError::Csr`), and a key rcgen cannot sign with
+/// (`CsrError::Signing`).
+pub fn generate_csr(key: &CertificateKey, p: &CsrParams) -> Result<String, CryptoError> {
     let name = |_| CryptoError::Csr(CsrError::InvalidName);
     let signing = |_| CryptoError::Csr(CsrError::Signing);
     let mut params = rcgen::CertificateParams::new(Vec::<String>::new())
@@ -101,12 +96,11 @@ pub fn generate_csr(
             KeyUsage::KeyAgreement => rcgen::KeyUsagePurpose::KeyAgreement,
         })
         .collect();
-    let csr = params
-        .serialize_request(&key)
+    params
+        .serialize_request(key.key_pair())
         .map_err(signing)?
         .pem()
-        .map_err(signing)?;
-    Ok((key, csr))
+        .map_err(signing)
 }
 
 #[cfg(test)]
@@ -122,6 +116,62 @@ mod tests {
         p.contents().to_vec()
     }
 
+    fn assert_request_for(key: &CertificateKey, pem_text: &str) {
+        let a = key.algorithm();
+        let der = der(pem_text);
+        let (_, csr) = X509CertificationRequest::from_der(&der).unwrap();
+        let info = &csr.certification_request_info;
+        assert_eq!(
+            info.subject_pki.subject_public_key.data.as_ref(),
+            key.public_key(),
+            "{a}"
+        );
+        assert_eq!(
+            csr.signature_algorithm.algorithm.to_id_string(),
+            a.signature_oid(),
+            "{a}"
+        );
+        let params = match info.subject_pki.algorithm.parameters.as_ref() {
+            None => crate::signature::SpkiParams::Absent,
+            Some(p) if p.header.tag() == x509_parser::der_parser::asn1_rs::Tag::Null => {
+                crate::signature::SpkiParams::Null
+            }
+            Some(p) => match p.as_oid() {
+                Ok(oid) => crate::signature::SpkiParams::NamedCurve(oid.to_id_string()),
+                Err(_) => crate::signature::SpkiParams::Other,
+            },
+        };
+        assert!(
+            crate::signature::matches_spki(
+                a,
+                &info.subject_pki.algorithm.algorithm.to_id_string(),
+                &params,
+                key.public_key().len(),
+                info.subject_pki.subject_public_key.unused_bits
+            ),
+            "{a}"
+        );
+        let oracle = super::super::backend::csr_oracle(a).unwrap();
+        assert!(
+            oracle
+                .verify_signature(
+                    key.public_key(),
+                    info.raw,
+                    csr.signature_value.data.as_ref()
+                )
+                .is_ok(),
+            "{a}: the backend oracle refuses our CSR signature"
+        );
+    }
+
+    fn unrestricted() -> crate::Resolved {
+        crate::resolve(crate::Profile::Unrestricted, crate::Options::default()).unwrap()
+    }
+
+    fn key(a: S) -> CertificateKey {
+        CertificateKey::generate(&unrestricted(), a).unwrap()
+    }
+
     #[test]
     fn every_algorithm_signs_a_request_for_its_own_key() {
         let params = CsrParams {
@@ -131,70 +181,66 @@ mod tests {
             key_usage: vec![KeyUsage::DigitalSignature],
             ..Default::default()
         };
+        let r = unrestricted();
         for &a in S::ALL {
-            if a.tls_scheme().is_none() {
+            if !r.keys.contains(&a) {
                 assert_eq!(
-                    generate_csr(a, &params).err(),
-                    Some(CryptoError::NotTlsKey { algorithm: a })
+                    CertificateKey::generate(&r, a).err(),
+                    Some(CryptoError::KeyNotInProfile {
+                        profile: crate::Profile::Unrestricted,
+                        algorithm: a
+                    })
                 );
                 assert!(super::super::backend::csr_oracle(a).is_err());
                 continue;
             }
-            if !crate::capability(crate::MODULE, crate::Algorithm::Signature(a)).available {
-                assert_eq!(
-                    generate_csr(a, &params).err(),
-                    Some(CryptoError::Unavailable(crate::Algorithm::Signature(a)))
-                );
-                assert!(super::super::backend::csr_oracle(a).is_err());
-                continue;
-            }
-            let (key, pem_text) = generate_csr(a, &params).unwrap();
-            assert_eq!(key.algorithm(), a);
-            let der = der(&pem_text);
-            let (_, csr) = X509CertificationRequest::from_der(&der).unwrap();
-            let info = &csr.certification_request_info;
-            assert_eq!(
-                info.subject_pki.subject_public_key.data.as_ref(),
-                key.public_key(),
-                "{a}"
-            );
-            assert_eq!(
-                csr.signature_algorithm.algorithm.to_id_string(),
-                a.signature_oid(),
-                "{a}"
-            );
-            let params = match info.subject_pki.algorithm.parameters.as_ref() {
-                None => crate::signature::SpkiParams::Absent,
-                Some(p) if p.header.tag() == x509_parser::der_parser::asn1_rs::Tag::Null => {
-                    crate::signature::SpkiParams::Null
-                }
-                Some(p) => match p.as_oid() {
-                    Ok(oid) => crate::signature::SpkiParams::NamedCurve(oid.to_id_string()),
-                    Err(_) => crate::signature::SpkiParams::Other,
-                },
-            };
-            assert!(
-                crate::signature::matches_spki(
-                    a,
-                    &info.subject_pki.algorithm.algorithm.to_id_string(),
-                    &params,
-                    key.public_key().len(),
-                    info.subject_pki.subject_public_key.unused_bits
-                ),
-                "{a}"
-            );
-            let oracle = super::super::backend::csr_oracle(a).unwrap();
-            assert!(
-                oracle
-                    .verify_signature(
-                        key.public_key(),
-                        info.raw,
-                        csr.signature_value.data.as_ref()
-                    )
-                    .is_ok(),
-                "{a}: the backend oracle refuses our CSR signature"
-            );
+            let key = CertificateKey::generate(&r, a).unwrap();
+            assert_request_for(&key, &generate_csr(&key, &params).unwrap());
         }
+    }
+
+    #[test]
+    fn every_profile_tls_key_is_requested_bound_presented_and_reimported() {
+        let client = unrestricted().tls;
+        let mut seen = 0;
+        for &p in crate::Profile::ALL {
+            let r = match crate::resolve(p, crate::Options::default()) {
+                Ok(r) => r,
+                Err(e) => {
+                    assert_eq!(
+                        (p, crate::MODULE.line),
+                        (crate::Profile::Cnsa2, crate::ModuleLine::AwsLcFips3),
+                        "{e:?}"
+                    );
+                    continue;
+                }
+            };
+            for &a in &r.keys {
+                let key = CertificateKey::generate(&r, a).unwrap();
+                assert_request_for(&key, &generate_csr(&key, &CsrParams::default()).unwrap());
+                let again =
+                    CertificateKey::from_pkcs8_der(&r, a, &key.to_pkcs8_der().unwrap()).unwrap();
+                assert_eq!(again.public_key(), key.public_key(), "{p} {a}");
+                let pki = crate::test_support::issue(S::EcdsaP384Sha384, again).unwrap();
+                assert!(r.certified_key(pki.chain, &pki.key).is_ok(), "{p} {a}");
+                let n = crate::test_support::handshake_certified(&client, &r, a)
+                    .unwrap_or_else(|e| panic!("{p} {a}: {e}"));
+                assert!(r.tls.signature_schemes.contains(&n.scheme), "{p} {a}");
+                seen += 1;
+            }
+        }
+        assert!(seen > 0);
+    }
+
+    #[test]
+    fn an_rsa_pss_key_in_a_reassigned_list_is_refused_at_signing() {
+        let mut r = unrestricted();
+        r.keys.push(S::Rsa2048Sha384Pss);
+        let key = CertificateKey::generate(&r, S::Rsa2048Sha384Pss).unwrap();
+        assert_eq!(
+            generate_csr(&key, &CsrParams::default()).err(),
+            Some(CryptoError::Csr(CsrError::Signing))
+        );
     }
 
     #[test]
@@ -214,7 +260,7 @@ mod tests {
                 KeyUsage::KeyAgreement,
             ],
         };
-        let (_, pem_text) = generate_csr(S::Rsa2048Sha384, &params).unwrap();
+        let pem_text = generate_csr(&key(S::Rsa2048Sha384), &params).unwrap();
         let der = der(&pem_text);
         let (_, csr) = X509CertificationRequest::from_der(&der).unwrap();
         let subject = csr.certification_request_info.subject.to_string();
@@ -270,7 +316,7 @@ mod tests {
             uris: vec!["spiffe://example.test/plane/kernel".into()],
             ..Default::default()
         };
-        let (_, pem_text) = generate_csr(S::EcdsaP384Sha384, &params).unwrap();
+        let pem_text = generate_csr(&key(S::EcdsaP384Sha384), &params).unwrap();
         let der = der(&pem_text);
         let (_, csr) = X509CertificationRequest::from_der(&der).unwrap();
         assert_eq!(csr.certification_request_info.subject.iter().count(), 0);
@@ -289,27 +335,13 @@ mod tests {
     }
 
     #[test]
-    fn an_rsa_pss_key_is_refused_before_the_request_is_built() {
-        let params = CsrParams {
-            dns_names: vec!["é.example".into()],
-            ..Default::default()
-        };
-        assert_eq!(
-            generate_csr(S::Rsa4096Sha384Pss, &params).err(),
-            Some(CryptoError::NotTlsKey {
-                algorithm: S::Rsa4096Sha384Pss
-            })
-        );
-    }
-
-    #[test]
     fn a_non_ascii_name_is_refused_with_its_cause() {
         let params = CsrParams {
             dns_names: vec!["é.example".into()],
             ..Default::default()
         };
         assert_eq!(
-            generate_csr(S::EcdsaP384Sha384, &params).err(),
+            generate_csr(&key(S::EcdsaP384Sha384), &params).err(),
             Some(CryptoError::Csr(CsrError::InvalidName))
         );
         let params = CsrParams {
@@ -317,7 +349,7 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(
-            generate_csr(S::EcdsaP384Sha384, &params).err(),
+            generate_csr(&key(S::EcdsaP384Sha384), &params).err(),
             Some(CryptoError::Csr(CsrError::InvalidName))
         );
     }

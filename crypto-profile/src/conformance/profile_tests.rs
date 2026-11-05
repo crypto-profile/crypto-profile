@@ -8,8 +8,9 @@ macro_rules! __conformance_profile_tests {
         }
         $crate::__conformance_peer_identity_tests!($b);
         use std::sync::Arc;
-        use $b::signature::KeyPair;
-        use $b::test_support::{Negotiated, handshake, handshake_certified, handshake_with_ca};
+        use $b::test_support::{
+            Negotiated, Pki, handshake, handshake_certified, handshake_with_ca, issue,
+        };
         use $b::tls::{Policy, client_builder, server_builder};
         use $b::*;
         use $b::{
@@ -640,15 +641,14 @@ macro_rules! __conformance_profile_tests {
         #[test]
         fn certified_key_refuses_a_key_the_profile_does_not_admit() -> Result<(), CryptoError> {
             let d = Options::default();
-            let key = KeyPair::generate(&admit(Profile::Unrestricted, d), S::EcdsaP384Sha384)?;
-            let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
-                .unwrap()
-                .self_signed(&key)
-                .unwrap();
-            let chain = vec![cert.der().clone()];
+            let made = |p: Profile, k: S| -> Result<Pki, CryptoError> {
+                let key = tls::CertificateKey::generate(&resolve(p, d)?, k)?;
+                Ok(issue(S::EcdsaP384Sha384, key).unwrap())
+            };
+            let p384 = made(Profile::Preferred, S::EcdsaP384Sha384)?;
             if let Some(two) = admitted(Profile::Cnsa2, d) {
                 assert_eq!(
-                    two.certified_key(chain.clone(), &key).err(),
+                    two.certified_key(p384.chain.clone(), &p384.key).err(),
                     Some(CryptoError::KeyNotInProfile {
                         profile: Profile::Cnsa2,
                         algorithm: S::EcdsaP384Sha384
@@ -656,12 +656,19 @@ macro_rules! __conformance_profile_tests {
                 );
             }
             if let Some(one) = admitted(Profile::Cnsa1, d) {
-                assert!(one.certified_key(chain.clone(), &key).is_ok());
-                let other =
-                    KeyPair::generate(&admit(Profile::Unrestricted, d), S::EcdsaP384Sha384)?;
-                for c in [chain, vec![]] {
+                let p256 = made(Profile::Bsi, S::EcdsaP256Sha256)?;
+                assert_eq!(
+                    one.certified_key(p256.chain.clone(), &p256.key).err(),
+                    Some(CryptoError::KeyNotInProfile {
+                        profile: Profile::Cnsa1,
+                        algorithm: S::EcdsaP256Sha256
+                    })
+                );
+                assert!(one.certified_key(p384.chain.clone(), &p384.key).is_ok());
+                let other = made(Profile::Cnsa1, S::EcdsaP384Sha384)?;
+                for c in [p384.chain.clone(), vec![]] {
                     assert_eq!(
-                        one.certified_key(c, &other).err(),
+                        one.certified_key(c, &other.key).err(),
                         Some(CryptoError::Tls(TlsError::KeyMismatch))
                     );
                 }
@@ -670,38 +677,21 @@ macro_rules! __conformance_profile_tests {
         }
 
         #[test]
-        fn every_tls_key_has_a_public_route_to_certified_key() -> Result<(), CryptoError> {
+        fn every_tls_key_has_a_governed_route_to_certified_key() -> Result<(), CryptoError> {
             let d = Options::default();
             let mut outside = Vec::new();
             for &p in Profile::ALL {
                 let Some(r) = admitted(p, d) else { continue };
                 let own = admit(p, d);
                 for &k in &r.keys {
-                    let key = if own.signatures().contains(&k) {
-                        KeyPair::generate(&own, k)?
-                    } else {
+                    if !own.signatures().contains(&k) {
                         outside.push((p, k));
-                        assert_eq!(
-                            KeyPair::generate(&own, k).err(),
-                            Some(CryptoError::NotInProfile {
-                                profile: p,
-                                algorithm: Algorithm::Signature(k)
-                            })
-                        );
-                        let (csr_key, _) = csr::generate_csr(k, &csr::CsrParams::default())?;
-                        let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
-                            .unwrap()
-                            .self_signed(&csr_key)
-                            .unwrap();
-                        assert!(r.certified_key(vec![cert.der().clone()], &csr_key).is_ok());
-                        KeyPair::generate(&admit(Profile::Unrestricted, d), k)?
-                    };
-                    let cert = rcgen::CertificateParams::new(vec!["localhost".to_string()])
-                        .unwrap()
-                        .self_signed(&key)
-                        .unwrap();
+                    }
+                    let key = tls::CertificateKey::generate(&r, k)?;
+                    csr::generate_csr(&key, &csr::CsrParams::default())?;
+                    let pki = issue(S::EcdsaP384Sha384, key).unwrap();
                     assert!(
-                        r.certified_key(vec![cert.der().clone()], &key).is_ok(),
+                        r.certified_key(pki.chain.clone(), &pki.key).is_ok(),
                         "{p} {k}"
                     );
                 }

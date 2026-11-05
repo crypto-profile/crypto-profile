@@ -1,7 +1,12 @@
 //! Test infrastructure: in-memory certificates and an in-process handshake. Not shipped behaviour.
 use crate::signature::KeyPair;
-use crate::tls::{Policy, client_builder, server_builder, server_cert_verifier_builder};
-use crate::{CipherSuite, KxGroup, Resolved, SignatureAlgorithm, TlsSignatureScheme, TlsVersion};
+use crate::tls::{
+    CertificateKey, Policy, client_builder, server_builder, server_cert_verifier_builder,
+};
+use crate::{
+    CipherSuite, CryptoError, KxGroup, Options, Profile, Resolved, SignatureAlgorithm,
+    TlsSignatureScheme, TlsVersion, admit, resolve,
+};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::sign::SingleCertAndKey;
@@ -156,7 +161,7 @@ pub fn handshake_with_ca(
     ca: SignatureAlgorithm,
     key: SignatureAlgorithm,
 ) -> Result<Negotiated, String> {
-    run(client, ca, key, |chain, leaf_key| {
+    run(client, pki(ca, key)?, |chain, leaf_key| {
         let der = rustls::pki_types::PrivateKeyDer::Pkcs8(
             leaf_key.to_pkcs8_der().map_err(e)?.to_vec().into(),
         );
@@ -169,17 +174,18 @@ pub fn handshake_with_ca(
 }
 
 /// Runs a full in-process handshake whose server installs its `key` leaf through
-/// [`Resolved::certified_key`]: a P-384 CA issues a `localhost` leaf whose key is a fresh `key`;
-/// the server is built on `server.tls`, the client on `client`.
+/// [`Resolved::certified_key`]: a P-384 CA issues a `localhost` leaf whose key is a fresh
+/// `CertificateKey` of `key`, generated under `server`; the server is built on `server.tls`, the
+/// client on `client`.
 pub fn handshake_certified(
     client: &Policy,
     server: &Resolved,
     key: SignatureAlgorithm,
 ) -> Result<Negotiated, String> {
+    let key = CertificateKey::generate(server, key).map_err(e)?;
     run(
         client,
-        SignatureAlgorithm::EcdsaP384Sha384,
-        key,
+        issue(SignatureAlgorithm::EcdsaP384Sha384, key)?,
         |chain, leaf_key| {
             let certified = server
                 .certified_key(chain, leaf_key)
@@ -201,16 +207,33 @@ pub struct Pki {
     /// The leaf, then the CA.
     pub chain: Vec<CertificateDer<'static>>,
     /// The leaf's key.
-    pub key: KeyPair,
+    pub key: CertificateKey,
 }
 
 fn e(x: impl std::fmt::Display) -> String {
     x.to_string()
 }
 
-/// A fresh CA whose key is `ca` and a `localhost` leaf whose key is `key`.
+pub(crate) fn key_pair(a: SignatureAlgorithm) -> Result<KeyPair, CryptoError> {
+    KeyPair::generate(&admit(Profile::Unrestricted, Options::default()), a)
+}
+
+pub(crate) fn certificate_key(a: SignatureAlgorithm) -> Result<CertificateKey, CryptoError> {
+    let mut r = resolve(Profile::Unrestricted, Options::default())?;
+    r.keys = Profile::Unrestricted.spec().key_algorithms.to_vec();
+    CertificateKey::generate(&r, a)
+}
+
+/// A fresh CA whose key is `ca` and a `localhost` leaf whose key is a fresh `CertificateKey` of
+/// `key`, admitted against `unrestricted`'s TLS key list as published, so a key the module line
+/// lacks is `CryptoError::Unavailable`.
 pub fn pki(ca: SignatureAlgorithm, key: SignatureAlgorithm) -> Result<Pki, String> {
-    let ca_key = KeyPair::generate_tls_key(ca).map_err(e)?;
+    issue(ca, certificate_key(key).map_err(e)?)
+}
+
+/// A fresh CA whose key is `ca` and a `localhost` leaf it issues for `key`.
+pub fn issue(ca: SignatureAlgorithm, key: CertificateKey) -> Result<Pki, String> {
+    let ca_key = key_pair(ca).map_err(e)?;
     let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
     ca_params
         .distinguished_name
@@ -218,10 +241,9 @@ pub fn pki(ca: SignatureAlgorithm, key: SignatureAlgorithm) -> Result<Pki, Strin
     ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
     let ca_cert = ca_params.self_signed(&ca_key).map_err(e)?;
     let issuer = rcgen::Issuer::new(ca_params, &ca_key);
-    let leaf_key = KeyPair::generate_tls_key(key).map_err(e)?;
     let leaf = rcgen::CertificateParams::new(vec!["localhost".to_string()])
         .map_err(e)?
-        .signed_by(&leaf_key, &issuer)
+        .signed_by(key.key_pair(), &issuer)
         .map_err(e)?;
     let mut roots = rustls::RootCertStore::empty();
     roots.add(ca_cert.der().clone()).map_err(e)?;
@@ -229,7 +251,7 @@ pub fn pki(ca: SignatureAlgorithm, key: SignatureAlgorithm) -> Result<Pki, Strin
         roots,
         ca: ca_cert.der().clone(),
         chain: vec![leaf.der().clone(), ca_cert.der().clone()],
-        key: leaf_key,
+        key,
     })
 }
 
@@ -283,11 +305,12 @@ pub fn drive(
 
 fn run(
     client: &Policy,
-    ca: SignatureAlgorithm,
-    key: SignatureAlgorithm,
-    serve: impl FnOnce(Vec<CertificateDer<'static>>, &KeyPair) -> Result<rustls::ServerConfig, String>,
+    p: Pki,
+    serve: impl FnOnce(
+        Vec<CertificateDer<'static>>,
+        &CertificateKey,
+    ) -> Result<rustls::ServerConfig, String>,
 ) -> Result<Negotiated, String> {
-    let p = pki(ca, key)?;
     let server_cfg = serve(p.chain.clone(), &p.key)?;
     let (verifier, seen) = recording(
         server_cert_verifier_builder(Arc::new(p.roots), client)
@@ -358,7 +381,7 @@ fn peer_pki(
     leaf: SignatureAlgorithm,
     fixture: Option<PeerCertificateFixture>,
 ) -> Result<PeerCertificatePki, String> {
-    let root_key = KeyPair::generate_tls_key(root).map_err(e)?;
+    let root_key = key_pair(root).map_err(e)?;
     let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
     params
         .distinguished_name
@@ -371,10 +394,7 @@ fn peer_pki(
         params.self_signed(&root_key).map_err(e)?
     };
     let issuer = rcgen::Issuer::new(params.clone(), &root_key);
-    let intermediate_key = intermediate
-        .map(KeyPair::generate_tls_key)
-        .transpose()
-        .map_err(e)?;
+    let intermediate_key = intermediate.map(key_pair).transpose().map_err(e)?;
     let mut chain = Vec::new();
     let intermediate_params = intermediate_key
         .as_ref()
@@ -390,7 +410,7 @@ fn peer_pki(
         .as_ref()
         .zip(intermediate_key.as_ref())
         .map(|(p, k)| rcgen::Issuer::new(p.clone(), k));
-    let leaf_key = KeyPair::generate_tls_key(leaf).map_err(e)?;
+    let leaf_key = certificate_key(leaf).map_err(e)?;
     let name = if matches!(fixture, Some(PeerCertificateFixture::WrongName)) {
         "other.invalid"
     } else {
@@ -403,7 +423,10 @@ fn peer_pki(
         leaf_params.not_after = rcgen::date_time_ymd(2001, 1, 1);
     }
     let leaf_cert = leaf_params
-        .signed_by(&leaf_key, intermediate_issuer.as_ref().unwrap_or(&issuer))
+        .signed_by(
+            leaf_key.key_pair(),
+            intermediate_issuer.as_ref().unwrap_or(&issuer),
+        )
         .map_err(e)?;
     let mut der = leaf_cert.der().to_vec();
     if matches!(fixture, Some(PeerCertificateFixture::Tampered)) {
@@ -507,7 +530,7 @@ pub fn peer_certificate_fixture(
             None,
             SignatureAlgorithm::Rsa3072Sha384,
         )?;
-        let issuer_key = KeyPair::generate_tls_key(SignatureAlgorithm::Rsa3072Sha384).map_err(e)?;
+        let issuer_key = key_pair(SignatureAlgorithm::Rsa3072Sha384).map_err(e)?;
         let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         let root = params.self_signed(&issuer_key).map_err(e)?;
@@ -764,23 +787,23 @@ fn peer_selected_path(bad_first: bool) -> Result<PeerCertificatePki, String> {
         p.distinguished_name.push(rcgen::DnType::CommonName, name);
         Ok::<_, String>(p)
     };
-    let good_key = KeyPair::generate_tls_key(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
-    let bad_key = KeyPair::generate_tls_key(SignatureAlgorithm::EcdsaP256Sha256).map_err(e)?;
+    let good_key = key_pair(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
+    let bad_key = key_pair(SignatureAlgorithm::EcdsaP256Sha256).map_err(e)?;
     let gp = ca_params("good root")?;
     let bp = ca_params("bad root")?;
     let gr = gp.self_signed(&good_key).map_err(e)?;
     let br = bp.self_signed(&bad_key).map_err(e)?;
     let gi = rcgen::Issuer::new(gp, &good_key);
     let bi = rcgen::Issuer::new(bp, &bad_key);
-    let ik = KeyPair::generate_tls_key(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
+    let ik = key_pair(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
     let ip = ca_params("shared intermediate")?;
     let good = ip.signed_by(&ik, &gi).map_err(e)?;
     let bad = ip.signed_by(&ik, &bi).map_err(e)?;
     let ii = rcgen::Issuer::new(ip, &ik);
-    let key = KeyPair::generate_tls_key(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
+    let key = certificate_key(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
     let leaf = rcgen::CertificateParams::new(vec!["localhost".into()])
         .map_err(e)?
-        .signed_by(&key, &ii)
+        .signed_by(key.key_pair(), &ii)
         .map_err(e)?;
     let mut roots = rustls::RootCertStore::empty();
     roots.add(gr.der().clone()).map_err(e)?;
@@ -839,7 +862,7 @@ pub fn identity_pki(
     ekus: Vec<rcgen::ExtendedKeyUsagePurpose>,
     revoked: bool,
 ) -> Result<IdentityPki, String> {
-    let ca_key = KeyPair::generate_tls_key(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
+    let ca_key = key_pair(SignatureAlgorithm::EcdsaP384Sha384).map_err(e)?;
     let mut ca_params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
     let n = IDENTITY_CAS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     ca_params.distinguished_name.push(
@@ -853,12 +876,12 @@ pub fn identity_pki(
     ];
     let ca_cert = ca_params.self_signed(&ca_key).map_err(e)?;
     let issuer = rcgen::Issuer::new(ca_params, &ca_key);
-    let leaf_key = KeyPair::generate_tls_key(leaf).map_err(e)?;
+    let leaf_key = certificate_key(leaf).map_err(e)?;
     let mut params = rcgen::CertificateParams::new(Vec::<String>::new()).map_err(e)?;
     params.subject_alt_names = sans;
     params.extended_key_usages = ekus;
     params.serial_number = Some(rcgen::SerialNumber::from(42));
-    let leaf_cert = params.signed_by(&leaf_key, &issuer).map_err(e)?;
+    let leaf_cert = params.signed_by(leaf_key.key_pair(), &issuer).map_err(e)?;
     let crl = rcgen::CertificateRevocationListParams {
         this_update: rcgen::date_time_ymd(2020, 1, 1),
         next_update: rcgen::date_time_ymd(2040, 1, 1),

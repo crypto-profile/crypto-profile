@@ -297,7 +297,7 @@ mod tests {
     );
 
     fn load(a: S) -> (crate::signature::KeyPair, Arc<dyn SigningKey>) {
-        let k = crate::signature::KeyPair::generate_tls_key(a).unwrap();
+        let k = crate::test_support::key_pair(a).unwrap();
         let der = PrivateKeyDer::Pkcs8(k.to_pkcs8_der().unwrap().to_vec().into());
         let key = any_supported_type(&der).unwrap();
         (k, key)
