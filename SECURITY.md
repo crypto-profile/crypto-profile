@@ -16,7 +16,7 @@ In scope is this repository's own code and its claims:
 
 Out of scope here, and to be reported to the project that owns the code:
 
-- **AWS-LC, aws-lc-rs and aws-lc-fips-sys:** AWS asks that potential security issues be reported through its [vulnerability reporting page](https://aws.amazon.com/security/vulnerability-reporting/), not a public GitHub issue (`aws-lc-rs-1.18.2/README.md:255-258`; `aws-lc-fips-sys-0.14.2/README.md:228-233`; `aws-lc-rs-1.17.4/README.md:254-257`; `aws-lc-fips-sys-0.13.17/README.md:186-189`).
+- **AWS-LC, aws-lc-rs and aws-lc-fips-sys:** AWS asks that potential security issues be reported through its [vulnerability reporting page](https://aws.amazon.com/security/vulnerability-reporting/), not a public GitHub issue (`aws-lc-rs-1.19.0/README.md:255-258`; `aws-lc-fips-sys-0.14.2/README.md:228-233`; `aws-lc-rs-1.17.4/README.md:254-257`; `aws-lc-fips-sys-0.13.17/README.md:186-189`).
 - **rustls:** report through [rustls's GitHub security advisories](https://github.com/rustls/rustls/security/advisories/new), as its [security policy](https://github.com/rustls/rustls/blob/main/SECURITY.md) describes.
 - **rustls-webpki and rcgen:** through their own repositories' security reporting.
 

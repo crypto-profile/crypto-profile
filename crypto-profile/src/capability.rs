@@ -10,7 +10,7 @@ use crate::error::CryptoError;
 pub enum ModuleLine {
     /// AWS-LC FIPS 3.x (aws-lc-rs 1.17).
     AwsLcFips3,
-    /// AWS-LC FIPS 4.x (aws-lc-rs 1.18).
+    /// AWS-LC FIPS 4.x (aws-lc-rs 1.18 and later).
     AwsLcFips4,
 }
 

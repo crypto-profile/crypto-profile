@@ -1,4 +1,4 @@
-//! The crypto-profile backend on the AWS-LC FIPS 4.x module (aws-lc-rs 1.18, `fips`).
+//! The crypto-profile backend on the AWS-LC FIPS 4.x module (aws-lc-rs 1.19, `fips`).
 //! `rustls` is re-exported because its types are this crate's API; `aws-lc-rs` is not.
 #![deny(missing_docs)]
 

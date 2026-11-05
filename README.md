@@ -36,7 +36,7 @@ Cargo resolves one `aws-lc-rs` 1.x per lockfile, so each module line gets its ow
 
 | Backend | Module line | Status |
 |---|---|---|
-| `crypto-profile-awslc4` | AWS-LC FIPS 4.x, through aws-lc-rs 1.18 | Built from AWS-LC 4.2.0; 4.x is in CMVP review. |
+| `crypto-profile-awslc4` | AWS-LC FIPS 4.x, through aws-lc-rs 1.19 | Built from AWS-LC 4.2.0; 4.x is in CMVP review. |
 | `crypto-profile-awslc3` | AWS-LC FIPS 3.x, through aws-lc-rs 1.17 | Built from AWS-LC 3.6.0; the 3.1.0 release carries the certificates below. |
 
 Select exactly one backend per build. Both declare `links = "crypto-profile-backend"`. Today their exact aws-lc-rs pins refuse a combined graph first; the shared links key also refuses it if those pins become compatible. Each backend exposes `awslc_version()` for the exact runtime-linked release, separately from `certificate(MODULE)`.
