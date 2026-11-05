@@ -26,11 +26,16 @@ open(out, "w", encoding="utf-8").write(head + body + "\n")
 ' "$root" "$version" "$repo" "$notes"
 flags=(--latest)
 [[ "$version" == *-* ]] && flags=(--prerelease --latest=false)
-if ! draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"; then
-  gh release create "$tag" "${crates[@]}" --verify-tag --title "crypto-profile $version" --notes-file "$notes" "${flags[@]}"
+title="crypto-profile $version"
+if ! draft="$(gh release view "$tag" --json isDraft --jq .isDraft 2> "$RUNNER_TEMP/release-view.err")"; then
+  grep -qx 'release not found' "$RUNNER_TEMP/release-view.err" || { cat "$RUNNER_TEMP/release-view.err" >&2; exit 1; }
+  gh release create "$tag" "${crates[@]}" --verify-tag --title "$title" --notes-file "$notes" "${flags[@]}"
 elif [[ "$draft" == true ]]; then
   gh release upload "$tag" "${crates[@]}" --clobber
-  gh release edit "$tag" --draft=false --notes-file "$notes" "${flags[@]}"
+  gh release edit "$tag" --draft=false --title "$title" --notes-file "$notes" "${flags[@]}"
 else
+  want="$(printf '%s\n' "${crates[@]##*/}" | sort)"
+  have="$(gh release view "$tag" --json assets --jq '.assets[].name' | sort)"
+  [[ "$have" == "$want" ]] || { echo "release $tag is published without its crates; immutable releases cannot take them" >&2; exit 1; }
   echo "SKIP release $tag is already published"
 fi
