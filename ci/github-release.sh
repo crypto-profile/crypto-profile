@@ -26,10 +26,11 @@ open(out, "w", encoding="utf-8").write(head + body + "\n")
 ' "$root" "$version" "$repo" "$notes"
 flags=(--latest)
 [[ "$version" == *-* ]] && flags=(--prerelease --latest=false)
-if gh release view "$tag" > /dev/null; then
-  echo "SKIP release $tag exists; uploading its crates"
+if ! draft="$(gh release view "$tag" --json isDraft --jq .isDraft)"; then
+  gh release create "$tag" "${crates[@]}" --verify-tag --title "crypto-profile $version" --notes-file "$notes" "${flags[@]}"
+elif [[ "$draft" == true ]]; then
   gh release upload "$tag" "${crates[@]}" --clobber
   gh release edit "$tag" --draft=false --notes-file "$notes" "${flags[@]}"
 else
-  gh release create "$tag" "${crates[@]}" --verify-tag --title "crypto-profile $version" --notes-file "$notes" "${flags[@]}"
+  echo "SKIP release $tag is already published"
 fi
