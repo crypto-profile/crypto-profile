@@ -43,7 +43,7 @@ fi
 if ! { grep -q 'crypto-profile-backend' "$work/error" && grep -q 'links' "$work/error"; }; then
   grep -q 'failed to select a version for `aws-lc-rs`' "$work/error"
   grep -q '=1.17.4' "$work/error"
-  grep -q '=1.18.2' "$work/error"
+  grep -q '=1.19.0' "$work/error"
   grep -q 'all possible versions conflict' "$work/error"
 fi
 cat "$work/error"

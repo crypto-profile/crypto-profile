@@ -1,6 +1,6 @@
 [package]
 name = "crypto-profile-awslc4"
-description = "The crypto-profile backend on the AWS-LC FIPS 4.x module, through aws-lc-rs 1.18"
+description = "The crypto-profile backend on the AWS-LC FIPS 4.x module, through aws-lc-rs 1.19"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -20,7 +20,7 @@ test-support = []
 
 [dependencies]
 crypto-profile = { path = "../crypto-profile", version = "=0.9.0" }
-# FIPS POSTURE: aws-lc-rs 1.18 with `fips` builds aws-lc-fips-sys 0.14.2, which bundles AWS-LC 4.2.0
+# FIPS POSTURE: aws-lc-rs 1.19 with `fips` builds aws-lc-fips-sys 0.14.2, which bundles AWS-LC 4.2.0
 # source. The module in CMVP review is AWS-LC-FIPS v4.0; whether this build is that module is
 # unverified, and this crate claims neither that nor any validation of its own.
 # Pin aws-lc-rs so resolution cannot change the selected FIPS module provenance.
