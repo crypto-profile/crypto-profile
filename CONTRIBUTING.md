@@ -260,4 +260,4 @@ and mutation discovery. Run 3.x coverage and mutation analysis separately,
 without that cfg. Its mutation configuration does not cross into the root
 workspace or rediscover the emitted shared bodies.
 
-The 4.x manifest pins aws-lc-rs 1.18.2 and rcgen 0.14.10; its lockfile selects aws-lc-fips-sys 0.14.2. The 3.x manifest pins aws-lc-rs 1.17.4 and rcgen 0.14.9. Both pin rustls 0.23.46 and rustls-webpki 0.103.16. Preserve the explanatory pin comments when updating dependencies.
+The 4.x manifest pins aws-lc-rs 1.18.2 and rcgen 0.14.10; its lockfile selects aws-lc-fips-sys 0.14.2. The 3.x manifest pins aws-lc-rs 1.17.4 and rcgen 0.14.9. Both pin rustls 0.23.46 and rustls-webpki 0.103.16. Preserve the explanatory pin comments when updating dependencies. Why the pins are exact, how an advisory in a pinned crate is released, and when the 3.x backend retires are [decision 0017](docs/decisions/0017-exact-pins-and-3x-retirement.md).

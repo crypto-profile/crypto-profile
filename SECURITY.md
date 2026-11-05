@@ -4,7 +4,7 @@
 
 Report a vulnerability privately, through GitHub's private vulnerability reporting for this repository: the **Security** tab, then **Report a vulnerability**. Never report one in a public issue, pull request or discussion.
 
-crypto-profile is pre-release, and no version is supported for production use yet. Fixes land on `main`.
+crypto-profile is pre-release, and no version is supported for production use yet. Fixes land on `main`. An advisory in a dependency the backends pin exactly (aws-lc-rs, rustls, rustls-webpki, rcgen) reaches you only through a crypto-profile release; [decision 0017](docs/decisions/0017-exact-pins-and-3x-retirement.md) says when one is released, and what happens when a backend's module line cannot take the fix.
 
 ## Scope
 
