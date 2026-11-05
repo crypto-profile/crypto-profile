@@ -18,8 +18,10 @@ version = versions["crypto-profile"]
 for n in names[1:]:
     reqs = [d["req"] for d in pkgs[n]["dependencies"] if d["name"] == "crypto-profile"]
     check(reqs and all(r == f"={version}" for r in reqs), f"{n} requires crypto-profile {reqs}, not ={version}")
-changelog = open(os.path.join(sys.argv[1], "CHANGELOG.md")).read()
-check(re.search(rf"^## \[{re.escape(version)}\]", changelog, re.M), f"CHANGELOG.md has no ## [{version}] heading")
+changelog = open(os.path.join(sys.argv[1], "CHANGELOG.md"), encoding="utf-8").read()
+section = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
+check(section, f"CHANGELOG.md has no ## [{version}] heading")
+check(section.group(1).strip(), f"CHANGELOG.md ## [{version}] section is empty")
 if os.environ.get("GITHUB_REF_TYPE") == "tag":
     tag = os.environ.get("GITHUB_REF_NAME", "")
     check(tag == f"v{version}", f"tag {tag} does not match version {version}")
