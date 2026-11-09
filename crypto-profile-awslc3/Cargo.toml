@@ -53,5 +53,9 @@ name = "conformance"
 required-features = ["test-support"]
 
 [[test]]
+name = "install_default_rule"
+required-features = ["test-support"]
+
+[[test]]
 name = "openssl_interop"
 required-features = ["test-support"]
