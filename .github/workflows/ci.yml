@@ -96,7 +96,7 @@ jobs:
         with:
           persist-credentials: false
       - run: rustup toolchain install
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           tool: cargo-deny@0.20.2 # Pin the checker used for the local two-root policy gate.
       - working-directory: crypto-profile-awslc3
@@ -206,7 +206,7 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           tool: cargo-llvm-cov@0.8.7
       - run: sudo mkdir -p /opt/rust/tmp && sudo chown "$USER" /opt/rust/tmp
@@ -229,7 +229,7 @@ jobs:
       - run: rustup toolchain install
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
       - run: sudo apt-get update && sudo apt-get install -y cmake golang clang
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2.88.0
+      - uses: taiki-e/install-action@c509219cf42fba86913069efd0ade2458c59337b # v2.90.1
         with:
           tool: cargo-mutants@27.1.0
       - run: sudo mkdir -p /opt/rust/tmp && sudo chown "$USER" /opt/rust/tmp
