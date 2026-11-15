@@ -77,7 +77,7 @@ One bar for all shipped code ([decision 0003](docs/decisions/0003-quality-bar.md
 - at least **95% line coverage**;
 - **0 missed mutants** from `cargo mutants`.
 
-Use cargo-mutants 27.1.0 and cargo-llvm-cov 0.9.1, the versions CI pins.
+Use the cargo-mutants and cargo-llvm-cov versions [section 2](#2-the-gates) names, the versions CI pins.
 
 The test infrastructure (`crypto-profile/src/backend_body/test_support.rs` and the conformance scaffolding under `crypto-profile/src/conformance/`) is not shipped behaviour and is excluded from both. Nothing else is excluded by file.
 
