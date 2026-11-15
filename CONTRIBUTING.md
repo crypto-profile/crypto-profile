@@ -55,7 +55,7 @@ cargo doc --manifest-path crypto-profile-awslc3/Cargo.toml --all-features --no-d
 
 Interop requires OpenSSL 3.5 or later; set `CRYPTO_PROFILE_OPENSSL` to an existing executable for an offline run. Each backend and linkage must report two passed interop tests. Do not count skipped tests as evidence.
 
-For coverage and mutation, use cargo-llvm-cov 0.8.7 and cargo-mutants 27.1.0. Use a unique scratch directory with enough space for `TMPDIR` and isolated targets. Inspect mutant discovery and results, and clean the scratch directory on exit. The direct cfg covers shared source through 4.x; do not set it on 3.x.
+For coverage and mutation, use cargo-llvm-cov 0.9.1 and cargo-mutants 27.1.0. Use a unique scratch directory with enough space for `TMPDIR` and isolated targets. Inspect mutant discovery and results, and clean the scratch directory on exit. The direct cfg covers shared source through 4.x; do not set it on 3.x.
 
 ```sh
 RUSTFLAGS='--cfg crypto_profile_provider_direct' cargo llvm-cov --workspace --all-features --locked --fail-under-lines 95 --ignore-filename-regex '(test_support|conformance)'
@@ -77,7 +77,7 @@ One bar for all shipped code ([decision 0003](docs/decisions/0003-quality-bar.md
 - at least **95% line coverage**;
 - **0 missed mutants** from `cargo mutants`.
 
-Use cargo-mutants 27.1.0 and cargo-llvm-cov 0.8.7, the versions CI pins.
+Use cargo-mutants 27.1.0 and cargo-llvm-cov 0.9.1, the versions CI pins.
 
 The test infrastructure (`crypto-profile/src/backend_body/test_support.rs` and the conformance scaffolding under `crypto-profile/src/conformance/`) is not shipped behaviour and is excluded from both. Nothing else is excluded by file.
 
