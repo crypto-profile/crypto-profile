@@ -28,8 +28,10 @@ pub struct Policy {
     pub kx_groups: Vec<K>,
     /// Handshake signature schemes: those this side accepts from its peer, and those a key loaded
     /// through this policy's provider signs with. Certificate-chain signature algorithms are not
-    /// restricted. A provider carries them in [`TlsSignatureScheme::preference`](T::preference) order,
-    /// the order every profile lists them in, whatever order they are given in.
+    /// restricted by the policy: the provider verifies them with every algorithm the module does
+    /// not refuse (decision 0018). A provider carries them in
+    /// [`TlsSignatureScheme::preference`](T::preference) order, the order every profile lists them
+    /// in, whatever order they are given in.
     pub signature_schemes: Vec<T>,
     /// Canonical peer-certificate restrictions; hand-written policies default to none.
     pub peer_certificate_rule: Option<crypto_profile::PeerCertificateRuleId>,
@@ -373,34 +375,49 @@ pub fn install_default(p: &Policy) -> Result<(), CryptoError> {
         .map_err(|_| CryptoError::Tls(TlsError::DefaultProviderInstalled))
 }
 
-/// Refuses a provider that does not carry exactly `p`'s suites and groups in order and its
-/// schemes in [`TlsSignatureScheme::preference`](T::preference) order, or whose key provider is not the one
-/// `crypto_provider(p)` carries.
+/// Refuses a provider that does not carry exactly the suites, groups, handshake schemes and
+/// their verifiers, certificate-chain verifiers, random source and key provider that
+/// `crypto_provider(p)` carries, in its order. Each is compared by identity, so a substitute
+/// that reports the same codepoint or algorithm identifiers is refused.
 pub fn assert_provider_matches(provider: &CryptoProvider, p: &Policy) -> Result<(), CryptoError> {
     let want = crypto_provider(p)?;
-    let suites = |x: &CryptoProvider| {
-        x.cipher_suites
-            .iter()
-            .map(|s| s.suite())
-            .collect::<Vec<_>>()
-    };
-    let groups = |x: &CryptoProvider| x.kx_groups.iter().map(|g| g.name()).collect::<Vec<_>>();
-    let schemes = |x: &CryptoProvider| {
-        x.signature_verification_algorithms
+    let CryptoProvider {
+        cipher_suites,
+        kx_groups,
+        signature_verification_algorithms: have_v,
+        secure_random,
+        key_provider,
+    } = provider;
+    let want_v = &want.signature_verification_algorithms;
+    if suites(cipher_suites) == suites(&want.cipher_suites)
+        && same(kx_groups, &want.kx_groups)
+        && have_v.mapping.len() == want_v.mapping.len()
+        && have_v
             .mapping
             .iter()
-            .map(|(s, _)| *s)
-            .collect::<Vec<_>>()
-    };
-    if suites(provider) == suites(&want)
-        && groups(provider) == groups(&want)
-        && schemes(provider) == schemes(&want)
-        && std::ptr::addr_eq(provider.key_provider, want.key_provider)
+            .zip(want_v.mapping)
+            .all(|((s, a), (t, b))| s == t && same(a, b))
+        && same(have_v.all, want_v.all)
+        && std::ptr::addr_eq(*secure_random, want.secure_random)
+        && std::ptr::addr_eq(*key_provider, want.key_provider)
     {
         Ok(())
     } else {
         Err(CryptoError::PolicyDrift)
     }
+}
+
+fn suites(x: &[rustls::SupportedCipherSuite]) -> Vec<*const ()> {
+    x.iter()
+        .map(|s| match s {
+            rustls::SupportedCipherSuite::Tls12(t) => std::ptr::from_ref(*t).cast::<()>(),
+            rustls::SupportedCipherSuite::Tls13(t) => std::ptr::from_ref(*t).cast::<()>(),
+        })
+        .collect()
+}
+
+fn same<T: ?Sized>(a: &[&T], b: &[&T]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| std::ptr::addr_eq(*x, *y))
 }
 
 /// Loads a private key into a signing key that signs only with a scheme in
@@ -1494,6 +1511,20 @@ mod tests {
     fn one13(k: K) -> Policy {
         policy(&[V::Tls13], &[C::Tls13Aes256GcmSha384], &[k], T::ALL)
     }
+
+    fn approved13(k: K) -> Policy {
+        policy(
+            &[V::Tls13],
+            &[C::Tls13Aes256GcmSha384],
+            &[k],
+            &[T::EcdsaNistp384Sha384, T::RsaPssSha384],
+        )
+    }
+
+    const STATIC_3X: crate::Module = crate::Module {
+        line: crate::ModuleLine::AwsLcFips3,
+        linkage: crate::Linkage::Static,
+    };
 
     fn cp(bytes: [u8; 2]) -> u16 {
         u16::from_be_bytes(bytes)
@@ -2876,13 +2907,13 @@ mod tests {
             .unwrap();
         let der =
             rustls::pki_types::PrivateKeyDer::Pkcs8(key.to_pkcs8_der().unwrap().to_vec().into());
-        let fips = server_builder(&one13(K::Secp384r1))
+        let fips = server_builder(&approved13(K::Secp384r1))
             .unwrap()
             .with_no_client_auth()
             .with_single_cert(vec![cert.der().clone()], der.clone_key())
             .unwrap();
         assert_eq!(crate::fips::assert_fips_server_config(&fips), Ok(()));
-        let x = server_builder(&one13(K::X25519))
+        let x = server_builder(&approved13(K::X25519))
             .unwrap()
             .with_no_client_auth()
             .with_single_cert(vec![cert.der().clone()], der)
@@ -3028,6 +3059,266 @@ mod tests {
     }
 
     #[test]
+    fn a_policy_listing_ed25519_is_fips_except_where_the_module_refuses_it() {
+        let mut with = approved13(K::Secp384r1);
+        with.signature_schemes.push(T::Ed25519);
+        let config = |p: &Policy| {
+            client_builder(p)
+                .unwrap()
+                .with_root_certificates(rustls::RootCertStore::empty())
+                .with_no_client_auth()
+        };
+        let refused = crate::MODULE == STATIC_3X;
+        let c = config(&with);
+        assert_eq!((c.fips(), c.require_ems), (!refused, !refused));
+        let c = config(&approved13(K::Secp384r1));
+        assert_eq!((c.fips(), c.require_ems), (true, true));
+    }
+
+    #[test]
+    fn every_provider_verifies_chains_without_ed25519_only_where_the_module_refuses_it() {
+        use rustls::pki_types::alg_id;
+        let mut policies: Vec<Policy> = crate::Profile::ALL
+            .iter()
+            .filter_map(|p| crate::resolve(*p, crate::Options::default()).ok())
+            .map(|r| r.tls)
+            .collect();
+        policies.push(one13(K::Secp384r1));
+        assert!(policies.len() > 1);
+        for p in &policies {
+            let all = crypto_provider(p)
+                .unwrap()
+                .signature_verification_algorithms
+                .all;
+            let has = |pk| all.iter().any(|a| a.public_key_alg_id() == pk);
+            assert_eq!(has(alg_id::ED25519), crate::MODULE != STATIC_3X, "{p:?}");
+            for pk in [
+                alg_id::RSA_ENCRYPTION,
+                alg_id::ECDSA_P256,
+                alg_id::ECDSA_P384,
+                alg_id::ECDSA_P521,
+            ] {
+                assert!(has(pk), "{p:?} {pk:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn an_ed25519_signed_chain_is_refused_where_the_module_refuses_it() {
+        use rustls::pki_types::alg_id;
+        let q = approved13(K::Secp384r1);
+        let opposite = || {
+            crate::test_support::peer_certificate_pki(S::EcdsaP384Sha384, None, S::EcdsaP384Sha384)
+                .unwrap()
+        };
+        for server_checks_client in [false, true] {
+            let pki =
+                crate::test_support::peer_certificate_pki(S::Ed25519, None, S::EcdsaP384Sha384)
+                    .unwrap()
+                    .with_opposite(opposite());
+            let (client, server) =
+                crate::test_support::peer_certificate_configs(&q, server_checks_client, &pki)
+                    .unwrap();
+            let result = crate::test_support::drive_typed(client, server);
+            if crate::MODULE == STATIC_3X {
+                let Err((
+                    detector,
+                    rustls::Error::InvalidCertificate(
+                        rustls::CertificateError::UnsupportedSignatureAlgorithmContext {
+                            signature_algorithm_id,
+                            ..
+                        },
+                    ),
+                )) = result
+                else {
+                    panic!("{server_checks_client}: {result:?}");
+                };
+                assert_eq!(detector, server_checks_client);
+                assert_eq!(signature_algorithm_id, alg_id::ED25519.as_ref());
+            } else {
+                assert_eq!(result.map_err(|(_, e)| e), Ok(()), "{server_checks_client}");
+            }
+        }
+    }
+
+    #[test]
+    fn drift_in_the_chain_list_is_refused() {
+        let q = approved13(K::Secp384r1);
+        let p = crypto_provider(&q).unwrap();
+        assert_eq!(assert_provider_matches(&p, &q), Ok(()));
+        let all = p.signature_verification_algorithms.all;
+        let shorter: &'static [_] = Box::leak(all[..all.len() - 1].to_vec().into_boxed_slice());
+        let mut reversed = all.to_vec();
+        reversed.reverse();
+        let reversed: &'static [_] = Box::leak(reversed.into_boxed_slice());
+        #[derive(Debug)]
+        struct Impostor(&'static dyn rustls::pki_types::SignatureVerificationAlgorithm);
+        impl rustls::pki_types::SignatureVerificationAlgorithm for Impostor {
+            fn public_key_alg_id(&self) -> rustls::pki_types::AlgorithmIdentifier {
+                self.0.public_key_alg_id()
+            }
+            fn signature_alg_id(&self) -> rustls::pki_types::AlgorithmIdentifier {
+                self.0.signature_alg_id()
+            }
+            fn verify_signature(
+                &self,
+                _: &[u8],
+                _: &[u8],
+                _: &[u8],
+            ) -> Result<(), rustls::pki_types::InvalidSignature> {
+                Ok(())
+            }
+        }
+        let mut impostor = all.to_vec();
+        impostor[0] = Box::leak(Box::new(Impostor(all[0])));
+        let impostor: &'static [_] = Box::leak(impostor.into_boxed_slice());
+        for changed in [shorter, reversed, impostor] {
+            let other = CryptoProvider {
+                signature_verification_algorithms: WebPkiSupportedAlgorithms {
+                    all: changed,
+                    mapping: p.signature_verification_algorithms.mapping,
+                },
+                ..crypto_provider(&q).unwrap()
+            };
+            assert_eq!(
+                assert_provider_matches(&other, &q),
+                Err(CryptoError::PolicyDrift)
+            );
+        }
+    }
+
+    #[test]
+    fn a_substitute_with_the_same_names_is_refused_in_every_family() {
+        use rustls::crypto::{ActiveKeyExchange, SupportedKxGroup};
+        use rustls::pki_types::{
+            AlgorithmIdentifier, InvalidSignature, SignatureVerificationAlgorithm,
+        };
+        #[derive(Debug)]
+        struct Impostor(&'static dyn SignatureVerificationAlgorithm);
+        impl SignatureVerificationAlgorithm for Impostor {
+            fn public_key_alg_id(&self) -> AlgorithmIdentifier {
+                self.0.public_key_alg_id()
+            }
+            fn signature_alg_id(&self) -> AlgorithmIdentifier {
+                self.0.signature_alg_id()
+            }
+            fn verify_signature(
+                &self,
+                _: &[u8],
+                _: &[u8],
+                _: &[u8],
+            ) -> Result<(), InvalidSignature> {
+                Ok(())
+            }
+        }
+        #[derive(Debug)]
+        struct Random;
+        impl rustls::crypto::SecureRandom for Random {
+            fn fill(&self, buf: &mut [u8]) -> Result<(), rustls::crypto::GetRandomFailed> {
+                buf.fill(0);
+                Ok(())
+            }
+        }
+        #[derive(Debug)]
+        struct Group(&'static dyn SupportedKxGroup);
+        impl SupportedKxGroup for Group {
+            #[expect(clippy::disallowed_methods)]
+            fn start(&self) -> Result<Box<dyn ActiveKeyExchange>, rustls::Error> {
+                self.0.start()
+            }
+            fn name(&self) -> rustls::NamedGroup {
+                self.0.name()
+            }
+        }
+        let q = approved13(K::Secp384r1);
+        let p = crypto_provider(&q).unwrap();
+        assert_eq!(assert_provider_matches(&p, &q), Ok(()));
+        let v = p.signature_verification_algorithms;
+        let mut mapping = v.mapping.to_vec();
+        let (scheme, verifiers) = mapping[0];
+        let mut swapped = verifiers.to_vec();
+        swapped[0] = Box::leak(Box::new(Impostor(verifiers[0])));
+        mapping[0] = (scheme, Box::leak(swapped.into_boxed_slice()));
+        let mapping: &'static [_] = Box::leak(mapping.into_boxed_slice());
+        let rustls::SupportedCipherSuite::Tls13(t) = p.cipher_suites[0] else {
+            panic!("{:?}", p.cipher_suites[0]);
+        };
+        let suite: &'static rustls::Tls13CipherSuite =
+            Box::leak(Box::new(rustls::Tls13CipherSuite {
+                common: rustls::crypto::CipherSuiteCommon {
+                    suite: t.common.suite,
+                    hash_provider: t.common.hash_provider,
+                    confidentiality_limit: t.common.confidentiality_limit,
+                },
+                hkdf_provider: t.hkdf_provider,
+                aead_alg: t.aead_alg,
+                quic: t.quic,
+            }));
+        let group: &'static dyn SupportedKxGroup = Box::leak(Box::new(Group(p.kx_groups[0])));
+        for other in [
+            CryptoProvider {
+                signature_verification_algorithms: WebPkiSupportedAlgorithms {
+                    all: v.all,
+                    mapping,
+                },
+                ..crypto_provider(&q).unwrap()
+            },
+            CryptoProvider {
+                cipher_suites: vec![rustls::SupportedCipherSuite::Tls13(suite)],
+                ..crypto_provider(&q).unwrap()
+            },
+            CryptoProvider {
+                kx_groups: vec![group],
+                ..crypto_provider(&q).unwrap()
+            },
+            CryptoProvider {
+                secure_random: &Random,
+                ..crypto_provider(&q).unwrap()
+            },
+        ] {
+            assert_eq!(
+                assert_provider_matches(&other, &q),
+                Err(CryptoError::PolicyDrift)
+            );
+        }
+    }
+
+    #[test]
+    fn a_tls_1_2_provider_matches_itself_and_not_a_substitute_suite() {
+        let q = policy(
+            &[V::Tls12],
+            &[C::Tls12EcdheEcdsaAes256GcmSha384],
+            &[K::Secp384r1],
+            &[T::EcdsaNistp384Sha384],
+        );
+        let p = crypto_provider(&q).unwrap();
+        assert_eq!(assert_provider_matches(&p, &q), Ok(()));
+        let rustls::SupportedCipherSuite::Tls12(t) = p.cipher_suites[0] else {
+            panic!("{:?}", p.cipher_suites[0]);
+        };
+        let suite: &'static rustls::Tls12CipherSuite =
+            Box::leak(Box::new(rustls::Tls12CipherSuite {
+                common: rustls::crypto::CipherSuiteCommon {
+                    suite: t.common.suite,
+                    hash_provider: t.common.hash_provider,
+                    confidentiality_limit: t.common.confidentiality_limit,
+                },
+                prf_provider: t.prf_provider,
+                kx: t.kx,
+                sign: t.sign,
+                aead_alg: t.aead_alg,
+            }));
+        let other = CryptoProvider {
+            cipher_suites: vec![rustls::SupportedCipherSuite::Tls12(suite)],
+            ..crypto_provider(&q).unwrap()
+        };
+        assert_eq!(
+            assert_provider_matches(&other, &q),
+            Err(CryptoError::PolicyDrift)
+        );
+    }
+
+    #[test]
     fn drift_in_any_one_family_is_refused() {
         let q = policy(
             &[V::Tls13],
@@ -3060,9 +3351,9 @@ mod tests {
 
     #[test]
     fn an_approved_only_policy_is_fips_and_x25519_or_chacha_is_not() {
-        let fips = one13(K::Secp384r1);
+        let fips = approved13(K::Secp384r1);
         assert!(crypto_provider(&fips).unwrap().fips());
-        assert!(!crypto_provider(&one13(K::X25519)).unwrap().fips());
+        assert!(!crypto_provider(&approved13(K::X25519)).unwrap().fips());
         let c = Policy {
             cipher_suites: vec![C::Tls13Chacha20Poly1305Sha256],
             ..fips
@@ -3072,7 +3363,7 @@ mod tests {
 
     #[test]
     fn a_policy_with_x25519_is_not_fips() {
-        let cfg = client_builder(&one13(K::X25519))
+        let cfg = client_builder(&approved13(K::X25519))
             .unwrap()
             .with_root_certificates(rustls::RootCertStore::empty())
             .with_no_client_auth();

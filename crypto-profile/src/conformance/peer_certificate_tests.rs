@@ -58,6 +58,36 @@ macro_rules! __conformance_peer_certificate_tests {
             }
         }
 
+        fn module_refuses_ed25519() -> bool {
+            MODULE == Module { line: ModuleLine::AwsLcFips3, linkage: Linkage::Static }
+        }
+
+        fn ed25519_chain_case(pki: PeerCertificatePki, profile: P, version: V, scheme: T,
+            violation: Option<E>) {
+            let opposite = issued(S::EcdsaP384Sha384, None,
+                if scheme == T::Ed25519 { S::Ed25519 } else { S::EcdsaP384Sha384 });
+            let pki = pki.with_opposite(opposite);
+            if !module_refuses_ed25519() {
+                return certificate_case(&pki, profile, version, scheme, violation);
+            }
+            for direction in [false, true] {
+                for strict in [false, true] {
+                    let policy = certificate_policy(profile, strict, version, scheme);
+                    let (client, server) = test_support::peer_certificate_configs(
+                        &policy, direction, &pki).unwrap();
+                    let result = test_support::drive_typed(client, server);
+                    let Err((detector, rustls::Error::InvalidCertificate(
+                        rustls::CertificateError::UnsupportedSignatureAlgorithmContext {
+                            signature_algorithm_id, .. }))) = result else {
+                        panic!("{profile:?}/server_checks_client={direction}/strict={strict}: {result:?}");
+                    };
+                    assert_eq!(detector, direction);
+                    assert_eq!(signature_algorithm_id,
+                        rustls::pki_types::alg_id::ED25519.as_ref());
+                }
+            }
+        }
+
         #[test]
         fn peer_certificate_default_session_isolation() {
             fn connect(client: Arc<rustls::ClientConfig>, server: Arc<rustls::ServerConfig>) -> Result<rustls::HandshakeKind, rustls::Error> {
@@ -168,22 +198,23 @@ macro_rules! __conformance_peer_certificate_tests {
         }
         #[test]
         fn peer_certificate_unrestricted_ed25519() {
-            certificate_case(&issued(S::Ed25519, None, S::Ed25519),
+            ed25519_chain_case(issued(S::Ed25519, None, S::Ed25519),
                 P::Unrestricted, V::Tls13, T::Ed25519, None);
         }
         #[test]
-        fn peer_certificate_fips1403_ed25519_updated() {
-            certificate_case(&issued(S::Ed25519, None, S::Ed25519),
-                P::Fips1403, V::Tls13, T::Ed25519, None);
+        fn peer_certificate_fips1403_ed25519_chain() {
+            // check_edge tests the signature before the issuer key, which fips1403 also refuses.
+            ed25519_chain_case(issued(S::Ed25519, None, S::EcdsaP384Sha384),
+                P::Fips1403, V::Tls13, T::EcdsaNistp384Sha384, Some(E::ChainSignature(CS::Ed25519)));
         }
         #[test]
         fn peer_certificate_fips1402_ed25519_chain() {
-            certificate_case(&issued(S::Ed25519, None, S::EcdsaP384Sha384),
+            ed25519_chain_case(issued(S::Ed25519, None, S::EcdsaP384Sha384),
                 P::Fips1402, V::Tls13, T::EcdsaNistp384Sha384, Some(E::ChainSignature(CS::Ed25519)));
         }
         #[test]
         fn peer_certificate_preferred_ed25519_chain() {
-            certificate_case(&issued(S::Ed25519, None, S::EcdsaP384Sha384),
+            ed25519_chain_case(issued(S::Ed25519, None, S::EcdsaP384Sha384),
                 P::Preferred, V::Tls13, T::EcdsaNistp384Sha384, Some(E::ChainSignature(CS::Ed25519)));
         }
         #[test]

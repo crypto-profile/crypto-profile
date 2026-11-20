@@ -61,7 +61,7 @@ A profile is an algorithm set, not a validation claim.
 - `cnsa2`: CNSSP 15 (December 2024) Annex B, on TLS 1.3 as the crate maps it.
 - `cnsa1`: CNSSP 15 (20 October 2016) Annex B in RFC 9151's TLS profile; a transition profile for CNSA 1.0 counterparts, with its gaps named in [`docs/profiles.md`](docs/profiles.md).
 - `bsi`: BSI TR-02102-2 and TR-02102-1, version 2026-01.
-- `fips1403`: what FIPS 140-3 approves under the published texts.
+- `fips1403`: what FIPS 140-3 approves under the published texts, with SP 800-52r2 governing TLS.
 - `fips1402`: what FIPS 140-2 approved, for peers whose boundary is 140-2.
 
 Resolution intersects the published profile set with module-line availability after Options, preserving preference order and reporting every line exclusion. This changes neither the governing text nor the module approval claim. See [per-line resolution](docs/decisions/0006-per-line-profile-resolution.md).

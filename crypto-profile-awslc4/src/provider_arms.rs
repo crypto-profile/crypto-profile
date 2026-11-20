@@ -10,17 +10,20 @@ use rustls::{Error, SignatureAlgorithm, SignatureScheme};
 use std::fmt::{self, Debug, Formatter};
 use std::sync::Arc;
 
-static ML_DSA_44: &dyn SignatureVerificationAlgorithm = &Verifier {
+static ML_DSA_44: &Verifier = &Verifier {
+    scheme: None,
     public_key_alg_id: alg_id::ML_DSA_44,
     signature_alg_id: alg_id::ML_DSA_44,
     verification_alg: &signature::ML_DSA_44,
 };
-static ML_DSA_65: &dyn SignatureVerificationAlgorithm = &Verifier {
+static ML_DSA_65: &Verifier = &Verifier {
+    scheme: None,
     public_key_alg_id: alg_id::ML_DSA_65,
     signature_alg_id: alg_id::ML_DSA_65,
     verification_alg: &signature::ML_DSA_65,
 };
-static ML_DSA_87: &dyn SignatureVerificationAlgorithm = &Verifier {
+static ML_DSA_87: &Verifier = &Verifier {
+    scheme: Some(crypto_profile::TlsSignatureScheme::MlDsa87),
     public_key_alg_id: alg_id::ML_DSA_87,
     signature_alg_id: alg_id::ML_DSA_87,
     verification_alg: &signature::ML_DSA_87,
@@ -28,8 +31,7 @@ static ML_DSA_87: &dyn SignatureVerificationAlgorithm = &Verifier {
 
 const SCHEME: SignatureScheme = SignatureScheme::ML_DSA_87;
 
-pub(crate) static PQDSA_ALL: &[&dyn SignatureVerificationAlgorithm] =
-    &[ML_DSA_44, ML_DSA_65, ML_DSA_87];
+pub(crate) static PQDSA_ALL: &[&Verifier] = &[ML_DSA_44, ML_DSA_65, ML_DSA_87];
 pub(crate) static PQDSA_MAPPING: &[(SignatureScheme, &[&dyn SignatureVerificationAlgorithm])] =
     &[(SignatureScheme::ML_DSA_87, &[ML_DSA_87])];
 
@@ -207,6 +209,14 @@ mod tests {
         assert_eq!(
             algs.iter().map(|a| ids(*a)).collect::<Vec<_>>(),
             [(alg_id::ML_DSA_87, alg_id::ML_DSA_87)]
+        );
+        assert_eq!(
+            PQDSA_ALL.iter().map(|v| v.scheme).collect::<Vec<_>>(),
+            [
+                None,
+                None,
+                Some(crypto_profile::TlsSignatureScheme::MlDsa87)
+            ]
         );
     }
 

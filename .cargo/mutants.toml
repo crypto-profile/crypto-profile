@@ -31,6 +31,6 @@ exclude_re = [
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/assembly\\.rs:[0-9]+:[0-9]+: replace <impl SecureRandom for Rng>::fips -> bool with true$",
   # Keys::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by the_key_provider_loads_through_any_supported_type.
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/assembly\\.rs:[0-9]+:[0-9]+: replace <impl KeyProvider for Keys>::fips -> bool with true$",
-  # Verifier::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by every_static_carries_webpkis_algorithm_identifiers and the_verification_tables_match_the_reference.
+  # Verifier::fips passes the build's module to fips_given, which is tested on all four modules; no 4.x cell is NotApproved and every test process is in FIPS mode, so true is equivalent here (decisions 0003, 0018).
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/verify\\.rs:[0-9]+:[0-9]+: replace <impl SignatureVerificationAlgorithm for Verifier>::fips -> bool with true$",
 ]

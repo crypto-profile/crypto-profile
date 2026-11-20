@@ -649,8 +649,8 @@ pub const BSI: ProfileSpec = ProfileSpec {
 /// - ECDSA P-521 with SHA-384 key, in TLS only: it signs handshakes with ecdsa_secp521r1_sha512,
 ///   and SHA-384 names only its certificate request's signature; FIPS 186-5 §6.1.1 (p. 21) and
 ///   §6.4 (pp. 23-24) (decision 0015).
-/// - Ed25519 scheme and key: SP 800-140C list §6.2.3.1; IG C.A (p. 136); IG C.K Additional
-///   Comment 8 (p. 161).
+/// - Ed25519 scheme and key excluded: SP 800-52r2 §3.2 (p. 9), Table 3-1 (pp. 10-11) and
+///   Table 4-1 (p. 34) name RSA and ECDSA certificates and signatures, not EdDSA (decision 0018).
 /// - RSA-PSS and RSA PKCS#1 v1.5 with SHA-256, 384, 512: FIPS 186-5 §5.4; IG C.F (pp. 142-143);
 ///   PKCS#1 v1.5 on TLS 1.2 only, RFC 8446 §4.2.3.
 /// - RSA 2048, 3072, 4096 keys: FIPS 186-5 §5.1; SP 800-131A r2 Table 2.
@@ -698,7 +698,6 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
         T::EcdsaNistp384Sha384,
         T::EcdsaNistp256Sha256,
         T::EcdsaNistp521Sha512,
-        T::Ed25519,
         T::RsaPssSha384,
         T::RsaPssSha512,
         T::RsaPssSha256,
@@ -712,7 +711,6 @@ pub const FIPS1403: ProfileSpec = ProfileSpec {
         S::EcdsaP256Sha256,
         S::EcdsaP521Sha512,
         S::EcdsaP521Sha384,
-        S::Ed25519,
         S::Rsa3072Sha384,
         S::Rsa4096Sha384,
         S::Rsa2048Sha384,
@@ -1506,7 +1504,7 @@ mod tests {
     #[test]
     fn the_option_removes_every_pkcs1_scheme_from_unrestricted_and_fips1403() {
         use TlsSignatureScheme as T;
-        let expected = vec![
+        let unrestricted = vec![
             T::MlDsa87,
             T::EcdsaNistp384Sha384,
             T::EcdsaNistp256Sha256,
@@ -1516,7 +1514,19 @@ mod tests {
             T::RsaPssSha512,
             T::RsaPssSha256,
         ];
-        for p in [Profile::Unrestricted, Profile::Fips1403] {
+        let fips1403 = vec![
+            T::MlDsa87,
+            T::EcdsaNistp384Sha384,
+            T::EcdsaNistp256Sha256,
+            T::EcdsaNistp521Sha512,
+            T::RsaPssSha384,
+            T::RsaPssSha512,
+            T::RsaPssSha256,
+        ];
+        for (p, expected) in [
+            (Profile::Unrestricted, unrestricted),
+            (Profile::Fips1403, fips1403),
+        ] {
             assert_eq!(
                 select(p, PQ, M4S).unwrap().signature_schemes,
                 expected,

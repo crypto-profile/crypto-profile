@@ -224,10 +224,12 @@ macro_rules! __conformance_profile_tests {
             if let Some(u) = &u {
                 assert_eq!(served(&x25519, u, |n| n.kx.iana()), Ok(0x001D));
                 assert_eq!(served(&chacha, u, |n| n.suite.iana()), Ok(0x1303));
+                assert_eq!(verifies(&u.tls, S::Ed25519), Ok(0x0807));
             }
             if let Some(f) = &f {
                 assert_eq!(served(&x25519, f, |n| n.kx.iana()), err(NO_GROUP));
                 assert_eq!(served(&chacha, f, |n| n.suite.iana()), err(NO_SUITE));
+                assert_eq!(verifies(&f.tls, S::Ed25519), err(NO_SCHEME));
             }
         }
 
@@ -242,7 +244,13 @@ macro_rules! __conformance_profile_tests {
                 for (group, cp) in [(K::MlKem1024, 0x0202), (K::X25519MlKem768, 0x11EC)] {
                     assert_eq!(served(&tls13(&[group]), a, |n| n.kx.iana()), Ok(cp));
                 }
-                assert_eq!(a.admit_key(S::Ed25519), Ok(()));
+                assert_eq!(
+                    a.admit_key(S::Ed25519),
+                    Err(CryptoError::KeyNotInProfile {
+                        profile: Profile::Fips1403,
+                        algorithm: S::Ed25519,
+                    })
+                );
                 if MODULE.line == ModuleLine::AwsLcFips4 {
                     assert_eq!(a.admit_key(S::MlDsa87), Ok(()));
                     assert_eq!(verifies(&a.tls, S::MlDsa87), Ok(0x0906));
@@ -259,7 +267,7 @@ macro_rules! __conformance_profile_tests {
                         __unlisted_key(MODULE, S::MlDsa87, NO_SCHEME)
                     );
                 }
-                assert_eq!(verifies(&a.tls, S::Ed25519), Ok(0x0807));
+                assert_eq!(verifies(&a.tls, S::Ed25519), err(NO_SCHEME));
             }
             if let Some(b) = &b {
                 for (group, _) in [(K::MlKem1024, 0x0202), (K::X25519MlKem768, 0x11EC)] {
@@ -291,10 +299,15 @@ macro_rules! __conformance_profile_tests {
             );
             if let Some(f) = &f {
                 assert_eq!(served(&tls12(), f, |n| n.version.iana()), Ok(0x0303));
-                assert_eq!(verifies(&f.tls, S::Ed25519), Ok(0x0807));
-                for key in [S::Ed25519, S::Rsa2048Sha384] {
-                    assert_eq!(f.admit_key(key), Ok(()));
-                }
+                assert_eq!(verifies(&f.tls, S::Ed25519), err(NO_SCHEME));
+                assert_eq!(
+                    f.admit_key(S::Ed25519),
+                    Err(CryptoError::KeyNotInProfile {
+                        profile: Profile::Fips1403,
+                        algorithm: S::Ed25519,
+                    })
+                );
+                assert_eq!(f.admit_key(S::Rsa2048Sha384), Ok(()));
                 assert_eq!(verifies(&pkcs1(f, V::Tls12), S::Rsa3072Sha384), Ok(0x0601));
             }
             if let Some(p) = &p {
@@ -596,8 +609,39 @@ macro_rules! __conformance_profile_tests {
         }
 
         #[test]
-        fn a_profile_does_not_restrict_the_chain_signature() {
-            if let Some(f) = admitted(Profile::Fips1402, Options::default()) {
+        fn a_profile_does_not_restrict_the_chain_signature_the_module_approves() {
+            let Some(f) = admitted(Profile::Fips1402, Options::default()) else {
+                return;
+            };
+            if MODULE
+                == (Module {
+                    line: ModuleLine::AwsLcFips3,
+                    linkage: Linkage::Static,
+                })
+            {
+                let pki =
+                    $b::test_support::peer_certificate_pki(S::Ed25519, None, S::EcdsaP384Sha384)
+                        .unwrap();
+                let (client, server) =
+                    $b::test_support::peer_certificate_configs(&f.tls, false, &pki).unwrap();
+                let result = $b::test_support::drive_typed(client, server);
+                let Err((
+                    false,
+                    rustls::Error::InvalidCertificate(
+                        rustls::CertificateError::UnsupportedSignatureAlgorithmContext {
+                            signature_algorithm_id,
+                            ..
+                        },
+                    ),
+                )) = result
+                else {
+                    panic!("{result:?}");
+                };
+                assert_eq!(
+                    signature_algorithm_id,
+                    rustls::pki_types::alg_id::ED25519.as_ref()
+                );
+            } else {
                 let n = handshake_with_ca(&f.tls, &open_peer().tls, S::Ed25519, S::EcdsaP384Sha384)
                     .unwrap();
                 assert_eq!(n.scheme.iana(), 0x0503);
