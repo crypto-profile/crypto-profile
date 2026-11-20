@@ -458,13 +458,23 @@ mod tests {
     fn admit_key_admits_exactly_the_profile_keys() {
         for &p in Profile::ALL {
             let admitted: &[S] = match p {
-                Profile::Unrestricted | Profile::Fips1403 => &[
+                Profile::Unrestricted => &[
                     S::MlDsa87,
                     S::EcdsaP256Sha256,
                     S::EcdsaP384Sha384,
                     S::EcdsaP521Sha384,
                     S::EcdsaP521Sha512,
                     S::Ed25519,
+                    S::Rsa2048Sha384,
+                    S::Rsa3072Sha384,
+                    S::Rsa4096Sha384,
+                ],
+                Profile::Fips1403 => &[
+                    S::MlDsa87,
+                    S::EcdsaP256Sha256,
+                    S::EcdsaP384Sha384,
+                    S::EcdsaP521Sha384,
+                    S::EcdsaP521Sha512,
                     S::Rsa2048Sha384,
                     S::Rsa3072Sha384,
                     S::Rsa4096Sha384,
@@ -626,7 +636,7 @@ mod tests {
             );
             ed25519 += usize::from(r.tls.signature_schemes.contains(&T::Ed25519));
         }
-        assert_eq!(ed25519, 4);
+        assert_eq!(ed25519, 2);
     }
 
     #[test]
@@ -662,6 +672,10 @@ mod tests {
             assert!(!resolved.tls.signature_schemes.is_empty());
             assert_eq!(resolved.excluded, excluded);
             if crate::MODULE.linkage == crate::Linkage::Static && profile == Profile::Fips1403 {
+                assert!(!resolved.tls.signature_schemes.contains(&T::Ed25519));
+                assert!(!resolved.keys.contains(&S::Ed25519));
+                resolved.tls.signature_schemes.push(T::Ed25519);
+                resolved.keys.push(S::Ed25519);
                 let scheme = Algorithm::Scheme(T::Ed25519);
                 let key = Algorithm::Signature(S::Ed25519);
                 for a in [scheme, key] {

@@ -103,7 +103,10 @@ pub(crate) fn verification() -> WebPkiSupportedAlgorithms {
     )> = OnceLock::new();
     let (all, mapping) = TABLE.get_or_init(|| {
         (
-            [super::verify::COMMON_ALL, super::backend::PQDSA_ALL].concat(),
+            super::verify::chain(
+                crate::MODULE,
+                &[super::verify::COMMON_ALL, super::backend::PQDSA_ALL].concat(),
+            ),
             [super::verify::COMMON_MAPPING, super::backend::PQDSA_MAPPING].concat(),
         )
     });
@@ -224,15 +227,43 @@ mod tests {
     type AlgId = rustls::pki_types::AlgorithmIdentifier;
 
     #[test]
-    fn verification_is_the_common_tables_then_the_backends() {
+    fn verification_is_the_common_tables_then_the_backends_without_what_the_module_refuses() {
+        use rustls::pki_types::alg_id;
         let v = verification();
+        let static_3x = crypto_profile::Module {
+            line: crypto_profile::ModuleLine::AwsLcFips3,
+            linkage: crypto_profile::Linkage::Static,
+        };
+        let refused: &[(AlgId, AlgId)] = if crate::MODULE == static_3x {
+            &[(alg_id::ED25519, alg_id::ED25519)]
+        } else {
+            &[]
+        };
+        let listed = |vs: &[&super::super::verify::Verifier]| {
+            vs.iter()
+                .map(|a| (a.public_key_alg_id, a.signature_alg_id))
+                .collect::<Vec<_>>()
+        };
+        let mut want = [
+            listed(super::super::verify::COMMON_ALL),
+            listed(super::super::backend::PQDSA_ALL),
+        ]
+        .concat();
+        want.retain(|id| !refused.contains(id));
+        assert_eq!(ids(v.all), want);
+        for pk in [
+            alg_id::RSA_ENCRYPTION,
+            alg_id::ECDSA_P256,
+            alg_id::ECDSA_P384,
+            alg_id::ECDSA_P521,
+        ] {
+            assert!(v.all.iter().any(|a| a.public_key_alg_id() == pk));
+        }
         assert_eq!(
-            ids(v.all),
-            [
-                ids(super::super::verify::COMMON_ALL),
-                ids(super::super::backend::PQDSA_ALL)
-            ]
-            .concat()
+            v.all
+                .iter()
+                .any(|a| a.public_key_alg_id() == alg_id::ED25519),
+            refused.is_empty()
         );
         let mapped = |m: &[Mapping]| {
             m.iter()

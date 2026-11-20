@@ -680,7 +680,10 @@ mod tests {
                 CS::Ecdsa(PeerCurve::P256, H::Sha384),
                 [true, true, false, false, false, true, true],
             ),
-            (CS::Ed25519, [true, false, false, false, false, true, false]),
+            (
+                CS::Ed25519,
+                [true, false, false, false, false, false, false],
+            ),
             (
                 CS::MlDsa(MlDsa87),
                 [true, false, true, false, false, true, false],
@@ -1089,7 +1092,7 @@ mod tests {
             (
                 spki(ED, &[], &[1; 32]),
                 PeerKey::Ed25519,
-                [true, false, false, false, false, true, false],
+                [true, false, false, false, false, false, false],
             ),
             (
                 spki(ML44, &[], &vec![1; 1312]),

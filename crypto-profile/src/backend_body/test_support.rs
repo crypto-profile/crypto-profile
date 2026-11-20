@@ -366,6 +366,14 @@ pub struct PeerCertificatePki {
     pub crls: Vec<rustls::pki_types::CertificateRevocationListDer<'static>>,
 }
 
+impl PeerCertificatePki {
+    /// This path, with `opposite` as the chain the other side presents.
+    pub fn with_opposite(mut self, opposite: PeerCertificatePki) -> PeerCertificatePki {
+        self.opposite = Some(Box::new(opposite));
+        self
+    }
+}
+
 /// Generates a path with independently selected root, optional intermediate and leaf keys.
 pub fn peer_certificate_pki(
     root: SignatureAlgorithm,

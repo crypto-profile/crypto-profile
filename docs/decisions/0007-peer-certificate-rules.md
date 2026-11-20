@@ -8,7 +8,7 @@ The maintainer resolved three rule derivations:
 
 - `preferred` follows ISM-1763, ISM-1991 and ISM-1765 for leaf keys. ISM-1374 limits TLS certificate signatures to classical SHA-2 rules; an all-ML-DSA chain is refused.
 - `bsi` uses TR-02102-2 2026-01 Table 12's three curve-bound ECDSA pairs and Table 14's RSA-PSS minimum of 3000 bits. PKCS#1 v1.5 is excluded after its 2025 allowance.
-- `fips1403` uses the updated-approval reading: ECDSA with SHA-2, Ed25519, ML-DSA-87, RSA-PSS and PKCS#1 v1.5, with an even RSA modulus of at least 2048 bits under SP 800-52r2 §3.3.3.
+- `fips1403` uses the updated-approval reading: ECDSA with SHA-2, ML-DSA-87, RSA-PSS and PKCS#1 v1.5, with an even RSA modulus of at least 2048 bits under SP 800-52r2 §3.3.3. *(Amended 2026-11-20, [decision 0018](0018-chain-verification-follows-capability.md): Ed25519 is no longer in the rule; SP 800-52r2 §3.2 (p. 9), Table 3-1 (pp. 10-11) and Table 4-1 (p. 34) name RSA and ECDSA certificates only.)*
 
 See [profiles](../profiles.md#9-impact-of-peer-certificate-enforcement) for the complete cited rules. Certificate path signatures differ from handshake schemes: `cnsa1` permits RSA PKCS#1 v1.5 with SHA-384 on a path even for TLS 1.3. The anchor-issued child signature is checked; the anchor's self-signature is not. CRL signatures remain on the baseline list.
 

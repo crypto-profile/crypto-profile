@@ -76,7 +76,7 @@ fn report_approval(r: &Resolved) -> Result<(), CryptoError> {
 | `preferred` | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; otherwise unchanged apart from the 3.x ML-DSA exclusions |
 | `cnsa2` | unchanged |
 | `cnsa1`, `bsi`, `fips1402` | refused: `EmptyProfile`, key-exchange groups |
-| `fips1403` | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; TLS 1.3 and its two suites; eight schemes and nine keys on 4.x; seven schemes and eight keys on 3.x |
+| `fips1403` | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768; TLS 1.3 and its two suites; seven schemes and eight keys on 4.x; six schemes and seven keys on 3.x |
 
 ### Contents by module line
 
@@ -106,7 +106,7 @@ Every list is in preference order. Schemes are the handshake signature schemes a
 | Schemes | mldsa87, ecdsa_secp384r1_sha384, ecdsa_secp256r1_sha256, ecdsa_secp521r1_sha512, ed25519, rsa_pss_rsae_sha384, _sha512, _sha256, rsa_pkcs1_sha384, _sha512, _sha256 |
 | Keys | MlDsa87, EcdsaP384Sha384, EcdsaP256Sha256, EcdsaP521Sha512, EcdsaP521Sha384, Ed25519, Rsa3072Sha384, Rsa4096Sha384, Rsa2048Sha384 |
 
-It differs from `fips1403` only in TLS: X25519 on its own and the ChaCha20-Poly1305 suites. rustls does not classify a configuration built from it as FIPS.
+It differs from `fips1403` only in TLS: X25519 on its own, the ChaCha20-Poly1305 suites, and the Ed25519 scheme and key. rustls does not classify a configuration built from it as FIPS.
 
 ### `preferred`
 
@@ -203,14 +203,15 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 | Versions | TLS 1.3, TLS 1.2 |
 | Groups | MLKEM1024, SecP384r1MLKEM1024, X25519MLKEM768, SecP256r1MLKEM768, secp384r1, secp256r1 |
 | Suites | TLS_AES_256_GCM_SHA384, TLS_AES_128_GCM_SHA256; ECDHE-ECDSA and ECDHE-RSA with AES-256-GCM and AES-128-GCM |
-| Schemes | mldsa87, ecdsa_secp384r1_sha384, ecdsa_secp256r1_sha256, ecdsa_secp521r1_sha512, ed25519, rsa_pss_rsae_sha384, _sha512, _sha256, rsa_pkcs1_sha384, _sha512, _sha256 |
-| Keys | all nine |
+| Schemes | mldsa87, ecdsa_secp384r1_sha384, ecdsa_secp256r1_sha256, ecdsa_secp521r1_sha512, rsa_pss_rsae_sha384, _sha512, _sha256, rsa_pkcs1_sha384, _sha512, _sha256 |
+| Keys | MlDsa87, EcdsaP384Sha384, EcdsaP256Sha256, EcdsaP521Sha512, EcdsaP521Sha384, Rsa3072Sha384, Rsa4096Sha384, Rsa2048Sha384 |
 
 - **Versions and suites:** SP 800-52r2 §3.1 (p. 8), §3.3.1.1.1-2 (pp. 16-17), §3.3.1.2 (p. 19), §4.1 (p. 33). TLS 1.2 requires Extended Master Secret (IG D.Q, pp. 220-221); rustls enforces it for a FIPS-classified configuration.
 - **Groups:** ML-KEM-1024, CMVP SP 800-140D list §6.2.10 and IG D.S Scenario 1 (p. 223); the hybrids SecP384r1MLKEM1024, X25519MLKEM768 and SecP256r1MLKEM768, IG D.S Scenario 2 and Additional Comment 8a (pp. 223-226), which name exactly these three; the NIST curves, SP 800-56A r3 Appendix D, Table 24 (p. 132).
-- **Signatures:** ECDSA, EdDSA and ML-DSA, CMVP SP 800-140C list §6.2.3.1; Ed25519, IG C.A (p. 136) and IG C.K Additional Comment 8 (p. 161); RSA-PSS and PKCS#1 v1.5 with SHA-256, 384 and 512 and RSA 2048 to 4096, FIPS 186-5 §5.1 and §5.4, IG C.F (pp. 142-143), SP 800-131A r2 Table 2 (p. 9).
+- **Signatures:** ECDSA and ML-DSA, CMVP SP 800-140C list §6.2.3.1; RSA-PSS and PKCS#1 v1.5 with SHA-256, 384 and 512 and RSA 2048 to 4096, FIPS 186-5 §5.1 and §5.4, IG C.F (pp. 142-143), SP 800-131A r2 Table 2 (p. 9).
 - **EcdsaP521Sha384:** FIPS 186-5 §6.1.1 (p. 21) says "A hash function that provides a lower security strength than is associated with the bit length of n shall not be used", and §6.4 (pp. 23-24) that it "ordinarily should not be used". The TLS key list keeps the key: a P-521 TLS key signs its handshakes with `ecdsa_secp521r1_sha512`, and SHA-384 names only its certificate request's signature. Outside TLS, `fips1403` refuses the pairing (section 15).
-- **Excluded:** X25519 on its own (IG C.K Resolution 5, p. 160) and ChaCha20-Poly1305 (SP 800-140C r2 §6.1, which precludes every function the §6.2 list does not name; SP 800-52r2 §3.3.1.2).
+- **Excluded:** X25519 on its own (IG C.K Resolution 5, p. 160); ChaCha20-Poly1305 (SP 800-140C r2 §6.1, which precludes every function the §6.2 list does not name; SP 800-52r2 §3.3.1.2); the Ed25519 scheme and key (SP 800-52r2 §3.2, p. 9, and Table 3-1, pp. 10-11, and Table 4-1, p. 34, name RSA and ECDSA certificates and signatures, not EdDSA; [decision 0018](decisions/0018-chain-verification-follows-capability.md)). Outside TLS, FIPS 186-5 governs and `fips1403` admits Ed25519 (section 15).
+- **ML-DSA-87 in TLS:** SP 800-52r2 predates FIPS 204 and names no ML-DSA; the scheme and key stay, as in `preferred` and `cnsa2` (decision 0018, residual 1).
 - **Peer certificates:** With `Options::peer_certificates_match_profile` off, the baseline chain algorithms apply. Turn it on to enforce the profile rule (section 9).
 
 ### `fips1402`
@@ -273,7 +274,7 @@ TLS 1.2 is admitted to the end of 2031 (TR-02102-2 Table 2). The profile moves w
 
 ## 5. What a profile does not restrict
 
-- **Peer certificate keys and chain signatures, by default.** With `Options::peer_certificates_match_profile` off, the baseline verifier accepts its full certificate signature list. Turn the option on to enforce the selected profile’s leaf and chain rules (section 9). Handshake signature schemes are separate from certificate signatures.
+- **Peer certificate keys and chain signatures, by default.** With `Options::peer_certificates_match_profile` off, the baseline verifier accepts its full certificate signature list, less what the build's module refuses: on the 3.x static build, an Ed25519 signature on a certificate is refused under every profile ([decision 0018](decisions/0018-chain-verification-follows-capability.md)). Turn the option on to enforce the selected profile’s leaf and chain rules (section 9). Handshake signature schemes are separate from certificate signatures.
 - **The peer leaf’s key size and curve, by default.** The option checks these when enabled (section 4, item 1).
 - **A signing key built outside the profile's provider.** A key loaded through `tls::load_private_key`, `Resolved::certified_key` or the builder's own key loading signs only with the policy's schemes. A `rustls::sign::SigningKey` built any other way signs with whatever scheme rustls picks from the peer's offer and the key's type.
 - **The algorithm of a key passed to `tls::load_private_key` or a builder.** It is not checked against any profile; `Resolved::certified_key` checks it.
@@ -335,7 +336,7 @@ A regime-named profile (`cnsa2`, `cnsa1`, `bsi`, `fips1403`, `fips1402`) follows
 
 ## 9. Impact of peer certificate enforcement
 
-`Options::peer_certificates_match_profile` is off by default. When enabled, the crate checks the peer leaf key and each signature and issuer key in the path selected by WebPKI. The trust anchor's signature on its child is checked; its self-signature is not. Normal name, time, path and revocation checks still apply. A rule is independent of the handshake signature schemes. Backend support and baseline verification can further limit the sets below.
+`Options::peer_certificates_match_profile` is off by default. When enabled, the crate checks the peer leaf key and each signature and issuer key in the path selected by WebPKI. The trust anchor's signature on its child is checked; its self-signature is not. Normal name, time, path and revocation checks still apply. A rule is independent of the handshake signature schemes. Backend support and baseline verification can further limit the sets below: on the 3.x static build the baseline refuses an Ed25519 signature on a path before any rule runs (decision 0018).
 
 In this table, EC means P-256, P-384 or P-521; SHA-2 means SHA-256, SHA-384 or SHA-512. RSA-PSS uses matching digest and MGF1 and digest-length salt. Issuer key rules match leaf rules except where stated.
 
@@ -346,7 +347,7 @@ In this table, EC means P-256, P-384 or P-521; SHA-2 means SHA-256, SHA-384 or S
 | `cnsa2` | ML-DSA-87 only | ML-DSA-87 only | CNSSP 15 December 2024, Annex B ¶1, pp. B-1–B-2 |
 | `cnsa1` | P-384 or exactly RSA-3072 or RSA-4096 | ECDSA P-384/SHA-384, RSA-PSS/SHA-384 or RSA PKCS#1 v1.5/SHA-384 | RFC 8603 §4.1; RFC 9151 §§5.2, 5.4, 6.3, 7.2 |
 | `bsi` | EC or RSA at least 3000 | ECDSA P-256/SHA-256, P-384/SHA-384 or P-521/SHA-512; RSA-PSS with SHA-2 | TR-02102-2 2026-01 §§3.4.3, 3.6, Tables 12 and 14 |
-| `fips1403` | EC, even-bit RSA at least 2048, Ed25519, ML-DSA-87 | ECDSA with any EC and SHA-2; RSA-PSS or PKCS#1 v1.5 with SHA-2; Ed25519 or ML-DSA-87 | SP 800-52r2 §3.3.3; FIPS 186-5 §§5.1, 5.4, 6.4, 7; CMVP approved algorithm lists |
+| `fips1403` | EC, even-bit RSA at least 2048, ML-DSA-87 | ECDSA with any EC and SHA-2; RSA-PSS or PKCS#1 v1.5 with SHA-2; ML-DSA-87 | SP 800-52r2 §3.3.3, §3.2, Table 3-1 (pp. 10-11) and Table 4-1 (p. 34); FIPS 186-5 §§5.1, 5.4, 6.4, 7; CMVP approved algorithm lists |
 | `fips1402` | EC or RSA at least 2048 | ECDSA with any EC and SHA-2; RSA-PSS or PKCS#1 v1.5 with SHA-2 | SP 800-52r2 §3.3.3; SP 800-131A r2 Table 2; FIPS 140-2 IG A.14 pp. 221–222; FIPS 186-4 §§5.5, 6.4 |
 
 `preferred` with the option refuses an all-ML-DSA chain until ASD publishes a TLS certificate rule for ML-DSA: ISM-1374 requires SHA-2-based TLS certificates. On 3.x, `cnsa2` fails resolution before this rule applies.

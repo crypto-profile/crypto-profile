@@ -53,6 +53,27 @@ pub const ALL_KEYS: &[&str] = &[
     "rsa4096-sha384",
     "rsa2048-sha384",
 ];
+/// `fips1403`'s handshake schemes: every scheme but Ed25519.
+#[doc(hidden)]
+pub const FIPS1403_SCHEMES: &[u16] = &[
+    0x0906, 0x0503, 0x0403, 0x0603, 0x0805, 0x0806, 0x0804, 0x0501, 0x0601, 0x0401,
+];
+/// `fips1403`'s handshake schemes with the post-quantum option: no Ed25519, no PKCS#1 v1.5.
+#[doc(hidden)]
+pub const FIPS1403_SCHEMES_BUT_PKCS1: &[u16] =
+    &[0x0906, 0x0503, 0x0403, 0x0603, 0x0805, 0x0806, 0x0804];
+/// `fips1403`'s key algorithms: every key but Ed25519.
+#[doc(hidden)]
+pub const FIPS1403_KEYS: &[&str] = &[
+    "ml-dsa-87",
+    "ecdsa-p384-sha384",
+    "ecdsa-p256-sha256",
+    "ecdsa-p521-sha512",
+    "ecdsa-p521-sha384",
+    "rsa3072-sha384",
+    "rsa4096-sha384",
+    "rsa2048-sha384",
+];
 /// The cipher suites of `bsi`, `fips1403` and `fips1402`.
 #[doc(hidden)]
 pub const FIPS_SUITES: &[u16] = &[0x1302, 0x1301, 0xC02C, 0xC030, 0xC02B, 0xC02F];
@@ -167,8 +188,8 @@ pub const GOLDEN: &[Golden] = &[
         versions: &[0x0304, 0x0303],
         suites: FIPS_SUITES,
         groups: &[0x0202, 0x11ED, 0x11EC, 0x11EB, 0x0018, 0x0017],
-        schemes: ALL_SCHEMES,
-        keys: ALL_KEYS,
+        schemes: FIPS1403_SCHEMES,
+        keys: FIPS1403_KEYS,
     },
     Golden {
         excluded: &[],
@@ -177,8 +198,8 @@ pub const GOLDEN: &[Golden] = &[
         versions: &[0x0304],
         suites: &[0x1302, 0x1301],
         groups: &[0x0202, 0x11ED, 0x11EC, 0x11EB],
-        schemes: ALL_SCHEMES_BUT_PKCS1,
-        keys: ALL_KEYS,
+        schemes: FIPS1403_SCHEMES_BUT_PKCS1,
+        keys: FIPS1403_KEYS,
     },
     Golden {
         excluded: &[],
@@ -256,7 +277,7 @@ pub fn expected(module: Module, profile: Profile, options: Options) -> Result<Go
         ModuleLine::AwsLcFips4 => {}
         ModuleLine::AwsLcFips3 => {
             match profile {
-                Profile::Unrestricted | Profile::Fips1403 => {
+                Profile::Unrestricted => {
                     g.schemes = if options.pq_key_exchange_required {
                         &[0x0503, 0x0403, 0x0603, 0x0807, 0x0805, 0x0806, 0x0804]
                     } else {
@@ -271,6 +292,24 @@ pub fn expected(module: Module, profile: Profile, options: Options) -> Result<Go
                         "ecdsa-p521-sha512",
                         "ecdsa-p521-sha384",
                         "ed25519",
+                        "rsa3072-sha384",
+                        "rsa4096-sha384",
+                        "rsa2048-sha384",
+                    ];
+                }
+                Profile::Fips1403 => {
+                    g.schemes = if options.pq_key_exchange_required {
+                        &[0x0503, 0x0403, 0x0603, 0x0805, 0x0806, 0x0804]
+                    } else {
+                        &[
+                            0x0503, 0x0403, 0x0603, 0x0805, 0x0806, 0x0804, 0x0501, 0x0601, 0x0401,
+                        ]
+                    };
+                    g.keys = &[
+                        "ecdsa-p384-sha384",
+                        "ecdsa-p256-sha256",
+                        "ecdsa-p521-sha512",
+                        "ecdsa-p521-sha384",
                         "rsa3072-sha384",
                         "rsa4096-sha384",
                         "rsa2048-sha384",
