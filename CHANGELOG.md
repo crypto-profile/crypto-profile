@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-11-20
+
 ### Changed
 
 - **Breaking:** `fips1403` no longer offers or accepts Ed25519 in TLS, on any module (#77, decision 0018). Its handshake schemes and TLS key list drop Ed25519, so a `fips1403` key can no longer be Ed25519 (`KeyNotInProfile`) and a `fips1403` peer presenting an Ed25519 certificate is refused. Its peer-certificate rule drops Ed25519 too (leaf keys, issuer keys and path signatures; this amends decision 0007). SP 800-52r2 names RSA and ECDSA certificates and signatures for TLS and no EdDSA (§3.2 p. 9, Table 3-1 pp. 10-11, Table 4-1 p. 34). `fips1403`'s signatures outside TLS are unchanged, and ML-DSA-87 stays in its TLS lists (decision 0018, residual 1).
