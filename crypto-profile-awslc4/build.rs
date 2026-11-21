@@ -31,7 +31,21 @@ fn main() {
     if let Err(e) = bundled(&libs, WANT) {
         panic!("crypto-profile-awslc4: {e}");
     }
+    // Cargo passes a `links` crate's metadata only to its direct dependents.
+    let direct = std::env::var("DEP_AWS_LC_FIPS_0_14_2_LIBCRYPTO").ok();
+    if let Err(e) = pinned(direct.as_deref(), WANT) {
+        panic!("crypto-profile-awslc4: {e}");
+    }
     println!("cargo::rustc-env=CRYPTO_PROFILE_FIPS_LIBRARY={WANT}");
+}
+
+fn pinned(direct: Option<&str>, want: &str) -> Result<(), String> {
+    match direct {
+        Some(lib) if lib == want => Ok(()),
+        other => Err(format!(
+            "aws-lc-fips-sys must be a direct dependency pinned to the release whose library is {want}; its link metadata reported {other:?} (#54, decision 0017)"
+        )),
+    }
 }
 
 fn bundled(libs: &[String], want: &str) -> Result<(), String> {
@@ -45,7 +59,7 @@ fn bundled(libs: &[String], want: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::bundled;
+    use super::{bundled, pinned};
 
     const WANT: &str = "aws_lc_fips_0_14_2_crypto";
 
@@ -75,5 +89,23 @@ mod tests {
     #[test]
     fn another_version_is_refused() {
         assert!(bundled(&["aws_lc_fips_0_14_3_crypto".to_string()], WANT).is_err());
+    }
+
+    #[test]
+    fn the_direct_pin_is_accepted() {
+        assert_eq!(pinned(Some(WANT), WANT), Ok(()));
+    }
+
+    #[test]
+    fn a_missing_direct_pin_is_refused() {
+        let Err(e) = pinned(None, WANT) else {
+            panic!("a build without the direct aws-lc-fips-sys dependency was accepted");
+        };
+        assert!(e.contains("direct dependency") && e.contains(WANT), "{e}");
+    }
+
+    #[test]
+    fn another_pinned_version_is_refused() {
+        assert!(pinned(Some("aws_lc_fips_0_14_4_crypto"), WANT).is_err());
     }
 }

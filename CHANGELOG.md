@@ -6,6 +6,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Fixed
+
+- `crypto-profile-awslc4` failed to build in a consumer whose lockfile resolved `aws-lc-fips-sys` past 0.14.2: a fresh resolution, or a plain `cargo update` (#54). aws-lc-rs 1.19.0 requires `aws-lc-fips-sys` by caret, so a fresh resolution took 0.14.4, and the build script, which accepts only the bundled 0.14.2 library, refused it ("expected aws_lc_fips_0_14_2_crypto, aws-lc-rs reported [\"aws_lc_fips_0_14_4_crypto\"]"). Both backends now pin `aws-lc-fips-sys` exactly (`=0.14.2` on 4.x, `=0.13.17` on 3.x), so resolution keeps the module build their build scripts accept, and each build script requires the pin as a direct dependency (decision 0017, amended). The module build is unchanged on both lines. Workaround for 0.10.x: `cargo update -p aws-lc-fips-sys --precise 0.14.2`.
+
 ## [0.10.1] - 2026-11-21
 
 ### Fixed

@@ -29,8 +29,10 @@ test-support = []
 
 [dependencies]
 crypto-profile = { path = "../crypto-profile", version = "=0.10.1" }
-# Prevent resolution onto the 4.x module; Cargo.lock pins the 3.x sys source to 0.13.17.
+# Prevent resolution onto the 4.x module: aws-lc-rs 1.17 requires the aws-lc-fips-sys 0.13 series.
 aws-lc-rs = { version = "=1.17.4", features = ["fips", "ring-io"] }
+# Pin the module build; build.rs accepts only this release's library (#54, decision 0017).
+aws-lc-fips-sys = { version = "=0.13.17", default-features = false }
 # Pin the policy/provider API so resolution cannot change its contract.
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "tls12"] }
 # Later rcgen requires aws-lc-rs 1.18, crossing the selected FIPS module line.
