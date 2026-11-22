@@ -66,7 +66,7 @@ A profile is an algorithm set, not a validation claim.
 
 Resolution intersects the published profile set with module-line availability after Options, preserving preference order and reporting every line exclusion. This changes neither the governing text nor the module approval claim. See [per-line resolution](docs/decisions/0006-per-line-profile-resolution.md).
 
-The option "post-quantum key exchange required" (`pq_key_exchange_required`, set on `Options::default()`) keeps only ML-KEM and hybrid key exchange on any profile, and so TLS 1.3 only. Whether the running module is validated for a resolved profile is a separate call, `assert_module_approves`, which fails closed.
+The option "post-quantum key exchange required" (`pq_key_exchange_required`, set on `Options::default()`) keeps only ML-KEM and hybrid key exchange on any profile, and so TLS 1.3 only. Whether the running module is validated for a resolved profile is a separate call, `assert_module_approves`, which fails closed. Today it refuses every profile, because the evidence for the AWS-LC FIPS modules this crate links shows no TLS 1.2 (RFC 7627) or TLS 1.3 key-derivation test ([decision 0019](docs/decisions/0019-protocol-version-needs-its-kdf-cvl.md)).
 
 ## Documentation
 

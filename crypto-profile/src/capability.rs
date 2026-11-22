@@ -191,6 +191,17 @@ const fn gcm_scenario_2(l: Linkage) -> &'static str {
     }
 }
 
+const fn tls12_ems(l: Linkage) -> &'static str {
+    match l {
+        Linkage::Static => {
+            "AWS-LC FIPS 3.1.0 Security Policy, cert #5314 (static), Table 5, p. 10 (KDF TLS (CVL), SP 800-135: TLS v1.0/1.1, v1.2, no TLS v1.2 KDF RFC7627) and Table 8, p. 12 (TLS KDF using non-extended master secret: not allowed), though Table 12 (Approved Services), p. 25, lists Key Derivation with TLS KDF; FIPS 140-3 IG D.Q (April 9, 2026 edition, p. 205): the TLS 1.2 KDF shall use the extended master secret (RFC 7627), and a version not tested by the CAVP shall not be used in the approved mode; IG 2.4.B item 6 (p. 31) denotes that test separately, as TLS v1.2 KDF RFC7627"
+        }
+        Linkage::Dynamic => {
+            "AWS-LC FIPS 3.1.0 Security Policy, cert #5298 (dynamic), Table 5, p. 10 (KDF TLS (CVL), SP 800-135: TLS v1.0/1.1, v1.2, no TLS v1.2 KDF RFC7627) and Table 8, p. 12 (TLS KDF using non-extended master secret: not allowed), though Table 12 (Approved Services), p. 26, lists Key Derivation with TLS KDF; FIPS 140-3 IG D.Q (April 9, 2026 edition, p. 205): the TLS 1.2 KDF shall use the extended master secret (RFC 7627), and a version not tested by the CAVP shall not be used in the approved mode; IG 2.4.B item 6 (p. 31) denotes that test separately, as TLS v1.2 KDF RFC7627"
+        }
+    }
+}
+
 const ED25519_5314: Approval = Approval::NotApproved {
     source: "AWS-LC FIPS 3.1.0 Security Policy, cert #5314 (static), Table 12 (Approved Services), pp. 24-25: Signature Generation and Signature Verification list RSA and ECDSA, not EdDSA",
 };
@@ -271,7 +282,12 @@ const fn three_x(l: Linkage, a: Algorithm) -> Capability {
             | HashAlgorithm::Sha3_512 => (true, yes),
         },
         Algorithm::Protocol(v) => match v {
-            TlsVersion::Tls12 => (true, yes),
+            TlsVersion::Tls12 => (
+                true,
+                Approval::NotApproved {
+                    source: tls12_ems(l),
+                },
+            ),
             TlsVersion::Tls13 => (true, Approval::Unverified),
         },
         Algorithm::Mac(m) => match m {
@@ -1270,7 +1286,33 @@ mod tests {
     }
 
     #[test]
-    fn three_x_approval_matches_table_5() {
+    fn three_x_tls12_is_not_approved_without_an_ems_kdf_test() {
+        for (m, module_label, services) in [
+            (M3S, "#5314 (static)", "p. 25"),
+            (M3D, "#5298 (dynamic)", "p. 26"),
+        ] {
+            let Approval::NotApproved { source } =
+                capability(m, Algorithm::Protocol(TlsVersion::Tls12)).approval
+            else {
+                panic!("{m:?}: TLS 1.2 is not NotApproved");
+            };
+            for part in [
+                module_label,
+                services,
+                "Table 5",
+                "Table 8",
+                "IG D.Q",
+                "p. 205",
+                "RFC 7627",
+                "IG 2.4.B item 6",
+            ] {
+                assert!(source.contains(part), "{m:?}: {part} missing from {source}");
+            }
+        }
+    }
+
+    #[test]
+    fn three_x_approval_matches_the_security_policies() {
         use Algorithm as A;
         let approved = |a| capability(M3S, a).approval.is_approved();
         assert!(approved(A::Signature(SignatureAlgorithm::Rsa2048Sha384)));
@@ -1284,7 +1326,6 @@ mod tests {
         assert!(approved(A::Mac(MacAlgorithm::HmacSha384)));
         assert!(approved(A::Kdf(KdfAlgorithm::HkdfSha512)));
         assert!(approved(A::Kdf(KdfAlgorithm::OneStepSha256)));
-        assert!(approved(A::Protocol(TlsVersion::Tls12)));
         assert!(approved(A::Aead(AeadAlgorithm::Aes128Gcm)));
         assert!(approved(A::Aead(AeadAlgorithm::Aes256Gcm)));
         for a in [
@@ -1294,6 +1335,7 @@ mod tests {
             A::Cipher(CipherSuite::Tls13Chacha20Poly1305Sha256),
             A::Cipher(CipherSuite::Tls12EcdheRsaChacha20Poly1305Sha256),
             A::Aead(AeadAlgorithm::Chacha20Poly1305),
+            A::Protocol(TlsVersion::Tls12),
         ] {
             assert!(
                 matches!(capability(M3S, a).approval, Approval::NotApproved { .. }),
@@ -1407,7 +1449,7 @@ mod tests {
             (A::Hash(HashAlgorithm::Sha3_256), true, Y),
             (A::Hash(HashAlgorithm::Sha3_384), true, Y),
             (A::Hash(HashAlgorithm::Sha3_512), true, Y),
-            (A::Protocol(TlsVersion::Tls12), true, Y),
+            (A::Protocol(TlsVersion::Tls12), true, N),
             (A::Protocol(TlsVersion::Tls13), true, U),
             (A::Mac(MacAlgorithm::HmacSha256), true, Y),
             (A::Mac(MacAlgorithm::HmacSha384), true, Y),

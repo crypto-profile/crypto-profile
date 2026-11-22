@@ -143,8 +143,8 @@ fn approves_given(
 /// Refuses with `CryptoError::NotFips` unless the module is in FIPS mode, with
 /// `CryptoError::PolicyEmpty` naming the first family `r` leaves empty, and otherwise unless every
 /// algorithm `r` names, each protocol version included, is `Approved` for the running module.
-/// Fails on the first cell that is not `Approved`; `AlgorithmTested` is not. On the 4.x module it
-/// fails today: a cell is `Approved` only where a published security policy lists it.
+/// Fails on the first cell that is not `Approved`; `AlgorithmTested` is not. It refuses every
+/// profile today, on both lines: no module's evidence approves TLS 1.3 or TLS 1.2 (decision 0019).
 pub fn assert_module_approves(r: &Resolved) -> Result<(), CryptoError> {
     approves_given(aws_lc_rs::try_fips_mode().is_ok(), r, |a| {
         crypto_profile::capability(crate::MODULE, a).approval
@@ -640,7 +640,7 @@ mod tests {
     }
 
     #[test]
-    fn three_x_approval_requires_only_table_five_cells() {
+    fn three_x_approval_walks_the_real_cells_and_refuses_tls12() {
         if crate::MODULE.line == crate::ModuleLine::AwsLcFips4 {
             return;
         }
@@ -668,6 +668,26 @@ mod tests {
                 .tls
                 .kx_groups
                 .retain(|g| matches!(g, K::Secp256r1 | K::Secp384r1));
+            let tls12 = Algorithm::Protocol(V::Tls12);
+            assert_eq!(
+                assert_module_approves(&resolved),
+                Err(CryptoError::NotApproved {
+                    algorithm: tls12,
+                    approval: module_cell(tls12),
+                })
+            );
+            assert!(matches!(module_cell(tls12), Approval::NotApproved { .. }));
+            let others = |r: &Resolved| {
+                approves_given(true, r, |a| {
+                    if a == tls12 {
+                        Approval::Approved {
+                            source: "test: TLS 1.2 set aside (#93)",
+                        }
+                    } else {
+                        module_cell(a)
+                    }
+                })
+            };
             assert!(!resolved.keys.is_empty());
             assert!(!resolved.tls.signature_schemes.is_empty());
             assert_eq!(resolved.excluded, excluded);
@@ -685,7 +705,7 @@ mod tests {
                     );
                 }
                 assert_eq!(
-                    assert_module_approves(&resolved),
+                    others(&resolved),
                     Err(CryptoError::NotApproved {
                         algorithm: scheme,
                         approval: module_cell(scheme),
@@ -693,7 +713,7 @@ mod tests {
                 );
                 resolved.tls.signature_schemes.retain(|t| *t != T::Ed25519);
                 assert_eq!(
-                    assert_module_approves(&resolved),
+                    others(&resolved),
                     Err(CryptoError::NotApproved {
                         algorithm: key,
                         approval: module_cell(key),
@@ -701,16 +721,16 @@ mod tests {
                 );
                 resolved.keys.retain(|k| *k != S::Ed25519);
             }
-            for algorithm in walk(&resolved) {
+            for algorithm in walk(&resolved).into_iter().filter(|a| *a != tls12) {
                 assert!(
                     matches!(crate::fips::approval(algorithm), Approval::Approved { .. }),
                     "{algorithm:?}"
                 );
             }
-            assert_eq!(assert_module_approves(&resolved), Ok(()));
+            assert_eq!(others(&resolved), Ok(()));
             resolved.tls.kx_groups.push(K::X25519MlKem768);
             assert_eq!(
-                assert_module_approves(&resolved),
+                others(&resolved),
                 Err(CryptoError::NotApproved {
                     algorithm: Algorithm::Kx(K::X25519MlKem768),
                     approval: Approval::Unverified,
