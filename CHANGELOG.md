@@ -6,6 +6,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-22
+
 ### Added
 
 - `fips::self_test()` re-runs the module's known-answer self-tests on demand (#89). It answers in this order:

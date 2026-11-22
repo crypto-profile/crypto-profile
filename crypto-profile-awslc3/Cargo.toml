@@ -1,7 +1,7 @@
 [package]
 name = "crypto-profile-awslc3"
 description = "The crypto-profile backend on the AWS-LC FIPS 3.x module, through aws-lc-rs 1.17"
-version = "0.10.1"
+version = "0.10.2"
 edition = "2024"
 rust-version = "1.99.1"
 license = "MIT OR Apache-2.0"
@@ -28,7 +28,7 @@ expect_used = "deny"
 test-support = []
 
 [dependencies]
-crypto-profile = { path = "../crypto-profile", version = "=0.10.1" }
+crypto-profile = { path = "../crypto-profile", version = "=0.10.2" }
 # Prevent resolution onto the 4.x module: aws-lc-rs 1.17 requires the aws-lc-fips-sys 0.13 series.
 aws-lc-rs = { version = "=1.17.4", features = ["fips", "ring-io"] }
 # Pin the module build; build.rs accepts only this release's library (#54, decision 0017).
@@ -43,7 +43,7 @@ zeroize = "1"
 
 [dev-dependencies]
 hex = "0.4"
-crypto-profile = { path = "../crypto-profile", version = "=0.10.1", features = ["conformance"] }
+crypto-profile = { path = "../crypto-profile", version = "=0.10.2", features = ["conformance"] }
 x509-parser = { version = "0.18", default-features = false }
 # Pin the policy/provider API so resolution cannot change its contract.
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "tls12"] }
