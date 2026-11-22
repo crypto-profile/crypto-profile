@@ -185,7 +185,7 @@ dependencies = [
 
 [[package]]
 name = "crypto-profile"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "hex",
  "serde_json",
@@ -193,7 +193,7 @@ dependencies = [
 
 [[package]]
 name = "crypto-profile-awslc4"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "aws-lc-fips-sys",
  "aws-lc-rs",
