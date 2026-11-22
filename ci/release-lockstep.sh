@@ -18,6 +18,9 @@ version = versions["crypto-profile"]
 for n in names[1:]:
     reqs = [d["req"] for d in pkgs[n]["dependencies"] if d["name"] == "crypto-profile"]
     check(reqs and all(r == f"={version}" for r in reqs), f"{n} requires crypto-profile {reqs}, not ={version}")
+    for pin in ["aws-lc-rs", "aws-lc-fips-sys", "rustls", "rustls-webpki", "rcgen"]:
+        reqs = [d["req"] for d in pkgs[n]["dependencies"] if d["name"] == pin]
+        check(reqs and all(r.startswith("=") for r in reqs), f"{n} requires {pin} {reqs}, not an exact pin (decision 0017)")
 changelog = open(os.path.join(sys.argv[1], "CHANGELOG.md"), encoding="utf-8").read()
 section = re.search(rf"^## \[{re.escape(version)}\][^\n]*\n(.*?)(?=^## \[|\Z)", changelog, re.M | re.S)
 check(section, f"CHANGELOG.md has no ## [{version}] heading")

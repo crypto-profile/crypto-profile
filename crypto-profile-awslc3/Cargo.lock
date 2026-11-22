@@ -202,6 +202,7 @@ dependencies = [
 name = "crypto-profile-awslc3"
 version = "0.10.1"
 dependencies = [
+ "aws-lc-fips-sys",
  "aws-lc-rs",
  "crypto-profile",
  "hex",

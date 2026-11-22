@@ -248,7 +248,7 @@ pins ever become compatible. `ci/backend-links-negative.sh` verifies both links
 values, each individual control, and the combined refusal with its actual reason.
 Select exactly one backend per application.
 
-The 3.x lockfile pins aws-lc-fips-sys to 0.13.17, preserving the selected module
+The 3.x manifest pins aws-lc-fips-sys to 0.13.17, preserving the selected module
 provenance. Its build script requires the forwarded libcrypto metadata to be exactly
 `aws_lc_fips_0_13_17_crypto` because its linkage derivation mirrors that
 builder's rules. Missing or different metadata refuses the build, including in
@@ -260,4 +260,4 @@ and mutation discovery. Run 3.x coverage and mutation analysis separately,
 without that cfg. Its mutation configuration does not cross into the root
 workspace or rediscover the emitted shared bodies.
 
-The 4.x manifest pins aws-lc-rs 1.19.0 and rcgen 0.14.10; its lockfile selects aws-lc-fips-sys 0.14.2. The 3.x manifest pins aws-lc-rs 1.17.4 and rcgen 0.14.9. Both pin rustls 0.23.46 and rustls-webpki 0.103.16. Preserve the explanatory pin comments when updating dependencies. Why the pins are exact, how an advisory in a pinned crate is released, and when the 3.x backend retires are [decision 0017](docs/decisions/0017-exact-pins-and-3x-retirement.md).
+The 4.x manifest pins aws-lc-rs 1.19.0, aws-lc-fips-sys 0.14.2 and rcgen 0.14.10. The 3.x manifest pins aws-lc-rs 1.17.4, aws-lc-fips-sys 0.13.17 and rcgen 0.14.9. Both pin rustls 0.23.46 and rustls-webpki 0.103.16. Preserve the explanatory pin comments when updating dependencies. Moving the aws-lc-fips-sys pin changes the module build: update the backend's `build.rs` (the library name and the `DEP_AWS_LC_FIPS_<version>_LIBCRYPTO` key it requires; on 3.x, also re-read the builder's linkage rules its build script copies), then grep `0_14_2\|0\.14\.2` (3.x: `0_13_17\|0\.13\.17`) and update every document that names the old release. Dependabot groups aws-lc-rs, aws-lc-fips-sys and rcgen as `fips-module`, apart from rustls and rustls-webpki, so a series move of aws-lc-rs and aws-lc-fips-sys can arrive as one pull request and a module review does not hold up a rustls patch; a move Dependabot cannot resolve, for example while one candidate is inside its cooldown, is made by hand. Why the pins are exact, how an advisory in a pinned crate is released, and when the 3.x backend retires are [decision 0017](docs/decisions/0017-exact-pins-and-3x-retirement.md).

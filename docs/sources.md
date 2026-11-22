@@ -160,7 +160,7 @@ Standards and evidence: [NIST and CMVP](#nist-and-cmvp) · [IETF](#ietf) · [Int
 
 ## 3.x backend provenance
 
-The 3.x backend pins aws-lc-rs 1.17.4 and rcgen 0.14.9; its lockfile selects aws-lc-fips-sys 0.13.17, which bundles AWS-LC 3.6.0, a later revision of the AWS-LC FIPS 3.x line. The certificates below cover that line; their certified release is 3.1.0.
+The 3.x backend pins aws-lc-rs 1.17.4, aws-lc-fips-sys 0.13.17 and rcgen 0.14.9; aws-lc-fips-sys 0.13.17 bundles AWS-LC 3.6.0, a later revision of the AWS-LC FIPS 3.x line. The certificates below cover that line; their certified release is 3.1.0.
 
 | Document | Issuer | Edition | Link | Used by | SHA-256 |
 |---|---|---|---|---|---|
