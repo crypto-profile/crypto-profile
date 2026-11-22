@@ -284,7 +284,7 @@ mod tests {
 
     #[test]
     fn a_library_name_is_a_bare_basename() {
-        for ok in ["aws_lc_fips_0_14_2_crypto", "crypto"] {
+        for ok in ["aws_lc_fips_0_14_4_crypto", "crypto"] {
             assert!(__library_basename(ok), "{ok}");
         }
         for bad in ["", "a/crypto", "a\\crypto", "crypto\n", "cry\0pto"] {

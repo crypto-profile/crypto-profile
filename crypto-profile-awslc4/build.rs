@@ -27,12 +27,12 @@ fn main() {
         .filter(|(k, _)| k.starts_with("DEP_AWS_LC_RS_") && k.ends_with("_SYS_LIBCRYPTO"))
         .map(|(_, v)| v)
         .collect();
-    const WANT: &str = "aws_lc_fips_0_14_2_crypto";
+    const WANT: &str = "aws_lc_fips_0_14_4_crypto";
     if let Err(e) = bundled(&libs, WANT) {
         panic!("crypto-profile-awslc4: {e}");
     }
     // Cargo passes a `links` crate's metadata only to its direct dependents.
-    let direct = std::env::var("DEP_AWS_LC_FIPS_0_14_2_LIBCRYPTO").ok();
+    let direct = std::env::var("DEP_AWS_LC_FIPS_0_14_4_LIBCRYPTO").ok();
     if let Err(e) = pinned(direct.as_deref(), WANT) {
         panic!("crypto-profile-awslc4: {e}");
     }
@@ -61,7 +61,7 @@ fn bundled(libs: &[String], want: &str) -> Result<(), String> {
 mod tests {
     use super::{bundled, pinned};
 
-    const WANT: &str = "aws_lc_fips_0_14_2_crypto";
+    const WANT: &str = "aws_lc_fips_0_14_4_crypto";
 
     #[test]
     fn the_bundled_name_is_accepted() {
@@ -89,6 +89,7 @@ mod tests {
     #[test]
     fn another_version_is_refused() {
         assert!(bundled(&["aws_lc_fips_0_14_3_crypto".to_string()], WANT).is_err());
+        assert!(bundled(&["aws_lc_fips_0_14_5_crypto".to_string()], WANT).is_err());
     }
 
     #[test]
@@ -106,6 +107,7 @@ mod tests {
 
     #[test]
     fn another_pinned_version_is_refused() {
-        assert!(pinned(Some("aws_lc_fips_0_14_4_crypto"), WANT).is_err());
+        assert!(pinned(Some("aws_lc_fips_0_14_2_crypto"), WANT).is_err());
+        assert!(pinned(Some("aws_lc_fips_0_14_5_crypto"), WANT).is_err());
     }
 }
