@@ -103,10 +103,7 @@ pub fn parse_spki(der: &[u8]) -> Result<PeerKey, PeerCertificateViolation> {
     if der.len() > 16384 {
         return Err(Malformed);
     }
-    parse_spki_contents(sequence(der)?)
-}
-
-fn parse_spki_contents(mut spki: Der<'_>) -> Result<PeerKey, PeerCertificateViolation> {
+    let mut spki = sequence(der)?;
     let mut algorithm = Der(spki.value(0x30)?);
     let oid = algorithm.oid()?;
     let params = algorithm.0;
@@ -426,10 +423,15 @@ pub(crate) fn check_verified_path(
             )?;
             child = issuer.der();
         }
-        let issuer = parse_spki_contents(Der(path.anchor().subject_public_key_info.as_ref()))?;
-        check_edge(profile, &child, issuer)
+        check_edge(profile, &child, anchor_key(path.anchor())?)
     };
     check().map_err(|violation| TlsError::PeerCertificate { profile, violation })
+}
+
+fn anchor_key(
+    anchor: &rustls::pki_types::TrustAnchor<'_>,
+) -> Result<PeerKey, PeerCertificateViolation> {
+    parse_spki(webpki::spki_for_anchor(anchor).as_ref())
 }
 
 #[cfg(test)]
@@ -603,6 +605,31 @@ mod tests {
             count(san_certificate(false, Some(extension(SAN, false, &names)))),
             Ok(1)
         );
+    }
+
+    #[test]
+    fn an_anchor_key_is_read_and_bounded_like_any_issuer_key() {
+        let contents = |len: usize| {
+            [
+                tlv(0x30, &tlv(6, &[0x2a, 3])),
+                tlv(3, &[&[0][..], &vec![1; len]].concat()),
+            ]
+            .concat()
+        };
+        let anchor = |spki: &[u8]| rustls::pki_types::TrustAnchor {
+            subject: (&[][..]).into(),
+            subject_public_key_info: spki.to_vec().into(),
+            name_constraints: None,
+        };
+        assert_eq!(anchor_key(&anchor(&contents(16))), Ok(PeerKey::Unknown));
+        assert_eq!(anchor_key(&anchor(&contents(180))), Ok(PeerKey::Unknown));
+        let at = |total| (0..).find(|&len| contents(len).len() == total).unwrap();
+        assert_eq!(
+            anchor_key(&anchor(&contents(at(16380)))),
+            Ok(PeerKey::Unknown)
+        );
+        assert_eq!(anchor_key(&anchor(&contents(at(16381)))), Err(Malformed));
+        assert_eq!(anchor_key(&anchor(&contents(17000))), Err(Malformed));
     }
 
     fn spki(oid: &[u8], params: &[u8], key: &[u8]) -> Vec<u8> {
