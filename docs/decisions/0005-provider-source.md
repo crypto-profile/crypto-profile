@@ -44,6 +44,7 @@ modules and nested sealbox keys live in this tree; the backend shell
 re-exports their API unchanged. A single `MlDsa` arm supplies generation, public-key
 extraction, signing, verifier and fallible descriptor lookup, plus optional test fixtures.
 A key stores its descriptor after key validation so the rcgen getter stays infallible.
+*(Amended 2026-11-22, #89: a second arm, `self_test_runner() -> Option<fn() -> Result<(), ()>>`, supplies the module's on-demand self-test where the backend can call it safely (4.x, aws-lc-rs `try_fips_self_test`) and `None` otherwise (3.x). `fips::self_test` reaches it through the `backend` bridge and calls it only after its availability and FIPS-mode checks.)*
 
 The body index permits blanks, at most one leading purpose doc line, public declarations
 for `signature`, `csr`, `aead`, `digest`, `random`, `fips`, `tls`, and `sealbox`, private

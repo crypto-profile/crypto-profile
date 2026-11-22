@@ -69,6 +69,10 @@ pub(crate) fn csr_oracle(
     })
 }
 
+pub(crate) fn self_test_runner() -> Option<fn() -> Result<(), ()>> {
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

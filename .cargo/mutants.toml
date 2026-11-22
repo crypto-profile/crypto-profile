@@ -11,6 +11,8 @@ exclude_re = [
   "^crypto-profile-awslc4/src/lib\\.rs:[0-9]+:[0-9]+: replace ensure -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
   # The decision is fips_result, tested both ways; the wrapper's only input is the loaded module's FIPS_mode(), which a FIPS build cannot make false (spec §9, decision 0003).
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/backend_body/fips\\.rs:[0-9]+:[0-9]+: replace assert_fips_module -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
+  # Skips the module's self-test, whose success no test can observe (decision 0003 §3, ruling 2026-11-22).
+  "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/backend_body/fips\\.rs:[0-9]+:[0-9]+: replace self_test -> Result<\\(\\), CryptoError> with Ok\\(\\(\\)\\)$",
   # Every test process runs in FIPS mode, so fips() is true either way (decision 0003); the false mutant is caught by the_module_is_in_fips_mode_on_this_build.
   "^crypto-profile-awslc4/src/\\.\\./\\.\\./crypto-profile/src/provider/assembly\\.rs:[0-9]+:[0-9]+: replace fips -> bool with true$",
   # MlKem::fips is the module's FIPS mode, true in every test process (decision 0003); false is caught by fips_follows_rustls_classification.

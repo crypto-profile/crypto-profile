@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Added
+
+- `fips::self_test()` re-runs the module's known-answer self-tests on demand (#89). It answers in this order:
+  - `CryptoError::SelfTestUnavailable` where the backend does not expose the self-test: on 3.x, aws-lc-rs 1.17.4 has no safe wrapper, and the crate forbids `unsafe`;
+  - `CryptoError::NotFips` outside FIPS mode;
+  - otherwise, on 4.x, the result of aws-lc-rs's `try_fips_self_test()`: `Ok(())`, or `CryptoError::SelfTest` for a failure the module reported.
+
+  By default a known-answer mismatch aborts the process before the call returns; only a static module build with `AWSLC_FIPS_FAILURE_CALLBACK` and an application callback returns instead. The integrity test is not re-run. Call it at start-up or from an operator action, not on a request path (`docs/usage.md` §8). The conformance suite checks the outcome per module line, and a backend supplies it through a `backend_arms` item (decision 0005). The mutant that skips the module call is a maintainer-ruled residual (decision 0003).
+
 ### Changed
 
 - `crypto-profile-awslc4` takes `aws-lc-fips-sys` 0.14.4, through the exact pin #54 added (#86). The module source is unchanged:
