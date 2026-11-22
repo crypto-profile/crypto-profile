@@ -102,6 +102,10 @@ pub(crate) fn csr_oracle(
     })
 }
 
+pub(crate) fn self_test_runner() -> Option<fn() -> Result<(), ()>> {
+    Some(|| aws_lc_rs::try_fips_self_test().map_err(|_| ()))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

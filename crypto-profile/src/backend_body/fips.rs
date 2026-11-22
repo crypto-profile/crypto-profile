@@ -26,6 +26,38 @@ pub fn assert_fips_server_config(c: &rustls::ServerConfig) -> Result<(), CryptoE
     fips_result(c.fips())
 }
 
+/// The pure decision behind [`self_test`]: refuses before `runner` runs.
+pub(crate) fn self_test_given(
+    runner: Option<fn() -> Result<(), ()>>,
+    fips_mode: impl FnOnce() -> bool,
+) -> Result<(), CryptoError> {
+    let Some(run) = runner else {
+        return Err(CryptoError::SelfTestUnavailable);
+    };
+    if !fips_mode() {
+        return Err(CryptoError::NotFips);
+    }
+    run().map_err(|()| CryptoError::SelfTest)
+}
+
+/// Re-runs the module's known-answer self-tests (CASTs) on demand.
+///
+/// Refuses with `CryptoError::SelfTestUnavailable` where the backend does not expose them (the
+/// 3.x line), whether or not the module is in FIPS mode; otherwise with `CryptoError::NotFips`
+/// unless it is. `Ok` means every CAST re-ran and passed in a FIPS-mode module. The module's
+/// integrity test is not re-run.
+///
+/// By default a known-answer mismatch aborts the process before this returns.
+/// `CryptoError::SelfTest` is a failure the module reported instead, such as an operation that
+/// failed during a test, though some operation failures abort as well: treat the module as
+/// failed. Call this at start-up or from an
+/// operator action, never on a request path.
+pub fn self_test() -> Result<(), CryptoError> {
+    self_test_given(super::backend::self_test_runner(), || {
+        aws_lc_rs::try_fips_mode().is_ok()
+    })
+}
+
 /// The certificate of the module this build links.
 pub fn certificate() -> crypto_profile::Certificate {
     crypto_profile::certificate(crate::MODULE)
@@ -61,6 +93,53 @@ mod tests {
     fn the_decision_has_both_branches() {
         assert_eq!(fips_result(true), Ok(()));
         assert_eq!(fips_result(false), Err(CryptoError::NotFips));
+    }
+
+    static RAN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+    fn passes() -> Result<(), ()> {
+        RAN.store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn fails() -> Result<(), ()> {
+        Err(())
+    }
+
+    fn never() -> Result<(), ()> {
+        unreachable!("the self-test ran before its checks passed")
+    }
+
+    #[test]
+    fn the_self_test_decision_refuses_before_it_runs() {
+        assert_eq!(
+            self_test_given(None, || unreachable!(
+                "the FIPS mode was read for an unavailable test"
+            )),
+            Err(CryptoError::SelfTestUnavailable)
+        );
+        assert_eq!(
+            self_test_given(Some(never), || false),
+            Err(CryptoError::NotFips)
+        );
+        assert_eq!(
+            self_test_given(Some(fails), || true),
+            Err(CryptoError::SelfTest)
+        );
+        RAN.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(self_test_given(Some(passes), || true), Ok(()));
+        assert!(RAN.load(std::sync::atomic::Ordering::SeqCst));
+    }
+
+    #[test]
+    fn the_self_test_matches_its_line() {
+        match crate::MODULE.line {
+            crypto_profile::ModuleLine::AwsLcFips4 => assert_eq!(self_test(), Ok(())),
+            crypto_profile::ModuleLine::AwsLcFips3 => {
+                assert_eq!(self_test(), Err(CryptoError::SelfTestUnavailable))
+            }
+            other => panic!("{other:?}: no expected self-test outcome"),
+        }
     }
 
     #[test]

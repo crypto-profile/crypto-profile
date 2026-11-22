@@ -12,6 +12,7 @@ One reviewed place for an application's cryptographic choices:
 
 - **Profiles.** Named, inspectable algorithm sets an application selects at start-up that report unavailable module-line entries in `Resolved::excluded` and refuse any empty family. See [Profiles](#profiles).
 - **A rustls provider** whose key-exchange groups, cipher suites and signature schemes follow a `tls::Policy`, and `fips::assert_fips_module`, which an application calls at start-up to refuse to run unless the loaded module reports FIPS mode.
+- **`fips::self_test`,** which re-runs the module's known-answer self-tests on demand on the 4.x backend, for an application that needs to re-test without restarting; the 3.x backend refuses it. See [`docs/usage.md`](docs/usage.md) §8.
 - **The functions applications need beside TLS,** each implemented once:
   - hashing (SHA-2 and SHA-3) under a profile, through `digest::digest` and `digest::Hasher`;
   - random bytes;
@@ -50,7 +51,7 @@ The modules' certificate status, as recorded when this file was last updated (CM
 | AWS-LC FIPS 3.1.0 | Validated: certificate [#5314](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5314) (static) and [#5298](https://csrc.nist.gov/projects/cryptographic-module-validation-program/certificate/5298) (dynamic). |
 | AWS-LC FIPS 4.x | Submitted, in CMVP review; not validated, and no security policy published yet. Static and dynamic are separate submissions: the CMVP [Modules In Process list](https://csrc.nist.gov/Projects/cryptographic-module-validation-program/modules-in-process/modules-in-process-list), last updated 11/2/2026, shows "AWS-LC 4 Cryptographic Module (dynamic)" and "AWS-LC 4 Cryptographic Module (static)", FIPS 140-3, both in "Comment Resolution - Lab (10/22/2026)". |
 
-aws-lc-rs 1.17.4 with its `fips` feature compiles ML-DSA out, so the 3.x backend refuses ML-DSA with a typed error rather than fall back. See [`docs/usage.md`](docs/usage.md) for linkage, what the crate claims, and its limits.
+aws-lc-rs 1.17.4 with its `fips` feature compiles ML-DSA out, so the 3.x backend refuses ML-DSA with a typed error rather than fall back. It also has no safe wrapper for the module's on-demand self-test, so `fips::self_test` refuses with `CryptoError::SelfTestUnavailable` on 3.x. See [`docs/usage.md`](docs/usage.md) for linkage, what the crate claims, and its limits.
 
 ## Profiles
 

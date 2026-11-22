@@ -156,6 +156,10 @@ pub enum CryptoError {
     },
     /// The process is not running the AWS-LC FIPS module, or a provider is not FIPS.
     NotFips,
+    /// The module's on-demand self-test (`fips::self_test`) failed without aborting the process.
+    SelfTest,
+    /// This backend does not expose the module's on-demand self-test.
+    SelfTestUnavailable,
     /// Key generation failed.
     KeyGeneration(Algorithm),
     /// A signature did not verify.
@@ -329,6 +333,10 @@ impl fmt::Display for CryptoError {
             CryptoError::NotFips => {
                 f.write_str("the AWS-LC FIPS module is not active, or the provider is not FIPS")
             }
+            CryptoError::SelfTest => f.write_str("the module's on-demand self-test failed"),
+            CryptoError::SelfTestUnavailable => {
+                f.write_str("this backend does not expose the module's on-demand self-test")
+            }
             CryptoError::KeyGeneration(a) => write!(f, "key generation for {a:?} failed"),
             CryptoError::Verify => f.write_str("the signature does not verify"),
             CryptoError::Sign => f.write_str("signing failed"),
@@ -466,6 +474,14 @@ mod tests {
         assert_eq!(
             CryptoError::NotFips.to_string(),
             "the AWS-LC FIPS module is not active, or the provider is not FIPS"
+        );
+        assert_eq!(
+            CryptoError::SelfTest.to_string(),
+            "the module's on-demand self-test failed"
+        );
+        assert_eq!(
+            CryptoError::SelfTestUnavailable.to_string(),
+            "this backend does not expose the module's on-demand self-test"
         );
         assert_eq!(
             CryptoError::Unavailable(Algorithm::Signature(SignatureAlgorithm::MlDsa87)).to_string(),

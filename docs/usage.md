@@ -171,9 +171,24 @@ The backend answers two questions that are easy to confuse.
 
 **Passing the first is not the second.** A configuration that rustls classifies as FIPS can include algorithms whose approval this crate cannot source. Use `assert_fips_*` to refuse X25519, ChaCha20 and non-EMS TLS 1.2; use `approval` for the cell and its source, which is `Approved` only where a security policy says so.
 
-`fips::assert_fips_module()` is a third, narrower check: it refuses unless the loaded AWS-LC module reports FIPS mode. The sealed box calls it on every seal and open. It is this build's only run-time check that the module in the process is in FIPS mode, and nothing runs it at start-up: **an application must call `fips::assert_fips_module()` at start-up and refuse to run if it fails.** On a dynamic build this is what refuses a non-FIPS library that the dynamic loader found in place of the FIPS one.
+`fips::assert_fips_module()` is a third, narrower check: it refuses unless the loaded AWS-LC module reports FIPS mode. The sealed box calls it on every seal and open. It is the check meant to be called on its own to confirm that the module in the process is in FIPS mode, and nothing runs it at start-up: **an application must call `fips::assert_fips_module()` at start-up and refuse to run if it fails.** On a dynamic build this is what refuses a non-FIPS library that the dynamic loader found in place of the FIPS one.
 
 aws-lc-fips-sys has a start-up check that aborts the process if the runtime library is not in FIPS mode, but it links that check only when it links a system-installed AWS-LC FIPS module (`aws-lc-fips-sys-0.14.4/builder/main.rs:1304-1305`, whose only caller is `builder/system_library.rs:391`; `README.md:89,164-174`). It builds the bundled source, as this crate's builds do, unless it finds a system-installed module: through `AWS_LC_FIPS_SYS_SYSTEM_DIR`, or by automatic detection from the `OPENSSL_*` variables and pkg-config, which `AWS_LC_FIPS_SYS_USE_SYSTEM=0` turns off (`README.md:89-148`). A bundled-source build, static or dynamic, links no start-up check.
+
+**The on-demand self-test.** `fips::self_test()` re-runs the module's known-answer self-tests (its CASTs), for an application that has to re-test without restarting the process. It answers in this order:
+
+- **`CryptoError::SelfTestUnavailable`** where the backend does not expose the self-test. On the 3.x line, the module has `BORINGSSL_self_test` (`aws-lc-fips-sys-0.13.17/aws-lc/crypto/fipsmodule/self_check/self_check.c:2058-2070`), but aws-lc-rs 1.17.4 has no safe wrapper for it, and the crate forbids `unsafe`. This check comes before the FIPS-mode check, unlike the crate's other checks, which refuse `NotFips` first ([decision 0012](decisions/0012-api-coherence-and-non-exhaustive.md)): it is a fixed property of the backend, so a 3.x caller gets the same answer either way.
+- **`CryptoError::NotFips`** when the module is not in FIPS mode.
+- **Otherwise, on 4.x,** the result of aws-lc-rs's `try_fips_self_test()` (`aws-lc-rs-1.19.0/src/lib.rs:387-410`).
+
+**`Ok(())`** means every CAST group in AWS-LC's `BORINGSSL_self_test` re-ran and passed, in a FIPS-mode module. Those groups are the fast KATs, then RSA, ECC, FFDH, ML-KEM, ML-DSA, EdDSA and HashEdDSA (`aws-lc-fips-sys-0.14.4/aws-lc/crypto/fipsmodule/self_check/self_check.c:2993-3007`). The module's integrity test is not re-run, because aws-lc-rs does not expose `BORINGSSL_integrity_test`.
+
+**Failure** takes two routes:
+
+- **A known-answer mismatch aborts the process by default,** before the call returns. `AWS_LC_FIPS_failure` loops on `abort()` (`aws-lc-fips-sys-0.14.4/aws-lc/crypto/fipsmodule/bcm.c:407-414`), unless a static build of the module sets `AWSLC_FIPS_FAILURE_CALLBACK` and the application supplies the callback (`bcm.c:401-406`; `aws-lc-fips-sys-0.14.4/aws-lc/CMakeLists.txt:1095-1097`).
+- **`CryptoError::SelfTest`** is a failure the module reported instead, such as an operation that failed during a test, which aws-lc-rs reports as an error (`aws-lc-rs-1.19.0/src/lib.rs:393-396`). Some operation failures abort too: a failed AES-GCM open in its decrypt KAT reaches `AWS_LC_FIPS_failure` (`self_check.c:2776`). Treat it as a failed module: stop using cryptography and restart. The crate does not remember the failure.
+
+**When to call it.** At start-up, after `fips::assert_fips_module()`, or from an operator action. **Never on a request path:** a failure ends the whole process by default. Every CAST runs, so it takes time. FIPS 140-3 IG 10.3.E (p. 122) says that at security levels 1 and 2, "acceptable means for initiating the periodic self-tests include a provided service, resetting, rebooting or power cycling"; this call is such a service for a deployment that wants one. The crate makes no claim about a deployment's periodic self-testing.
 
 ## 9. What a policy or profile does not restrict
 

@@ -145,6 +145,17 @@ macro_rules! __conformance_profile_tests {
         }
 
         #[test]
+        fn the_on_demand_self_test_matches_the_module_line() {
+            match MODULE.line {
+                ModuleLine::AwsLcFips4 => assert_eq!($b::fips::self_test(), Ok(())),
+                ModuleLine::AwsLcFips3 => {
+                    assert_eq!($b::fips::self_test(), Err(CryptoError::SelfTestUnavailable))
+                }
+                other => panic!("{other:?}: no expected self-test outcome"),
+            }
+        }
+
+        #[test]
         fn resolve_matches_the_golden_tables() {
             let (mut compared, mut refused) = (0, 0);
             for &p in Profile::ALL {

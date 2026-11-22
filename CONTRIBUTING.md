@@ -123,6 +123,7 @@ A backend is a crate named for its module line. It must:
 
 - expose the same module paths and signatures as `crypto-profile-awslc4` (`aead`, `csr`, `digest`, `ecdh`, `fips`, `hmac`, `kdf`, `random`, `sealbox`, `signature`, `tls`) and re-export the core crate;
 - declare `pub const MODULE: Module`, with the linkage taken from the build, never assumed. If the build cannot report it, the build fails;
+- supply a `backend_arms` module, which the shared `backend_body!` reaches through its `backend` bridge ([decision 0005](docs/decisions/0005-provider-source.md)): the `MlDsa` and `MlDsaKey` arm, the test-only `csr_oracle`, and `self_test_runner()`, which is `Some` with the module's on-demand self-test where the backend can call it safely and `None` otherwise;
 - run the shared suite from its own tests:
 
   ```rust
@@ -141,7 +142,7 @@ The suite checks the backend against the known answers, walks every capability c
 - `resolve`, and `Resolved` with its public fields, `admit_key` and `certified_key`, implementing `PartialEq` and `Debug`. Its five public fields (`profile`, `options`, `tls`, `keys`, `excluded`) are part of the contract, because the suite's `open_peer` assigns each of them; `Resolved` is `#[non_exhaustive]` ([decision 0012](docs/decisions/0012-api-coherence-and-non-exhaustive.md));
 - `tls::CertificateKey::generate` and `csr::generate_csr`;
 - `tls::Policy`, `#[non_exhaustive]`, with `Default` and the four public list fields, implementing `Clone`, `PartialEq` and `Debug`, `tls::crypto_provider`, `tls::client_builder` and `tls::server_builder`;
-- `fips::assert_fips_client_config` and `fips::assert_fips_server_config`;
+- `fips::assert_fips_client_config`, `fips::assert_fips_server_config` and `fips::self_test`;
 - `signature::KeyPair::generate`, `KeyPair::from_pkcs8_der`, `KeyPair::to_pkcs8_der`, `KeyPair::sign`, `KeyPair::public_key` and `signature::verify`, with `KeyPair` implementing `rcgen::SigningKey` and `Debug`;
 - `digest::digest` and `digest::Hasher` with `new`, `algorithm`, `update` and `finish`;
 - `aead::NONCE_LEN`, `aead::TAG_LEN` and `aead::Key`, with `new`, `algorithm`, `seal_in_place` and `open_in_place`, and `test_support::aead_set_invocations` under the `test-support` feature;
