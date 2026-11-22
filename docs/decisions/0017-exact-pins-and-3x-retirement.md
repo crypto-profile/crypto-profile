@@ -35,7 +35,7 @@ Three facts shape the answer:
 ## Consequences
 
 - A consumer upgrades a pinned crate by upgrading crypto-profile.
-- *(Amended 2026-11-21, #54.)* A move of the `aws-lc-fips-sys` pin is a module-build review: the build script's library name, the 3.x build script's copy of the builder's linkage rules, and every document naming the old release (`0_14_2`/`0.14.2`, `0_13_17`/`0.13.17`) change with it.
+- *(Amended 2026-11-21, #54.)* A move of the `aws-lc-fips-sys` pin is a module-build review: the build script's library name, the 3.x build script's copy of the builder's linkage rules, and every document naming the old release (`0_14_2`/`0.14.2`, `0_13_17`/`0.13.17`) change with it. *(Amended 2026-11-22, #86: the release names follow the current pins; CONTRIBUTING gives the patterns to grep.)*
 - An advisory the 3.x line cannot fix stays named in every 3.x release's CHANGELOG until the line retires or upstream fixes it within the line.
 - The 3.x backend's lifetime depends on the CMVP's schedule for the 4.x modules, which this project does not control.
 - A pin update that leaves a document naming the old version is a defect in that update.

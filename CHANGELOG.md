@@ -6,9 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+### Changed
+
+- `crypto-profile-awslc4` takes `aws-lc-fips-sys` 0.14.4, through the exact pin #54 added (#86). The module source is unchanged:
+  - both releases bundle AWS-LC 4.2.0, and `aws-lc/crypto/fipsmodule` is byte-identical between them;
+  - the headers the module's `bcm.c` includes changed only by declarations and macros no `crypto/fipsmodule` file uses (`rsa_extra/internal.h`, `bn.h`, `nid.h`).
+
+  Outside the module boundary, 0.14.4 changes:
+  - `ssl/` (a new `crypto_policy.cc`);
+  - `crypto/x509`, `asn1`, `err`, `conf`, `obj`, `console` and `rsa_extra/rsa_asn1.c`;
+  - the public headers `asn1.h`, `x509.h` and `ssl.h`;
+  - the CMake build (symbol versioning; Threads linking).
+
+  Three build changes reach consumers:
+  - its build script now passes `AWS_LC_FIPS_SYS_CC`/`AWS_LC_FIPS_SYS_CXX` to the CMake build of the FIPS module;
+  - `AWS_LC_FIPS_SYS_NO_U1_BINDINGS` is gone: the generated bindings strip LLVM's `\x01` link-name marker themselves, so a build that selected the old variant (for example, for Cranelift) gets the unified bindings;
+  - its build-time `bindgen` moves from 0.72 to 0.73.
+
+  The backend's build script accepts `aws_lc_fips_0_14_4_crypto`.
+- Both backends pin `rustls-webpki` 0.103.17, where they pinned 0.103.16 (#85, #87). Its `aws_lc_rs_algs.rs`, which `crypto-profile/src/provider/verify.rs` ports, is unchanged. The release parses the Signed Certificate Timestamp list extension (1.3.6.1.4.1.11129.2.4.2), which 0.103.16 treated as an unknown extension. Verification checks only the extension's wrapper; the SCT list inside it is parsed only when an application asks for the timestamps, which this crate does not. Behavior changes:
+  - for peer certificates and for trust anchors built from certificates, an SCT-list extension whose value is not exactly one DER OCTET STRING is refused as `BadDer` (`CertificateError::BadEncoding`), and a duplicate one as `ExtensionValueInvalid` (`CertificateError::Other`). A well-formed wrapper around a malformed list still verifies;
+  - on end-entity and intermediate certificates, an SCT-list extension marked critical is now **accepted**. Before, it was refused as an unsupported critical extension. The SCT branch returns before webpki's criticality check. Trust-anchor conversion already ignored unknown critical extensions.
+
 ### Fixed
 
-- `crypto-profile-awslc4` failed to build in a consumer whose lockfile resolved `aws-lc-fips-sys` past 0.14.2: a fresh resolution, or a plain `cargo update` (#54). aws-lc-rs 1.19.0 requires `aws-lc-fips-sys` by caret, so a fresh resolution took 0.14.4, and the build script, which accepts only the bundled 0.14.2 library, refused it ("expected aws_lc_fips_0_14_2_crypto, aws-lc-rs reported [\"aws_lc_fips_0_14_4_crypto\"]"). Both backends now pin `aws-lc-fips-sys` exactly (`=0.14.2` on 4.x, `=0.13.17` on 3.x), so resolution keeps the module build their build scripts accept, and each build script requires the pin as a direct dependency (decision 0017, amended). The module build is unchanged on both lines. Workaround for 0.10.x: `cargo update -p aws-lc-fips-sys --precise 0.14.2`.
+- `crypto-profile-awslc4` failed to build in a consumer whose lockfile resolved `aws-lc-fips-sys` past 0.14.2: a fresh resolution, or a plain `cargo update` (#54). aws-lc-rs 1.19.0 requires `aws-lc-fips-sys` by caret, so a fresh resolution took 0.14.4, and the build script, which accepts only the bundled 0.14.2 library, refused it ("expected aws_lc_fips_0_14_2_crypto, aws-lc-rs reported [\"aws_lc_fips_0_14_4_crypto\"]"). Both backends now pin `aws-lc-fips-sys` exactly (`=0.14.4` on 4.x, `=0.13.17` on 3.x), so resolution keeps the module build their build scripts accept, and each build script requires the pin as a direct dependency (decision 0017, amended). The FIPS module source is unchanged on both lines (see Changed for 0.14.4). Workaround for 0.10.x: `cargo update -p aws-lc-fips-sys --precise 0.14.2`.
 
 ## [0.10.1] - 2026-11-21
 

@@ -1,4 +1,4 @@
-// Ported from rustls-webpki 0.103.16 (src/aws_lc_rs_algs.rs), Copyright 2015 Brian Smith, ISC
+// Ported from rustls-webpki 0.103.17 (src/aws_lc_rs_algs.rs), Copyright 2015 Brian Smith, ISC
 // license, and rustls 0.23.46 (src/crypto/aws_lc_rs/mod.rs), Copyright (c) 2016 Joseph
 // Birr-Pixton, MIT license. See LICENSE-THIRD-PARTY.
 use aws_lc_rs::signature;
