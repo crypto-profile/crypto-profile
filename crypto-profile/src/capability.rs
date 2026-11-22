@@ -1287,7 +1287,7 @@ mod tests {
 
     #[test]
     fn three_x_tls12_is_not_approved_without_an_ems_kdf_test() {
-        for (m, cert, services) in [
+        for (m, module_label, services) in [
             (M3S, "#5314 (static)", "p. 25"),
             (M3D, "#5298 (dynamic)", "p. 26"),
         ] {
@@ -1297,7 +1297,7 @@ mod tests {
                 panic!("{m:?}: TLS 1.2 is not NotApproved");
             };
             for part in [
-                cert,
+                module_label,
                 services,
                 "Table 5",
                 "Table 8",
