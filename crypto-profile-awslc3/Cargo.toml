@@ -37,7 +37,7 @@ aws-lc-fips-sys = { version = "=0.13.17", default-features = false }
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "tls12"] }
 # Later rcgen requires aws-lc-rs 1.18, crossing the selected FIPS module line.
 rcgen = { version = "=0.14.9", default-features = false, features = ["aws_lc_rs", "fips", "pem"] }
-rustls-webpki = { version = "=0.103.16", default-features = false, features = ["std"] }
+rustls-webpki = { version = "=0.103.17", default-features = false, features = ["std"] }
 pem = "4"
 zeroize = "1"
 
@@ -48,7 +48,7 @@ x509-parser = { version = "0.18", default-features = false }
 # Pin the policy/provider API so resolution cannot change its contract.
 rustls = { version = "=0.23.46", default-features = false, features = ["std", "tls12"] }
 # Pin verifier identifiers used by the shared CSR tests.
-rustls-webpki = { version = "=0.103.16", default-features = false, features = ["std"] }
+rustls-webpki = { version = "=0.103.17", default-features = false, features = ["std"] }
 
 [[test]]
 name = "conformance"
