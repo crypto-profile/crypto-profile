@@ -2,10 +2,7 @@
 //! module's library name, as `CRYPTO_PROFILE_FIPS_LIBRARY`.
 fn main() {
     println!("cargo::rustc-check-cfg=cfg(crypto_profile_static)");
-    let libs: Vec<String> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("DEP_AWS_LC_RS_") && k.ends_with("_SYS_LIBCRYPTO"))
-        .map(|(_, v)| v)
-        .collect();
+    let libs = aws_lc_rs_metadata(std::env::vars_os(), "_SYS_LIBCRYPTO");
     let lib = "aws_lc_fips_0_13_17_crypto";
     if let Err(e) = bundled(&libs, lib) {
         panic!("crypto-profile-awslc3: {e}");
@@ -17,14 +14,23 @@ fn main() {
     }
     let required = |name| std::env::var(name).unwrap_or_else(|e| panic!("{name}: {e}"));
     let target = required("TARGET").to_lowercase().replace('-', "_");
+    // Both lookups mirror aws-lc-fips-sys 0.13.17 builder/main.rs:183-204,253-300; the defaults
+    // are :793 (NO_PREFIX) and :809 (STATIC).
+    let no_prefix = format!("AWS_LC_FIPS_SYS_NO_PREFIX_{target}");
+    println!("cargo:rerun-if-env-changed={no_prefix}");
+    println!("cargo:rerun-if-env-changed=AWS_LC_FIPS_SYS_NO_PREFIX");
+    if let Err(e) = prefixed(
+        std::env::var(&no_prefix).ok().as_deref(),
+        std::env::var("AWS_LC_FIPS_SYS_NO_PREFIX").ok().as_deref(),
+    ) {
+        panic!("crypto-profile-awslc3: {e}");
+    }
     let scoped = format!("AWS_LC_FIPS_SYS_STATIC_{target}");
     println!("cargo:rerun-if-env-changed={scoped}");
     println!("cargo:rerun-if-env-changed=AWS_LC_FIPS_SYS_STATIC");
     let value = std::env::var(&scoped)
         .or_else(|_| std::env::var("AWS_LC_FIPS_SYS_STATIC"))
         .ok();
-    // aws-lc-fips-sys 0.13.17 builder/main.rs:192-204,253-300,809 defines precedence,
-    // boolean parsing and the FIPS platform default; refuse other versions above.
     let explicit = value.as_deref().and_then(parse_bool);
     let os = required("CARGO_CFG_TARGET_OS");
     let arch = required("CARGO_CFG_TARGET_ARCH");
@@ -36,11 +42,23 @@ fn main() {
     println!("cargo::rustc-env=CRYPTO_PROFILE_FIPS_LIBRARY={lib}");
 }
 
+fn aws_lc_rs_metadata(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    suffix: &str,
+) -> Vec<String> {
+    vars.filter_map(|(k, v)| {
+        let k = k.to_str()?;
+        (k.starts_with("DEP_AWS_LC_RS_") && k.ends_with(suffix))
+            .then(|| v.to_string_lossy().into_owned())
+    })
+    .collect()
+}
+
 fn bundled(libs: &[String], want: &str) -> Result<(), String> {
     match libs {
         [lib] if lib == want => Ok(()),
         other => Err(format!(
-            "the linked FIPS module is not the bundled aws-lc-fips-sys source build: expected {want}, aws-lc-rs reported {other:?}; unset AWS_LC_FIPS_SYS_NO_PREFIX, and on a host with a system AWS-LC set AWS_LC_FIPS_SYS_USE_SYSTEM=0"
+            "the linked FIPS module is not the bundled aws-lc-fips-sys source build: expected {want}, aws-lc-rs reported {other:?}; on a host with a system AWS-LC set AWS_LC_FIPS_SYS_USE_SYSTEM=0"
         )),
     }
 }
@@ -51,6 +69,15 @@ fn pinned(direct: Option<&str>, want: &str) -> Result<(), String> {
         other => Err(format!(
             "aws-lc-fips-sys must be a direct dependency pinned to the release whose library is {want}; its link metadata reported {other:?} (#54, decision 0017)"
         )),
+    }
+}
+
+fn prefixed(scoped: Option<&str>, plain: Option<&str>) -> Result<(), String> {
+    match scoped.or(plain).and_then(parse_bool) {
+        Some(true) => Err(
+            "the bundled module was built without its symbol prefix, so its names can collide with another libcrypto in the process, and 0.13.17 still reports the prefixed name; unset AWS_LC_FIPS_SYS_NO_PREFIX (#83)".to_string(),
+        ),
+        Some(false) | None => Ok(()),
     }
 }
 
@@ -75,7 +102,7 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundled, pinned};
+    use super::{aws_lc_rs_metadata, bundled, pinned, prefixed};
 
     const WANT: &str = "aws_lc_fips_0_13_17_crypto";
 
@@ -90,10 +117,7 @@ mod tests {
             panic!("a bare name was accepted");
         };
         assert!(e.contains("\"crypto\"") && e.contains(WANT), "{e}");
-        assert!(
-            e.contains("AWS_LC_FIPS_SYS_USE_SYSTEM=0") && e.contains("AWS_LC_FIPS_SYS_NO_PREFIX"),
-            "{e}"
-        );
+        assert!(e.contains("AWS_LC_FIPS_SYS_USE_SYSTEM=0"), "{e}");
     }
 
     #[test]
@@ -123,5 +147,50 @@ mod tests {
     #[test]
     fn another_pinned_version_is_refused() {
         assert!(pinned(Some("aws_lc_fips_0_13_18_crypto"), WANT).is_err());
+    }
+
+    #[test]
+    fn an_unprefixed_build_is_refused() {
+        for v in ["1", "true", "yes", "on", "TRUE"] {
+            let Err(e) = prefixed(Some(v), None) else {
+                panic!("{v}: an unprefixed build was accepted");
+            };
+            assert!(e.contains("AWS_LC_FIPS_SYS_NO_PREFIX"), "{e}");
+            assert!(prefixed(None, Some(v)).is_err(), "{v}");
+        }
+    }
+
+    #[test]
+    fn a_prefixed_build_is_accepted() {
+        assert_eq!(prefixed(None, None), Ok(()));
+        for v in ["0", "false", "no", "off", "", "maybe"] {
+            assert_eq!(prefixed(Some(v), None), Ok(()), "{v}");
+            assert_eq!(prefixed(None, Some(v)), Ok(()), "{v}");
+        }
+    }
+
+    #[test]
+    fn the_target_scoped_variable_wins() {
+        assert_eq!(prefixed(Some("0"), Some("1")), Ok(()));
+        assert!(prefixed(Some("1"), Some("0")).is_err());
+        assert_eq!(prefixed(Some("maybe"), Some("1")), Ok(()));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_variables_are_skipped_or_fail_closed() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let vars = vec![
+            (OsString::from_vec(vec![0xff]), OsString::from("x")),
+            (OsString::from("UNRELATED"), OsString::from_vec(vec![0xff])),
+            (
+                OsString::from("DEP_AWS_LC_RS_0_0_0_SYS_LIBCRYPTO"),
+                OsString::from_vec([WANT.as_bytes(), &[0xff]].concat()),
+            ),
+        ];
+        let libs = aws_lc_rs_metadata(vars.into_iter(), "_SYS_LIBCRYPTO");
+        assert_eq!(libs.len(), 1);
+        assert!(bundled(&libs, WANT).is_err());
     }
 }

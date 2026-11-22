@@ -11,9 +11,9 @@ fn main() {
         );
     }
     let dep = |suffix: &str| {
-        std::env::vars()
-            .find(|(k, _)| k.starts_with("DEP_AWS_LC_RS_") && k.ends_with(suffix))
-            .map(|(_, v)| v)
+        aws_lc_rs_metadata(std::env::vars_os(), suffix)
+            .into_iter()
+            .next()
     };
     let kind = dep("_SYS_LINK_KIND");
     match kind.as_deref() {
@@ -23,10 +23,7 @@ fn main() {
             "crypto-profile-awslc4: aws-lc-rs did not report how the FIPS module is linked ({other:?}); refusing to guess"
         ),
     }
-    let libs: Vec<String> = std::env::vars()
-        .filter(|(k, _)| k.starts_with("DEP_AWS_LC_RS_") && k.ends_with("_SYS_LIBCRYPTO"))
-        .map(|(_, v)| v)
-        .collect();
+    let libs = aws_lc_rs_metadata(std::env::vars_os(), "_SYS_LIBCRYPTO");
     const WANT: &str = "aws_lc_fips_0_14_4_crypto";
     if let Err(e) = bundled(&libs, WANT) {
         panic!("crypto-profile-awslc4: {e}");
@@ -48,6 +45,18 @@ fn pinned(direct: Option<&str>, want: &str) -> Result<(), String> {
     }
 }
 
+fn aws_lc_rs_metadata(
+    vars: impl Iterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+    suffix: &str,
+) -> Vec<String> {
+    vars.filter_map(|(k, v)| {
+        let k = k.to_str()?;
+        (k.starts_with("DEP_AWS_LC_RS_") && k.ends_with(suffix))
+            .then(|| v.to_string_lossy().into_owned())
+    })
+    .collect()
+}
+
 fn bundled(libs: &[String], want: &str) -> Result<(), String> {
     match libs {
         [lib] if lib == want => Ok(()),
@@ -59,7 +68,7 @@ fn bundled(libs: &[String], want: &str) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{bundled, pinned};
+    use super::{aws_lc_rs_metadata, bundled, pinned};
 
     const WANT: &str = "aws_lc_fips_0_14_4_crypto";
 
@@ -109,5 +118,23 @@ mod tests {
     fn another_pinned_version_is_refused() {
         assert!(pinned(Some("aws_lc_fips_0_14_2_crypto"), WANT).is_err());
         assert!(pinned(Some("aws_lc_fips_0_14_5_crypto"), WANT).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_utf8_variables_are_skipped_or_fail_closed() {
+        use std::ffi::OsString;
+        use std::os::unix::ffi::OsStringExt;
+        let vars = vec![
+            (OsString::from_vec(vec![0xff]), OsString::from("x")),
+            (OsString::from("UNRELATED"), OsString::from_vec(vec![0xff])),
+            (
+                OsString::from("DEP_AWS_LC_RS_0_0_0_SYS_LIBCRYPTO"),
+                OsString::from_vec([WANT.as_bytes(), &[0xff]].concat()),
+            ),
+        ];
+        let libs = aws_lc_rs_metadata(vars.into_iter(), "_SYS_LIBCRYPTO");
+        assert_eq!(libs.len(), 1);
+        assert!(bundled(&libs, WANT).is_err());
     }
 }
